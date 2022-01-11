@@ -1,0 +1,21 @@
+NXP Software Content Register
+
+Release Name:     imx-openwrt-22.03.0
+Version:          v2022.07_5.15.50
+Release Location: https://github.com/nxp/imx_openwrt -b imx-openwrt-22.03.0
+
+
+
+
+--------------------------------------------
+Packages
+--------------------------------------------
+Package:                   imx_openwrt
+version:		   v2022.07_5.15.50
+Outgoing License:          GPL-2.0-only
+License File:              COPYING
+Type of content:           Source
+Description and comments:  patches to support i.mx platforms
+Release Location: 	   https://github.com/nxp/imx_openwrt -b imx-openwrt-22.03.0
+Origin: 		   NXP (GPL-2.0-only)
+			   OpenWRT  (GPL-2.0-only)  https://github.com/openwrt/openwrt
