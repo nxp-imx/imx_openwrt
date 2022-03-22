@@ -1,0 +1,95 @@
+From 1043b8d75a23476cfa305787daa4828b5469b3c9 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Tue, 18 Jan 2022 10:54:55 +0800
+Subject: [PATCH 13/15] Add i.MX8MP cpufreq DT support
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/defconfig         |  6 +++---
+ drivers/cpufreq/cpufreq-dt-platdev.c |  1 +
+ drivers/cpufreq/imx-cpufreq-dt.c     | 14 +++++++++++---
+ 3 files changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 6b7e0df76..cb3fdd7b8 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -75,16 +75,16 @@ CONFIG_ARM_CPUIDLE=y
+ CONFIG_ARM_PSCI_CPUIDLE=y
+ CONFIG_CPU_FREQ=y
+ CONFIG_CPU_FREQ_STAT=y
+-CONFIG_CPU_FREQ_GOV_POWERSAVE=m
++CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+ CONFIG_CPU_FREQ_GOV_USERSPACE=y
+ CONFIG_CPU_FREQ_GOV_ONDEMAND=y
+-CONFIG_CPU_FREQ_GOV_CONSERVATIVE=m
++CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+ CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+ CONFIG_CPUFREQ_DT=y
+ CONFIG_ACPI_CPPC_CPUFREQ=m
+ CONFIG_ARM_ARMADA_37XX_CPUFREQ=y
+ CONFIG_ARM_SCPI_CPUFREQ=y
+-CONFIG_ARM_IMX_CPUFREQ_DT=m
++CONFIG_ARM_IMX_CPUFREQ_DT=y
+ CONFIG_ARM_RASPBERRYPI_CPUFREQ=m
+ CONFIG_ARM_TEGRA186_CPUFREQ=y
+ CONFIG_ARM_SCPI_PROTOCOL=y
+diff --git a/drivers/cpufreq/cpufreq-dt-platdev.c b/drivers/cpufreq/cpufreq-dt-platdev.c
+index 1200842c3..3a70580b3 100644
+--- a/drivers/cpufreq/cpufreq-dt-platdev.c
++++ b/drivers/cpufreq/cpufreq-dt-platdev.c
+@@ -112,6 +112,7 @@ static const struct of_device_id blacklist[] __initconst = {
+ 	{ .compatible = "fsl,imx8mq", },
+ 	{ .compatible = "fsl,imx8mm", },
+ 	{ .compatible = "fsl,imx8mn", },
++	{ .compatible = "fsl,imx8mp", },
+ 
+ 	{ .compatible = "marvell,armadaxp", },
+ 
+diff --git a/drivers/cpufreq/imx-cpufreq-dt.c b/drivers/cpufreq/imx-cpufreq-dt.c
+index 85a6efd6b..22c114152 100644
+--- a/drivers/cpufreq/imx-cpufreq-dt.c
++++ b/drivers/cpufreq/imx-cpufreq-dt.c
+@@ -19,6 +19,8 @@
+ #define IMX8MN_OCOTP_CFG3_SPEED_GRADE_MASK	(0xf << 8)
+ #define OCOTP_CFG3_MKT_SEGMENT_SHIFT    6
+ #define OCOTP_CFG3_MKT_SEGMENT_MASK     (0x3 << 6)
++#define IMX8MP_OCOTP_CFG3_MKT_SEGMENT_SHIFT    5
++#define IMX8MP_OCOTP_CFG3_MKT_SEGMENT_MASK     (0x3 << 5)
+ 
+ /* cpufreq-dt device registered by imx-cpufreq-dt */
+ static struct platform_device *cpufreq_dt_pdev;
+@@ -35,13 +37,18 @@ static int imx_cpufreq_dt_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
+-	if (of_machine_is_compatible("fsl,imx8mn"))
++	if (of_machine_is_compatible("fsl,imx8mn") || of_machine_is_compatible("fsl,imx8mp"))
+ 		speed_grade = (cell_value & IMX8MN_OCOTP_CFG3_SPEED_GRADE_MASK)
+ 			      >> OCOTP_CFG3_SPEED_GRADE_SHIFT;
+ 	else
+ 		speed_grade = (cell_value & OCOTP_CFG3_SPEED_GRADE_MASK)
+ 			      >> OCOTP_CFG3_SPEED_GRADE_SHIFT;
+-	mkt_segment = (cell_value & OCOTP_CFG3_MKT_SEGMENT_MASK) >> OCOTP_CFG3_MKT_SEGMENT_SHIFT;
++	if (of_machine_is_compatible("fsl,imx8mp"))
++		mkt_segment = (cell_value & IMX8MP_OCOTP_CFG3_MKT_SEGMENT_MASK)
++			       >> IMX8MP_OCOTP_CFG3_MKT_SEGMENT_SHIFT;
++	else
++		mkt_segment = (cell_value & OCOTP_CFG3_MKT_SEGMENT_MASK)
++			       >> OCOTP_CFG3_MKT_SEGMENT_SHIFT;
+ 
+ 	/*
+ 	 * Early samples without fuses written report "0 0" which may NOT
+@@ -54,7 +61,8 @@ static int imx_cpufreq_dt_probe(struct platform_device *pdev)
+ 		if (of_machine_is_compatible("fsl,imx8mm") ||
+ 		    of_machine_is_compatible("fsl,imx8mq"))
+ 			speed_grade = 1;
+-		if (of_machine_is_compatible("fsl,imx8mn"))
++		if (of_machine_is_compatible("fsl,imx8mn") ||
++			of_machine_is_compatible("fsl,imx8mp"))
+ 			speed_grade = 0xb;
+ 	}
+ 
+-- 
+2.17.1
+

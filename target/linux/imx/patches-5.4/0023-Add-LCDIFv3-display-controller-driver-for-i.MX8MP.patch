@@ -1,0 +1,3264 @@
+From fab7b770490d59786f4005c84f82442123e27dc2 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Fri, 11 Mar 2022 11:35:58 +0800
+Subject: [PATCH 23/24] Add LCDIFv3 display controller driver for i.MX8MP
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/defconfig                |   5 +-
+ drivers/gpu/Makefile                        |   1 +
+ drivers/gpu/drm/drm_of.c                    |  31 +-
+ drivers/gpu/drm/imx/Kconfig                 |   1 -
+ drivers/gpu/drm/imx/Makefile                |   3 +-
+ drivers/gpu/drm/imx/imx-drm-core.c          | 235 +++---
+ drivers/gpu/drm/imx/imx-drm.h               |   7 +-
+ drivers/gpu/drm/imx/lcdifv3/Kconfig         |   8 +
+ drivers/gpu/drm/imx/lcdifv3/Makefile        |   4 +
+ drivers/gpu/drm/imx/lcdifv3/lcdifv3-crtc.c  | 405 +++++++++
+ drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.c   |  38 +
+ drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.h   |  12 +
+ drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.c | 202 +++++
+ drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.h |  24 +
+ drivers/gpu/imx/Kconfig                     |   1 +
+ drivers/gpu/imx/Makefile                    |   1 +
+ drivers/gpu/imx/lcdifv3/Kconfig             |   9 +
+ drivers/gpu/imx/lcdifv3/Makefile            |   3 +
+ drivers/gpu/imx/lcdifv3/lcdifv3-common.c    | 862 ++++++++++++++++++++
+ drivers/gpu/imx/lcdifv3/lcdifv3-regs.h      | 150 ++++
+ drivers/video/Kconfig                       |   1 +
+ drivers/video/imx-lcdifv3.h                 |  36 +
+ include/drm/drm_of.h                        |  13 +
+ include/video/dpu.h                         | 754 +++++++++++++++++
+ include/video/imx-lcdif.h                   |  42 +
+ include/video/imx-lcdifv3.h                 |  36 +
+ 26 files changed, 2772 insertions(+), 112 deletions(-)
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/Kconfig
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/Makefile
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/lcdifv3-crtc.c
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.c
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.h
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.c
+ create mode 100644 drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.h
+ create mode 100644 drivers/gpu/imx/Kconfig
+ create mode 100644 drivers/gpu/imx/Makefile
+ create mode 100644 drivers/gpu/imx/lcdifv3/Kconfig
+ create mode 100644 drivers/gpu/imx/lcdifv3/Makefile
+ create mode 100644 drivers/gpu/imx/lcdifv3/lcdifv3-common.c
+ create mode 100644 drivers/gpu/imx/lcdifv3/lcdifv3-regs.h
+ create mode 100644 drivers/video/imx-lcdifv3.h
+ create mode 100644 include/video/dpu.h
+ create mode 100644 include/video/imx-lcdif.h
+ create mode 100644 include/video/imx-lcdifv3.h
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 5113af7d1..1173f4b3c 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -519,7 +519,10 @@ CONFIG_VIDEO_SAMSUNG_S5P_MFC=m
+ CONFIG_VIDEO_SAMSUNG_EXYNOS_GSC=m
+ CONFIG_VIDEO_RENESAS_FCP=m
+ CONFIG_VIDEO_RENESAS_VSP1=m
+-CONFIG_DRM=m
++CONFIG_IMX_LCDIF_CORE=y
++CONFIG_IMX_LCDIFV3_CORE=y
++CONFIG_DRM=y
++CONFIG_DRM_IMX=y
+ CONFIG_DRM_I2C_NXP_TDA998X=m
+ CONFIG_DRM_NOUVEAU=m
+ CONFIG_DRM_EXYNOS=m
+diff --git a/drivers/gpu/Makefile b/drivers/gpu/Makefile
+index f17d01f07..fde5d9181 100644
+--- a/drivers/gpu/Makefile
++++ b/drivers/gpu/Makefile
+@@ -3,5 +3,6 @@
+ # taken to initialize them in the correct order. Link order is the only way
+ # to ensure this currently.
+ obj-$(CONFIG_TEGRA_HOST1X)	+= host1x/
++obj-y           += imx/
+ obj-y			+= drm/ vga/
+ obj-$(CONFIG_IMX_IPUV3_CORE)	+= ipu-v3/
+diff --git a/drivers/gpu/drm/drm_of.c b/drivers/gpu/drm/drm_of.c
+index 43d89dd59..f9f2a54a1 100644
+--- a/drivers/gpu/drm/drm_of.c
++++ b/drivers/gpu/drm/drm_of.c
+@@ -100,8 +100,10 @@ void drm_of_component_match_add(struct device *master,
+ EXPORT_SYMBOL_GPL(drm_of_component_match_add);
+ 
+ /**
+- * drm_of_component_probe - Generic probe function for a component based master
++ * drm_of_component_probe_with_match - Generic probe function with match
++ *                                     entries for a component based master
+  * @dev: master device containing the OF node
++ * @match: component match pointer provided to store matches
+  * @compare_of: compare function used for matching components
+  * @m_ops: component master ops to be used
+  *
+@@ -112,12 +114,12 @@ EXPORT_SYMBOL_GPL(drm_of_component_match_add);
+  *
+  * Returns zero if successful, or one of the standard error codes if it fails.
+  */
+-int drm_of_component_probe(struct device *dev,
++int drm_of_component_probe_with_match(struct device *dev,
++			   struct component_match *match,
+ 			   int (*compare_of)(struct device *, void *),
+ 			   const struct component_master_ops *m_ops)
+ {
+ 	struct device_node *ep, *port, *remote;
+-	struct component_match *match = NULL;
+ 	int i;
+ 
+ 	if (!dev->of_node)
+@@ -183,6 +185,29 @@ int drm_of_component_probe(struct device *dev,
+ 
+ 	return component_master_add_with_match(dev, m_ops, match);
+ }
++EXPORT_SYMBOL(drm_of_component_probe_with_match);
++
++/**
++ * drm_of_component_probe - Generic probe function for a component based master
++ * @dev: master device containing the OF node
++ * @compare_of: compare function used for matching components
++ * @master_ops: component master ops to be used
++ *
++ * Parse the platform device OF node and bind all the components associated
++ * with the master. Interface ports are added before the encoders in order to
++ * satisfy their .bind requirements
++ * See Documentation/devicetree/bindings/graph.txt for the bindings.
++ *
++ * Returns zero if successful, or one of the standard error codes if it fails.
++ */
++int drm_of_component_probe(struct device *dev,
++			   int (*compare_of)(struct device *, void *),
++			   const struct component_master_ops *m_ops)
++{
++	struct component_match *match = NULL;
++
++	return drm_of_component_probe_with_match(dev, match, compare_of, m_ops);
++}
+ EXPORT_SYMBOL(drm_of_component_probe);
+ 
+ /*
+diff --git a/drivers/gpu/drm/imx/Kconfig b/drivers/gpu/drm/imx/Kconfig
+index 207bf7409..7fbd4e7ef 100644
+--- a/drivers/gpu/drm/imx/Kconfig
++++ b/drivers/gpu/drm/imx/Kconfig
+@@ -6,7 +6,6 @@ config DRM_IMX
+ 	select DRM_GEM_CMA_HELPER
+ 	select DRM_KMS_CMA_HELPER
+ 	depends on DRM && (ARCH_MXC || ARCH_MULTIPLATFORM || COMPILE_TEST)
+-	depends on IMX_IPUV3_CORE
+ 	help
+ 	  enable i.MX graphics support
+ 
+diff --git a/drivers/gpu/drm/imx/Makefile b/drivers/gpu/drm/imx/Makefile
+index 21cdcc2fa..4f996dc20 100644
+--- a/drivers/gpu/drm/imx/Makefile
++++ b/drivers/gpu/drm/imx/Makefile
+@@ -1,6 +1,6 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+-imxdrm-objs := imx-drm-core.o ipuv3-crtc.o ipuv3-plane.o
++imxdrm-objs := imx-drm-core.o
+ 
+ obj-$(CONFIG_DRM_IMX) += imxdrm.o
+ 
+@@ -9,3 +9,4 @@ obj-$(CONFIG_DRM_IMX_TVE) += imx-tve.o
+ obj-$(CONFIG_DRM_IMX_LDB) += imx-ldb.o
+ 
+ obj-$(CONFIG_DRM_IMX_HDMI) += dw_hdmi-imx.o
++obj-$(CONFIG_DRM_IMX_LCDIFV3) += lcdifv3/
+diff --git a/drivers/gpu/drm/imx/imx-drm-core.c b/drivers/gpu/drm/imx/imx-drm-core.c
+index 881c36d0f..e29a5e882 100644
+--- a/drivers/gpu/drm/imx/imx-drm-core.c
++++ b/drivers/gpu/drm/imx/imx-drm-core.c
+@@ -12,6 +12,8 @@
+ #include <linux/platform_device.h>
+ 
+ #include <video/imx-ipu-v3.h>
++#include <video/imx-lcdif.h>
++#include <video/imx-lcdifv3.h>
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
+@@ -24,11 +26,9 @@
+ #include <drm/drm_plane_helper.h>
+ #include <drm/drm_probe_helper.h>
+ #include <drm/drm_vblank.h>
++#include <video/dpu.h>
+ 
+ #include "imx-drm.h"
+-#include "ipuv3-plane.h"
+-
+-#define MAX_CRTC	4
+ 
+ static int legacyfb_depth = 16;
+ module_param(legacyfb_depth, int, 0444);
+@@ -48,81 +48,6 @@ void imx_drm_encoder_destroy(struct drm_encoder *encoder)
+ }
+ EXPORT_SYMBOL_GPL(imx_drm_encoder_destroy);
+ 
+-static int imx_drm_atomic_check(struct drm_device *dev,
+-				struct drm_atomic_state *state)
+-{
+-	int ret;
+-
+-	ret = drm_atomic_helper_check(dev, state);
+-	if (ret)
+-		return ret;
+-
+-	/*
+-	 * Check modeset again in case crtc_state->mode_changed is
+-	 * updated in plane's ->atomic_check callback.
+-	 */
+-	ret = drm_atomic_helper_check_modeset(dev, state);
+-	if (ret)
+-		return ret;
+-
+-	/* Assign PRG/PRE channels and check if all constrains are satisfied. */
+-	ret = ipu_planes_assign_pre(dev, state);
+-	if (ret)
+-		return ret;
+-
+-	return ret;
+-}
+-
+-static const struct drm_mode_config_funcs imx_drm_mode_config_funcs = {
+-	.fb_create = drm_gem_fb_create,
+-	.atomic_check = imx_drm_atomic_check,
+-	.atomic_commit = drm_atomic_helper_commit,
+-};
+-
+-static void imx_drm_atomic_commit_tail(struct drm_atomic_state *state)
+-{
+-	struct drm_device *dev = state->dev;
+-	struct drm_plane *plane;
+-	struct drm_plane_state *old_plane_state, *new_plane_state;
+-	bool plane_disabling = false;
+-	int i;
+-
+-	drm_atomic_helper_commit_modeset_disables(dev, state);
+-
+-	drm_atomic_helper_commit_planes(dev, state,
+-				DRM_PLANE_COMMIT_ACTIVE_ONLY |
+-				DRM_PLANE_COMMIT_NO_DISABLE_AFTER_MODESET);
+-
+-	drm_atomic_helper_commit_modeset_enables(dev, state);
+-
+-	for_each_oldnew_plane_in_state(state, plane, old_plane_state, new_plane_state, i) {
+-		if (drm_atomic_plane_disabling(old_plane_state, new_plane_state))
+-			plane_disabling = true;
+-	}
+-
+-	/*
+-	 * The flip done wait is only strictly required by imx-drm if a deferred
+-	 * plane disable is in-flight. As the core requires blocking commits
+-	 * to wait for the flip it is done here unconditionally. This keeps the
+-	 * workitem around a bit longer than required for the majority of
+-	 * non-blocking commits, but we accept that for the sake of simplicity.
+-	 */
+-	drm_atomic_helper_wait_for_flip_done(dev, state);
+-
+-	if (plane_disabling) {
+-		for_each_old_plane_in_state(state, plane, old_plane_state, i)
+-			ipu_plane_disable_deferred(plane);
+-
+-	}
+-
+-	drm_atomic_helper_commit_hw_done(state);
+-}
+-
+-static const struct drm_mode_config_helper_funcs imx_drm_mode_config_helpers = {
+-	.atomic_commit_tail = imx_drm_atomic_commit_tail,
+-};
+-
+-
+ int imx_drm_encoder_parse_of(struct drm_device *drm,
+ 	struct drm_encoder *encoder, struct device_node *np)
+ {
+@@ -182,6 +107,30 @@ static int compare_of(struct device *dev, void *data)
+ 	if (strcmp(dev->driver->name, "imx-ipuv3-crtc") == 0) {
+ 		struct ipu_client_platformdata *pdata = dev->platform_data;
+ 
++		return pdata->of_node == np;
++	} else if (strcmp(dev->driver->name, "imx-dpu-crtc") == 0) {
++		struct dpu_client_platformdata *pdata = dev->platform_data;
++
++		return pdata->of_node == np;
++	} else if (strcmp(dev->driver->name, "imx-lcdif-crtc") == 0 ||
++		   strcmp(dev->driver->name, "imx-lcdifv3-crtc") == 0) {
++		struct lcdif_client_platformdata *pdata = dev->platform_data;
++#if IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION)
++		/* set legacyfb_depth to be 32 for lcdif, since
++		 * default format of the connectors attached to
++		 * lcdif is usually RGB888
++		 */
++		if (pdata->of_node == np)
++			legacyfb_depth = 32;
++#endif
++
++		return pdata->of_node == np;
++	}
++
++	/* This is a special case for dpu bliteng. */
++	if (strcmp(dev->driver->name, "imx-drm-dpu-bliteng") == 0) {
++		struct dpu_client_platformdata *pdata = dev->platform_data;
++
+ 		return pdata->of_node == np;
+ 	}
+ 
+@@ -194,11 +143,104 @@ static int compare_of(struct device *dev, void *data)
+ 	return dev->of_node == np;
+ }
+ 
++static const char *const imx_drm_dpu_comp_parents[] = {
++	"fsl,imx8qm-dpu",
++	"fsl,imx8qxp-dpu",
++};
++
++static bool imx_drm_parent_is_compatible(struct device *dev,
++					 const char *const comp_parents[],
++					 int comp_parents_size)
++{
++	struct device_node *port, *parent;
++	bool ret = false;
++	int i;
++
++	port = of_parse_phandle(dev->of_node, "ports", 0);
++	if (!port)
++		return ret;
++
++	parent = of_get_parent(port);
++
++	for (i = 0; i < comp_parents_size; i++) {
++		if (of_device_is_compatible(parent, comp_parents[i])) {
++			ret = true;
++			break;
++		}
++	}
++
++	of_node_put(parent);
++
++	of_node_put(port);
++
++	return ret;
++}
++
++static inline bool has_dpu(struct device *dev)
++{
++	return imx_drm_parent_is_compatible(dev, imx_drm_dpu_comp_parents,
++					ARRAY_SIZE(imx_drm_dpu_comp_parents));
++}
++
++static void add_dpu_bliteng_components(struct device *dev,
++				       struct component_match **matchptr)
++{
++	/*
++	 * As there may be two dpu bliteng device,
++	 * so need add something in compare data to distinguish.
++	 * Use its parent dpu's of_node as the data here.
++	 */
++	struct device_node *port, *parent;
++	/* assume max dpu number is 8 */
++	struct device_node *dpu[8];
++	int num_dpu = 0;
++	int i, j;
++	bool found = false;
++
++	for (i = 0; ; i++) {
++		port = of_parse_phandle(dev->of_node, "ports", i);
++		if (!port)
++			break;
++
++		parent = of_get_parent(port);
++
++		for (j = 0; j < num_dpu; j++) {
++			if (dpu[j] == parent) {
++				found = true;
++				break;
++			}
++		}
++
++		if (found) {
++			found = false;
++		} else {
++			if (num_dpu >= ARRAY_SIZE(dpu)) {
++				dev_err(dev, "The number of found dpu is greater than max [%ld].\n",
++					ARRAY_SIZE(dpu));
++				of_node_put(parent);
++				of_node_put(port);
++				break;
++			}
++
++			dpu[num_dpu] = parent;
++			num_dpu++;
++
++			component_match_add(dev, matchptr, compare_of, parent);
++		}
++
++		of_node_put(parent);
++		of_node_put(port);
++	}
++}
++
+ static int imx_drm_bind(struct device *dev)
+ {
+ 	struct drm_device *drm;
+ 	int ret;
+ 
++	if (has_dpu(dev))
++		imx_drm_driver.driver_features |= DRIVER_RENDER;
++
+ 	drm = drm_dev_alloc(&imx_drm_driver, dev);
+ 	if (IS_ERR(drm))
+ 		return PTR_ERR(drm);
+@@ -223,9 +265,6 @@ static int imx_drm_bind(struct device *dev)
+ 	drm->mode_config.min_height = 1;
+ 	drm->mode_config.max_width = 4096;
+ 	drm->mode_config.max_height = 4096;
+-	drm->mode_config.funcs = &imx_drm_mode_config_funcs;
+-	drm->mode_config.helper_private = &imx_drm_mode_config_helpers;
+-	drm->mode_config.allow_fb_modifiers = true;
+ 	drm->mode_config.normalize_zpos = true;
+ 
+ 	drm_mode_config_init(drm);
+@@ -234,8 +273,6 @@ static int imx_drm_bind(struct device *dev)
+ 	if (ret)
+ 		goto err_kms;
+ 
+-	dev_set_drvdata(dev, drm);
+-
+ 	/* Now try and bind all our sub-components */
+ 	ret = component_bind_all(dev, drm);
+ 	if (ret)
+@@ -261,6 +298,8 @@ static int imx_drm_bind(struct device *dev)
+ 
+ 	drm_fbdev_generic_setup(drm, legacyfb_depth);
+ 
++	dev_set_drvdata(dev, drm);
++
+ 	return 0;
+ 
+ err_poll_fini:
+@@ -277,6 +316,9 @@ static void imx_drm_unbind(struct device *dev)
+ {
+ 	struct drm_device *drm = dev_get_drvdata(dev);
+ 
++	if (has_dpu(dev))
++		imx_drm_driver.driver_features &= ~DRIVER_RENDER;
++
+ 	drm_dev_unregister(drm);
+ 
+ 	drm_kms_helper_poll_fini(drm);
+@@ -297,7 +339,14 @@ static const struct component_master_ops imx_drm_ops = {
+ 
+ static int imx_drm_platform_probe(struct platform_device *pdev)
+ {
+-	int ret = drm_of_component_probe(&pdev->dev, compare_of, &imx_drm_ops);
++	struct component_match *match = NULL;
++	int ret;
++
++	if (has_dpu(&pdev->dev))
++		add_dpu_bliteng_components(&pdev->dev, &match);
++
++	ret = drm_of_component_probe_with_match(&pdev->dev, match, compare_of,
++						&imx_drm_ops);
+ 
+ 	if (!ret)
+ 		ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+@@ -344,23 +393,7 @@ static struct platform_driver imx_drm_pdrv = {
+ 		.of_match_table = imx_drm_dt_ids,
+ 	},
+ };
+-
+-static struct platform_driver * const drivers[] = {
+-	&imx_drm_pdrv,
+-	&ipu_drm_driver,
+-};
+-
+-static int __init imx_drm_init(void)
+-{
+-	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
+-}
+-module_init(imx_drm_init);
+-
+-static void __exit imx_drm_exit(void)
+-{
+-	platform_unregister_drivers(drivers, ARRAY_SIZE(drivers));
+-}
+-module_exit(imx_drm_exit);
++module_platform_driver(imx_drm_pdrv);
+ 
+ MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");
+ MODULE_DESCRIPTION("i.MX drm driver core");
+diff --git a/drivers/gpu/drm/imx/imx-drm.h b/drivers/gpu/drm/imx/imx-drm.h
+index ab9c6f706..bcda4befc 100644
+--- a/drivers/gpu/drm/imx/imx-drm.h
++++ b/drivers/gpu/drm/imx/imx-drm.h
+@@ -2,6 +2,8 @@
+ #ifndef _IMX_DRM_H_
+ #define _IMX_DRM_H_
+ 
++#define MAX_CRTC	4
++
+ struct device_node;
+ struct drm_crtc;
+ struct drm_connector;
+@@ -28,8 +30,6 @@ int imx_drm_init_drm(struct platform_device *pdev,
+ 		int preferred_bpp);
+ int imx_drm_exit_drm(void);
+ 
+-extern struct platform_driver ipu_drm_driver;
+-
+ void imx_drm_mode_config_init(struct drm_device *drm);
+ 
+ struct drm_gem_cma_object *imx_drm_fb_get_obj(struct drm_framebuffer *fb);
+@@ -40,7 +40,4 @@ int imx_drm_encoder_parse_of(struct drm_device *drm,
+ void imx_drm_connector_destroy(struct drm_connector *connector);
+ void imx_drm_encoder_destroy(struct drm_encoder *encoder);
+ 
+-int ipu_planes_assign_pre(struct drm_device *dev,
+-			  struct drm_atomic_state *state);
+-
+ #endif /* _IMX_DRM_H_ */
+diff --git a/drivers/gpu/drm/imx/lcdifv3/Kconfig b/drivers/gpu/drm/imx/lcdifv3/Kconfig
+new file mode 100644
+index 000000000..6d64c2977
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/Kconfig
+@@ -0,0 +1,8 @@
++config DRM_IMX_LCDIFV3
++	tristate "i.MX LCDIFV3 controller DRM driver"
++	depends on DRM_IMX
++	depends on IMX_LCDIFV3_CORE
++	default y if DRM_IMX=y
++	default m if DRM_IMX=m
++	help
++	  enable i.MX LCDIFV3 controller DRM driver under DRM_IMX.
+diff --git a/drivers/gpu/drm/imx/lcdifv3/Makefile b/drivers/gpu/drm/imx/lcdifv3/Makefile
+new file mode 100644
+index 000000000..2f2b91078
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/Makefile
+@@ -0,0 +1,4 @@
++ccflags-y += -I $(srctree)/$(src)/../
++
++imx-lcdifv3-crtc-objs := lcdifv3-crtc.o lcdifv3-plane.o lcdifv3-kms.o
++obj-$(CONFIG_DRM_IMX_LCDIFV3) += imx-lcdifv3-crtc.o
+diff --git a/drivers/gpu/drm/imx/lcdifv3/lcdifv3-crtc.c b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-crtc.c
+new file mode 100644
+index 000000000..0716a3172
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-crtc.c
+@@ -0,0 +1,405 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2019,2020 NXP
++ */
++
++#include <linux/component.h>
++#include <linux/device.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <drm/drmP.h>
++#include <drm/drm_atomic_helper.h>
++#include <video/imx-lcdifv3.h>
++#include <video/videomode.h>
++
++#include "imx-drm.h"
++#include "lcdifv3-plane.h"
++#include "lcdifv3-kms.h"
++
++struct lcdifv3_crtc {
++	struct device *dev;
++
++	struct drm_crtc base;
++	struct lcdifv3_plane *plane[2];
++
++	int vbl_irq;
++	u32 pix_fmt;		/* drm fourcc */
++};
++
++#define to_lcdifv3_crtc(crtc) container_of(crtc, struct lcdifv3_crtc, base)
++
++static void lcdifv3_crtc_reset(struct drm_crtc *crtc)
++{
++	struct imx_crtc_state *state;
++
++	if (crtc->state) {
++		__drm_atomic_helper_crtc_destroy_state(crtc->state);
++
++		state = to_imx_crtc_state(crtc->state);
++		kfree(state);
++		crtc->state = NULL;
++	}
++
++	state = kzalloc(sizeof(*state), GFP_KERNEL);
++	if (!state)
++		return;
++
++	crtc->state = &state->base;
++	crtc->state->crtc = crtc;
++}
++
++static struct drm_crtc_state *lcdifv3_crtc_duplicate_state(struct drm_crtc *crtc)
++{
++	struct imx_crtc_state *state, *orig_state;
++
++	if (WARN_ON(!crtc->state))
++		return NULL;
++
++	state = kzalloc(sizeof(*state), GFP_KERNEL);
++	if (!state)
++		return NULL;
++
++	__drm_atomic_helper_crtc_duplicate_state(crtc, &state->base);
++
++	orig_state = to_imx_crtc_state(crtc->state);
++	state->bus_format = orig_state->bus_format;
++	state->bus_flags = orig_state->bus_flags;
++	state->di_hsync_pin = orig_state->di_hsync_pin;
++	state->di_vsync_pin = orig_state->di_vsync_pin;
++
++	return &state->base;
++}
++
++static void lcdifv3_crtc_destroy_state(struct drm_crtc *crtc,
++				     struct drm_crtc_state *state)
++{
++	__drm_atomic_helper_crtc_destroy_state(state);
++	kfree(to_imx_crtc_state(state));
++}
++
++static int lcdifv3_crtc_atomic_check(struct drm_crtc *crtc,
++				   struct drm_crtc_state *state)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct imx_crtc_state *imx_crtc_state = to_imx_crtc_state(state);
++
++	/* Don't check 'bus_format' when CRTC is
++	 * going to be disabled.
++	 */
++	if (!state->enable)
++		return 0;
++
++	/* For the commit that the CRTC is active
++	 * without planes attached to it should be
++	 * invalid.
++	 */
++	if (state->active && !state->plane_mask)
++		return -EINVAL;
++
++	/* check the requested bus format can be
++	 * supported by LCDIF CTRC or not
++	 */
++	switch (imx_crtc_state->bus_format) {
++	case MEDIA_BUS_FMT_RGB565_1X16:
++	case MEDIA_BUS_FMT_RGB666_1X18:
++	case MEDIA_BUS_FMT_RGB888_1X24:
++		break;
++	default:
++		dev_err(lcdifv3_crtc->dev,
++			"unsupported bus format: %#x\n",
++			imx_crtc_state->bus_format);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static void lcdifv3_crtc_atomic_begin(struct drm_crtc *crtc,
++				    struct drm_crtc_state *old_crtc_state)
++{
++	drm_crtc_vblank_on(crtc);
++
++	spin_lock_irq(&crtc->dev->event_lock);
++	if (crtc->state->event) {
++		WARN_ON(drm_crtc_vblank_get(crtc));
++		drm_crtc_arm_vblank_event(crtc, crtc->state->event);
++		crtc->state->event = NULL;
++	}
++	spin_unlock_irq(&crtc->dev->event_lock);
++}
++
++static void lcdifv3_crtc_atomic_flush(struct drm_crtc *crtc,
++				    struct drm_crtc_state *old_crtc_state)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	/* kick shadow load for plane config */
++	lcdifv3_en_shadow_load(lcdifv3);
++}
++
++static void lcdifv3_crtc_atomic_enable(struct drm_crtc *crtc,
++				     struct drm_crtc_state *old_crtc_state)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++	struct drm_display_mode *mode = &crtc->state->adjusted_mode;
++	struct imx_crtc_state *imx_crtc_state = to_imx_crtc_state(crtc->state);
++	struct videomode vm;
++
++	drm_display_mode_to_videomode(mode, &vm);
++
++	if (imx_crtc_state->bus_flags & DRM_BUS_FLAG_DE_HIGH)
++		vm.flags |= DISPLAY_FLAGS_DE_HIGH;
++	else
++		vm.flags |= DISPLAY_FLAGS_DE_LOW;
++
++	if (imx_crtc_state->bus_flags & DRM_BUS_FLAG_PIXDATA_POSEDGE)
++		vm.flags |= DISPLAY_FLAGS_PIXDATA_POSEDGE;
++	else
++		vm.flags |= DISPLAY_FLAGS_PIXDATA_NEGEDGE;
++
++	pm_runtime_get_sync(lcdifv3_crtc->dev->parent);
++
++	lcdifv3_set_mode(lcdifv3, &vm);
++
++	/* config LCDIF output bus format */
++	lcdifv3_set_bus_fmt(lcdifv3, imx_crtc_state->bus_format);
++
++	/* run LCDIFv3 */
++	lcdifv3_enable_controller(lcdifv3);
++}
++
++static void lcdifv3_crtc_atomic_disable(struct drm_crtc *crtc,
++				      struct drm_crtc_state *old_crtc_state)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	spin_lock_irq(&crtc->dev->event_lock);
++	if (crtc->state->event) {
++		drm_crtc_send_vblank_event(crtc, crtc->state->event);
++		crtc->state->event = NULL;
++	}
++	spin_unlock_irq(&crtc->dev->event_lock);
++
++	drm_crtc_vblank_off(crtc);
++
++	lcdifv3_disable_controller(lcdifv3);
++
++	pm_runtime_put(lcdifv3_crtc->dev->parent);
++}
++
++static enum drm_mode_status lcdifv3_crtc_mode_valid(struct drm_crtc * crtc,
++						    const struct drm_display_mode *mode)
++{
++	u8 vic;
++	long rate;
++	const struct drm_display_mode *dmt;
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	/* check CEA-861 mode */
++	vic = drm_match_cea_mode(mode);
++	if (vic)
++		goto check_pix_clk;
++
++	/* check DMT mode */
++	dmt = drm_mode_find_dmt(crtc->dev, mode->hdisplay, mode->vdisplay,
++				drm_mode_vrefresh(mode), false);
++	if (dmt && drm_mode_equal(mode, dmt))
++		goto check_pix_clk;
++
++	return MODE_OK;
++
++check_pix_clk:
++	rate = lcdifv3_pix_clk_round_rate(lcdifv3, mode->clock * 1000);
++
++	if (rate <= 0 || rate != mode->clock * 1000)
++		return MODE_BAD;
++
++	return MODE_OK;
++}
++
++static const struct drm_crtc_helper_funcs lcdifv3_helper_funcs = {
++	.atomic_check	= lcdifv3_crtc_atomic_check,
++	.atomic_begin	= lcdifv3_crtc_atomic_begin,
++	.atomic_flush	= lcdifv3_crtc_atomic_flush,
++	.atomic_enable	= lcdifv3_crtc_atomic_enable,
++	.atomic_disable	= lcdifv3_crtc_atomic_disable,
++	.mode_valid	= lcdifv3_crtc_mode_valid,
++};
++
++static int lcdifv3_enable_vblank(struct drm_crtc *crtc)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	lcdifv3_vblank_irq_enable(lcdifv3);
++	enable_irq(lcdifv3_crtc->vbl_irq);
++
++	return 0;
++}
++
++static void lcdifv3_disable_vblank(struct drm_crtc *crtc)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = to_lcdifv3_crtc(crtc);
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	disable_irq_nosync(lcdifv3_crtc->vbl_irq);
++	lcdifv3_vblank_irq_disable(lcdifv3);
++}
++
++static const struct drm_crtc_funcs lcdifv3_crtc_funcs = {
++	.set_config = drm_atomic_helper_set_config,
++	.destroy    = drm_crtc_cleanup,
++	.page_flip  = drm_atomic_helper_page_flip,
++	.reset      = lcdifv3_crtc_reset,
++	.atomic_duplicate_state = lcdifv3_crtc_duplicate_state,
++	.atomic_destroy_state	= lcdifv3_crtc_destroy_state,
++	.enable_vblank	= lcdifv3_enable_vblank,
++	.disable_vblank = lcdifv3_disable_vblank,
++};
++
++static irqreturn_t lcdifv3_crtc_vblank_irq_handler(int irq, void *dev_id)
++{
++	struct lcdifv3_crtc *lcdifv3_crtc = dev_id;
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	drm_crtc_handle_vblank(&lcdifv3_crtc->base);
++
++	lcdifv3_vblank_irq_clear(lcdifv3);
++
++	return IRQ_HANDLED;
++}
++
++static int lcdifv3_crtc_init(struct lcdifv3_crtc *lcdifv3_crtc,
++			     struct lcdifv3_client_platformdata *pdata,
++			     struct drm_device *drm)
++{
++	int ret;
++	struct lcdifv3_plane *primary = lcdifv3_crtc->plane[0];
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(lcdifv3_crtc->dev->parent);
++
++	/* Primary plane
++	 * The 'possible_crtcs' of primary plane will be
++	 * recalculated during the 'crtc' initialization
++	 * later.
++	 */
++	primary = lcdifv3_plane_init(drm, lcdifv3, 0, DRM_PLANE_TYPE_PRIMARY, 0);
++	if (IS_ERR(primary))
++		return PTR_ERR(primary);
++	lcdifv3_crtc->plane[0] = primary;
++
++	/* TODO: Overlay plane */
++
++	lcdifv3_crtc->base.port = pdata->of_node;
++	drm_crtc_helper_add(&lcdifv3_crtc->base, &lcdifv3_helper_funcs);
++	ret = drm_crtc_init_with_planes(drm, &lcdifv3_crtc->base,
++			&lcdifv3_crtc->plane[0]->base, NULL,
++			&lcdifv3_crtc_funcs, NULL);
++	if (ret) {
++		dev_err(lcdifv3_crtc->dev, "failed to init crtc\n");
++		return ret;
++	}
++
++	lcdifv3_crtc->vbl_irq = lcdifv3_vblank_irq_get(lcdifv3);
++	WARN_ON(lcdifv3_crtc->vbl_irq < 0);
++
++	ret = devm_request_irq(lcdifv3_crtc->dev, lcdifv3_crtc->vbl_irq,
++			       lcdifv3_crtc_vblank_irq_handler, 0,
++			       dev_name(lcdifv3_crtc->dev), lcdifv3_crtc);
++	if (ret) {
++		dev_err(lcdifv3_crtc->dev,
++			"vblank irq request failed: %d\n", ret);
++		return ret;
++	}
++
++	disable_irq(lcdifv3_crtc->vbl_irq);
++
++	return 0;
++}
++
++static int lcdifv3_crtc_bind(struct device *dev, struct device *master,
++			   void *data)
++{
++	int ret;
++	struct drm_device *drm = data;
++	struct lcdifv3_crtc *lcdifv3_crtc = dev_get_drvdata(dev);
++	struct lcdifv3_client_platformdata *pdata = dev->platform_data;
++
++	dev_dbg(dev, "%s: lcdifv3 crtc bind begin\n", __func__);
++
++	ret = lcdifv3_crtc_init(lcdifv3_crtc, pdata, drm);
++	if (ret)
++		return ret;
++
++	if (!drm->mode_config.funcs)
++		drm->mode_config.funcs = &lcdifv3_drm_mode_config_funcs;
++
++	if (!drm->mode_config.helper_private)
++		drm->mode_config.helper_private = &lcdifv3_drm_mode_config_helpers;
++
++	/* limit the max width and height */
++	drm->mode_config.max_width  = 4096;
++	drm->mode_config.max_height = 4096;
++
++	dev_dbg(dev, "%s: lcdifv3 crtc bind end\n", __func__);
++
++	return 0;
++}
++
++static void lcdifv3_crtc_unbind(struct device *dev, struct device *master,
++			      void *data)
++{
++	/* No special to be done */
++}
++
++static const struct component_ops lcdifv3_crtc_ops = {
++	.bind   = lcdifv3_crtc_bind,
++	.unbind = lcdifv3_crtc_unbind,
++};
++
++static int lcdifv3_crtc_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct lcdifv3_crtc *lcdifv3_crtc;
++
++	dev_dbg(&pdev->dev, "%s: lcdifv3 crtc probe begin\n", __func__);
++
++	if (!dev->platform_data) {
++		dev_err(dev, "no platform data\n");
++		return -EINVAL;
++	}
++
++	lcdifv3_crtc = devm_kzalloc(dev, sizeof(*lcdifv3_crtc), GFP_KERNEL);
++	if (!lcdifv3_crtc)
++		return -ENOMEM;
++
++	lcdifv3_crtc->dev = dev;
++	dev_set_drvdata(dev, lcdifv3_crtc);
++
++	return component_add(dev, &lcdifv3_crtc_ops);
++}
++
++static int lcdifv3_crtc_remove(struct platform_device *pdev)
++{
++	component_del(&pdev->dev, &lcdifv3_crtc_ops);
++
++	return 0;
++}
++
++static struct platform_driver lcdifv3_crtc_driver = {
++	.probe  = lcdifv3_crtc_probe,
++	.remove = lcdifv3_crtc_remove,
++	.driver = {
++		.name = "imx-lcdifv3-crtc",
++	},
++};
++module_platform_driver(lcdifv3_crtc_driver);
++
++MODULE_DESCRIPTION("NXP i.MX LCDIFV3 DRM CRTC driver");
++MODULE_AUTHOR("Fancy Fang <chen.fang@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.c b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.c
+new file mode 100644
+index 000000000..969fb92c1
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.c
+@@ -0,0 +1,38 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2019 NXP
++ */
++
++#include <drm/drmP.h>
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_crtc.h>
++#include <drm/drm_fb_cma_helper.h>
++#include <drm/drm_gem_framebuffer_helper.h>
++
++static void lcdifv3_drm_atomic_commit_tail(struct drm_atomic_state *state)
++{
++	struct drm_device *dev = state->dev;
++
++	drm_atomic_helper_commit_modeset_disables(dev, state);
++
++	drm_atomic_helper_commit_modeset_enables(dev, state);
++
++	drm_atomic_helper_commit_planes(dev, state, DRM_PLANE_COMMIT_ACTIVE_ONLY);
++
++	drm_atomic_helper_commit_hw_done(state);
++
++	drm_atomic_helper_wait_for_vblanks(dev, state);
++
++	drm_atomic_helper_cleanup_planes(dev, state);
++}
++
++const struct drm_mode_config_funcs lcdifv3_drm_mode_config_funcs = {
++	.fb_create     = drm_gem_fb_create,
++	.atomic_check  = drm_atomic_helper_check,
++	.atomic_commit = drm_atomic_helper_commit,
++};
++
++struct drm_mode_config_helper_funcs lcdifv3_drm_mode_config_helpers = {
++	.atomic_commit_tail = lcdifv3_drm_atomic_commit_tail,
++};
+diff --git a/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.h b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.h
+new file mode 100644
+index 000000000..9a7caf4b0
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-kms.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2019 NXP
++ */
++
++#ifndef __LCDIFV3_KMS_H
++#define __LCDIFV3_KMS_H
++
++extern const struct drm_mode_config_funcs lcdifv3_drm_mode_config_funcs;
++extern struct drm_mode_config_helper_funcs lcdifv3_drm_mode_config_helpers;
++
++#endif
+diff --git a/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.c b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.c
+new file mode 100644
+index 000000000..5c32acbe8
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.c
+@@ -0,0 +1,202 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2019,2020 NXP
++ */
++
++#include <linux/module.h>
++#include <drm/drmP.h>
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_fb_cma_helper.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_cma_helper.h>
++#include <drm/drm_plane.h>
++#include <drm/drm_plane_helper.h>
++#include <drm/drm_rect.h>
++#include <video/imx-lcdifv3.h>
++
++#include "lcdifv3-plane.h"
++
++static uint32_t lcdifv3_pixel_formats[] = {
++	DRM_FORMAT_XRGB8888,
++	DRM_FORMAT_ARGB8888,
++	DRM_FORMAT_RGB565,
++	DRM_FORMAT_XBGR8888,
++	DRM_FORMAT_ABGR8888,
++	DRM_FORMAT_ARGB1555,
++	DRM_FORMAT_XRGB1555,
++};
++
++static int lcdifv3_plane_atomic_check(struct drm_plane *plane,
++				      struct drm_plane_state *plane_state)
++{
++	int ret;
++	struct drm_plane_state *old_state = plane->state;
++	struct drm_framebuffer *fb = plane_state->fb;
++	struct drm_framebuffer *old_fb = old_state->fb;
++	struct drm_crtc_state *crtc_state;
++	struct drm_display_mode *mode;
++
++	/* 'fb' should also be NULL which has been checked in
++	 * the core sanity check function 'drm_atomic_plane_check()'
++	 */
++	if (!plane_state->crtc) {
++		WARN_ON(fb);
++		return 0;
++	}
++
++	/* lcdifv3 crtc can only display from (0,0) for each plane */
++	if (plane_state->crtc_x || plane_state->crtc_y)
++		return -EINVAL;
++
++	crtc_state = drm_atomic_get_existing_crtc_state(plane_state->state,
++							plane_state->crtc);
++	mode = &crtc_state->adjusted_mode;
++
++	ret = drm_atomic_helper_check_plane_state(plane_state, crtc_state,
++						  DRM_PLANE_HELPER_NO_SCALING,
++						  DRM_PLANE_HELPER_NO_SCALING,
++						  false, true);
++	if (ret)
++		return ret;
++
++	if (!plane_state->visible)
++		return -EINVAL;
++
++	/* force 'mode_changed' when fb pitches changed, since
++	 * the pitch related registers configuration of LCDIF
++	 * can not be done when LCDIF is running.
++	 */
++	if (old_fb && likely(!crtc_state->mode_changed)) {
++		if (old_fb->pitches[0] != fb->pitches[0])
++			crtc_state->mode_changed = true;
++	}
++
++	return 0;
++}
++
++static void lcdifv3_plane_atomic_update(struct drm_plane *plane,
++					struct drm_plane_state *old_state)
++{
++	struct lcdifv3_plane *lcdifv3_plane = to_lcdifv3_plane(plane);
++	struct lcdifv3_soc *lcdifv3 = lcdifv3_plane->lcdifv3;
++	struct drm_plane_state *state = plane->state;
++	struct drm_framebuffer *fb = state->fb;
++	struct drm_gem_cma_object *gem_obj = NULL;
++	u32 fb_addr, src_off, src_w, fb_idx, cpp, stride;
++	bool crop;
++
++	/* plane and crtc is disabling */
++	if (!fb)
++		return;
++
++	/* TODO: for now we just update the next buf addr
++	 * and the fb pixel format, since the mode set will
++	 * be done in crtc's ->enable() helper func
++	 */
++	if (plane->type == DRM_PLANE_TYPE_PRIMARY)
++		lcdifv3_set_pix_fmt(lcdifv3, fb->format->format);
++
++	switch (plane->type) {
++	case DRM_PLANE_TYPE_PRIMARY:
++		/* TODO: only support RGB */
++		gem_obj = drm_fb_cma_get_gem_obj(fb, 0);
++		src_off = (state->src_y >> 16) * fb->pitches[0] +
++			  (state->src_x >> 16) * fb->format->cpp[0];
++		fb_addr = gem_obj->paddr + fb->offsets[0] + src_off;
++		fb_idx  = 0;
++		break;
++	default:
++		/* TODO: add overlay later */
++		return;
++	}
++
++	lcdifv3_set_fb_addr(lcdifv3, fb_idx, fb_addr);
++
++	/* config horizontal cropping if crtc needs modeset */
++	if (unlikely(drm_atomic_crtc_needs_modeset(state->crtc->state))) {
++		cpp = fb->format->cpp[0];
++		stride = DIV_ROUND_UP(fb->pitches[0], cpp);
++
++		src_w = state->src_w >> 16;
++		WARN_ON(src_w > fb->width);
++
++		crop  = src_w != stride ? true : false;
++		lcdifv3_set_fb_hcrop(lcdifv3, src_w, fb->pitches[0], crop);
++	}
++}
++
++static void lcdifv3_plane_atomic_disable(struct drm_plane *plane,
++				       struct drm_plane_state *old_state)
++{
++	struct drm_plane_state *state = plane->state;
++	struct drm_framebuffer *fb = state->fb;
++
++	WARN_ON(fb);
++
++	/* TODO: CRTC disabled has been done by CRTC helper function,
++	 * so it seems that no more required, the only possible thing
++	 * is to set next buf addr to 0 in CRTC
++	 */
++}
++
++static const struct drm_plane_helper_funcs lcdifv3_plane_helper_funcs = {
++	.atomic_check	= lcdifv3_plane_atomic_check,
++	.atomic_update	= lcdifv3_plane_atomic_update,
++	.atomic_disable	= lcdifv3_plane_atomic_disable,
++};
++
++static void lcdifv3_plane_destroy(struct drm_plane *plane)
++{
++	struct lcdifv3_plane *lcdifv3_plane = to_lcdifv3_plane(plane);
++
++	drm_plane_cleanup(plane);
++	kfree(lcdifv3_plane);
++}
++
++static const struct drm_plane_funcs lcdifv3_plane_funcs = {
++	.update_plane	= drm_atomic_helper_update_plane,
++	.disable_plane	= drm_atomic_helper_disable_plane,
++	.destroy	= lcdifv3_plane_destroy,
++	.reset		= drm_atomic_helper_plane_reset,
++	.atomic_duplicate_state	= drm_atomic_helper_plane_duplicate_state,
++	.atomic_destroy_state	= drm_atomic_helper_plane_destroy_state,
++};
++
++struct lcdifv3_plane *lcdifv3_plane_init(struct drm_device *dev,
++				     struct lcdifv3_soc *lcdifv3,
++				     unsigned int possible_crtcs,
++				     enum drm_plane_type type,
++				     unsigned int zpos)
++{
++	int ret;
++	struct lcdifv3_plane *lcdifv3_plane;
++
++	/* lcdifv3 doesn't support fb modifiers */
++	if (zpos || dev->mode_config.allow_fb_modifiers)
++		return ERR_PTR(-EINVAL);
++
++	lcdifv3_plane = kzalloc(sizeof(*lcdifv3_plane), GFP_KERNEL);
++	if (!lcdifv3_plane)
++		return ERR_PTR(-ENOMEM);
++
++	lcdifv3_plane->lcdifv3 = lcdifv3;
++
++	drm_plane_helper_add(&lcdifv3_plane->base, &lcdifv3_plane_helper_funcs);
++	ret = drm_universal_plane_init(dev, &lcdifv3_plane->base, possible_crtcs,
++				       &lcdifv3_plane_funcs, lcdifv3_pixel_formats,
++				       ARRAY_SIZE(lcdifv3_pixel_formats), NULL,
++				       type, NULL);
++	if (ret) {
++		kfree(lcdifv3_plane);
++		return ERR_PTR(ret);
++	}
++
++	ret = drm_plane_create_zpos_immutable_property(&lcdifv3_plane->base, zpos);
++	if (ret) {
++		kfree(lcdifv3_plane);
++		return ERR_PTR(ret);
++	}
++
++	return lcdifv3_plane;
++}
+diff --git a/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.h b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.h
+new file mode 100644
+index 000000000..437b7d97e
+--- /dev/null
++++ b/drivers/gpu/drm/imx/lcdifv3/lcdifv3-plane.h
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2019,2020 NXP
++ */
++
++#ifndef __LCDIFV3_PLANE_H
++#define __LCDIFV3_PLANE_H
++
++#include <drm/drm_plane.h>
++#include <video/imx-lcdifv3.h>
++
++struct lcdifv3_plane {
++	struct drm_plane base;
++	struct lcdifv3_soc *lcdifv3;
++};
++
++#define to_lcdifv3_plane(plane) container_of(plane, struct lcdifv3_plane, base)
++
++struct lcdifv3_plane *lcdifv3_plane_init(struct drm_device *drm,
++				     struct lcdifv3_soc *lcdifv3,
++				     unsigned int possible_crtcs,
++				     enum drm_plane_type type,
++				     unsigned int zpos);
++#endif
+diff --git a/drivers/gpu/imx/Kconfig b/drivers/gpu/imx/Kconfig
+new file mode 100644
+index 000000000..11fc8674b
+--- /dev/null
++++ b/drivers/gpu/imx/Kconfig
+@@ -0,0 +1 @@
++source "drivers/gpu/imx/lcdifv3/Kconfig"
+diff --git a/drivers/gpu/imx/Makefile b/drivers/gpu/imx/Makefile
+new file mode 100644
+index 000000000..b213a2542
+--- /dev/null
++++ b/drivers/gpu/imx/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_IMX_LCDIFV3_CORE)  += lcdifv3/
+diff --git a/drivers/gpu/imx/lcdifv3/Kconfig b/drivers/gpu/imx/lcdifv3/Kconfig
+new file mode 100644
+index 000000000..3ef509310
+--- /dev/null
++++ b/drivers/gpu/imx/lcdifv3/Kconfig
+@@ -0,0 +1,9 @@
++config IMX_LCDIFV3_CORE
++	tristate "i.MX LCDIFV3 core support"
++	depends on ARCH_MXC
++	select RESET_CONTROLLER
++	help
++	  Choose this if you have a NXP i.MX8MP platform and want to use the
++	  LCDIFV3 display controller. This option only enables LCDIFV3 base
++	  support.
++
+diff --git a/drivers/gpu/imx/lcdifv3/Makefile b/drivers/gpu/imx/lcdifv3/Makefile
+new file mode 100644
+index 000000000..812043e52
+--- /dev/null
++++ b/drivers/gpu/imx/lcdifv3/Makefile
+@@ -0,0 +1,3 @@
++obj-$(CONFIG_IMX_LCDIFV3_CORE) += imx-lcdifv3-core.o
++
++imx-lcdifv3-core-objs := lcdifv3-common.o
+diff --git a/drivers/gpu/imx/lcdifv3/lcdifv3-common.c b/drivers/gpu/imx/lcdifv3/lcdifv3-common.c
+new file mode 100644
+index 000000000..fa12cc78c
+--- /dev/null
++++ b/drivers/gpu/imx/lcdifv3/lcdifv3-common.c
+@@ -0,0 +1,862 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2019 NXP
++ */
++
++#include <linux/busfreq-imx.h>
++#include <linux/clk.h>
++#include <linux/iopoll.h>
++#include <linux/media-bus-format.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of_device.h>
++#include <linux/of_graph.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/regmap.h>
++#include <linux/reset.h>
++#include <linux/types.h>
++#include <drm/drm_fourcc.h>
++#include <video/imx-lcdifv3.h>
++#include <video/videomode.h>
++
++#include "lcdifv3-regs.h"
++
++#define DRIVER_NAME "imx-lcdifv3"
++
++struct lcdifv3_soc {
++	struct device *dev;
++
++	int irq;
++	void __iomem *base;
++	struct regmap *gpr;
++	atomic_t rpm_suspended;
++
++	struct clk *clk_pix;
++	struct clk *clk_disp_axi;
++	struct clk *clk_disp_apb;
++
++	u32 thres_low_mul;
++	u32 thres_low_div;
++	u32 thres_high_mul;
++	u32 thres_high_div;
++};
++
++struct lcdifv3_soc_pdata {
++	bool hsync_invert;
++	bool vsync_invert;
++	bool de_invert;
++	bool hdmimix;
++};
++
++struct lcdifv3_platform_reg {
++	struct lcdifv3_client_platformdata pdata;
++	char *name;
++};
++
++static struct lcdifv3_platform_reg client_reg[] = {
++	{
++		.pdata = { },
++		.name  = "imx-lcdifv3-crtc",
++	},
++};
++
++static struct lcdifv3_soc_pdata imx8mp_lcdif1_pdata = {
++	.hsync_invert = false,
++	.vsync_invert = false,
++	.de_invert    = false,
++	.hdmimix     = false,
++};
++
++static struct lcdifv3_soc_pdata imx8mp_lcdif2_pdata = {
++	.hsync_invert = false,
++	.vsync_invert = false,
++	.de_invert    = true,
++	.hdmimix      = false,
++};
++
++static struct lcdifv3_soc_pdata imx8mp_lcdif3_pdata = {
++	.hsync_invert = false,
++	.vsync_invert = false,
++	.de_invert    = false,
++	.hdmimix     = true,
++};
++static const struct of_device_id imx_lcdifv3_dt_ids[] = {
++	{ .compatible = "fsl,imx8mp-lcdif1", .data = &imx8mp_lcdif1_pdata, },
++	{ .compatible = "fsl,imx8mp-lcdif2", .data = &imx8mp_lcdif2_pdata, },
++	{ .compatible = "fsl,imx8mp-lcdif3", .data = &imx8mp_lcdif3_pdata,},
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx_lcdifv3_dt_ids);
++
++static int lcdifv3_enable_clocks(struct lcdifv3_soc *lcdifv3)
++{
++	int ret;
++
++	if (lcdifv3->clk_disp_axi) {
++		ret = clk_prepare_enable(lcdifv3->clk_disp_axi);
++		if (ret)
++			return ret;
++	}
++
++	if (lcdifv3->clk_disp_apb) {
++		ret = clk_prepare_enable(lcdifv3->clk_disp_apb);
++		if (ret)
++			goto disable_disp_axi;
++	}
++
++	ret = clk_prepare_enable(lcdifv3->clk_pix);
++	if (ret)
++		goto disable_disp_apb;
++
++	return 0;
++
++disable_disp_apb:
++	if (lcdifv3->clk_disp_apb)
++		clk_disable_unprepare(lcdifv3->clk_disp_apb);
++disable_disp_axi:
++	if (lcdifv3->clk_disp_axi)
++		clk_disable_unprepare(lcdifv3->clk_disp_axi);
++
++	return ret;
++}
++
++static void lcdifv3_disable_clocks(struct lcdifv3_soc *lcdifv3)
++{
++	clk_disable_unprepare(lcdifv3->clk_pix);
++
++	if (lcdifv3->clk_disp_axi)
++		clk_disable_unprepare(lcdifv3->clk_disp_axi);
++
++	if (lcdifv3->clk_disp_apb)
++		clk_disable_unprepare(lcdifv3->clk_disp_apb);
++}
++
++static void lcdifv3_enable_plane_panic(struct lcdifv3_soc *lcdifv3)
++{
++	u32 panic_thres, thres_low, thres_high;
++
++	/* apb clock has been enabled */
++
++	/* As suggestion, the thres_low should be 1/3 FIFO,
++	 * and thres_high should be 2/3 FIFO (The FIFO size
++	 * is 8KB = 512 * 128bit).
++	 * threshold = n * 128bit (n: 0 ~ 511)
++	 */
++	thres_low  = DIV_ROUND_UP(511 * lcdifv3->thres_low_mul,
++			lcdifv3->thres_low_div);
++	thres_high = DIV_ROUND_UP(511 * lcdifv3->thres_high_mul,
++			lcdifv3->thres_high_div);
++
++	panic_thres = PANIC0_THRES_PANIC_THRES_LOW(thres_low)	|
++		      PANIC0_THRES_PANIC_THRES_HIGH(thres_high);
++
++	writel(panic_thres, lcdifv3->base + LCDIFV3_PANIC0_THRES);
++
++	/* Enable Panic:
++	 *
++	 * As designed, the panic won't trigger an irq,
++	 * so it is unnecessary to handle this as an irq
++	 * and NoC + QoS modules will handle panic
++	 * automatically.
++	 */
++	writel(INT_ENABLE_D1_PLANE_PANIC_EN,
++	       lcdifv3->base + LCDIFV3_INT_ENABLE_D1);
++}
++
++int lcdifv3_vblank_irq_get(struct lcdifv3_soc *lcdifv3)
++{
++	return lcdifv3->irq;
++}
++EXPORT_SYMBOL(lcdifv3_vblank_irq_get);
++
++/* TODO: use VS_BLANK or VSYNC? */
++void lcdifv3_vblank_irq_enable(struct lcdifv3_soc *lcdifv3)
++{
++	uint32_t int_enable_d0;
++
++	int_enable_d0 = readl(lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
++	int_enable_d0 |= INT_STATUS_D0_VS_BLANK;
++
++	/* W1C */
++	writel(INT_STATUS_D0_VS_BLANK,
++	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
++	/* enable */
++	writel(int_enable_d0,
++	       lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
++}
++EXPORT_SYMBOL(lcdifv3_vblank_irq_enable);
++
++void lcdifv3_vblank_irq_disable(struct lcdifv3_soc *lcdifv3)
++{
++	uint32_t int_enable_d0;
++
++	int_enable_d0 = readl(lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
++	int_enable_d0 &= ~INT_STATUS_D0_VS_BLANK;
++
++	/* disable */
++	writel(int_enable_d0,
++	       lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
++	/* W1C */
++	writel(INT_STATUS_D0_VS_BLANK,
++	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
++}
++EXPORT_SYMBOL(lcdifv3_vblank_irq_disable);
++
++void lcdifv3_vblank_irq_clear(struct lcdifv3_soc *lcdifv3)
++{
++	/* W1C */
++	writel(INT_STATUS_D0_VS_BLANK,
++	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
++}
++EXPORT_SYMBOL(lcdifv3_vblank_irq_clear);
++
++static uint32_t lcdifv3_get_bpp_from_fmt(uint32_t format)
++{
++	/* TODO: only support RGB for now */
++
++	switch (format) {
++	case DRM_FORMAT_RGB565:
++	case DRM_FORMAT_BGR565:
++	case DRM_FORMAT_ARGB1555:
++	case DRM_FORMAT_XRGB1555:
++	case DRM_FORMAT_ABGR1555:
++	case DRM_FORMAT_XBGR1555:
++		return 16;
++	case DRM_FORMAT_ARGB8888:
++	case DRM_FORMAT_XRGB8888:
++	case DRM_FORMAT_ABGR8888:
++	case DRM_FORMAT_XBGR8888:
++	case DRM_FORMAT_RGBA8888:
++	case DRM_FORMAT_RGBX8888:
++		return 32;
++	default:
++		/* unsupported format */
++		return 0;
++	}
++}
++
++/*
++ * Get the bus format supported by LCDIF
++ * according to drm fourcc format
++ */
++int lcdifv3_get_bus_fmt_from_pix_fmt(struct lcdifv3_soc *lcdifv3,
++				     uint32_t format)
++{
++	uint32_t bpp;
++
++	bpp = lcdifv3_get_bpp_from_fmt(format);
++	if (!bpp)
++		return -EINVAL;
++
++	switch (bpp) {
++	case 16:
++		return MEDIA_BUS_FMT_RGB565_1X16;
++	case 18:
++		return MEDIA_BUS_FMT_RGB666_1X18;
++	case 24:
++	case 32:
++		return MEDIA_BUS_FMT_RGB888_1X24;
++	default:
++		return -EINVAL;
++	}
++}
++EXPORT_SYMBOL(lcdifv3_get_bus_fmt_from_pix_fmt);
++
++int lcdifv3_set_pix_fmt(struct lcdifv3_soc *lcdifv3, u32 format)
++{
++	struct drm_format_name_buf format_name;
++	uint32_t ctrldescl0_5 = 0;
++
++	ctrldescl0_5 = readl(lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++
++	ctrldescl0_5 &= ~(CTRLDESCL0_5_BPP(0xf) | CTRLDESCL0_5_YUV_FORMAT(0x3));
++
++	switch (format) {
++	case DRM_FORMAT_RGB565:
++		ctrldescl0_5 |= CTRLDESCL0_5_BPP(BPP16_RGB565);
++		break;
++	case DRM_FORMAT_ARGB1555:
++	case DRM_FORMAT_XRGB1555:
++		ctrldescl0_5 |= CTRLDESCL0_5_BPP(BPP16_ARGB1555);
++		break;
++	case DRM_FORMAT_ARGB8888:
++	case DRM_FORMAT_XRGB8888:
++		ctrldescl0_5 |= CTRLDESCL0_5_BPP(BPP32_ARGB8888);
++		break;
++	case DRM_FORMAT_ABGR8888:
++	case DRM_FORMAT_XBGR8888:
++		ctrldescl0_5 |= CTRLDESCL0_5_BPP(BPP32_ABGR8888);
++		break;
++	default:
++		dev_err(lcdifv3->dev, "unsupported pixel format: %s\n",
++			drm_get_format_name(format, &format_name));
++		return -EINVAL;
++	}
++
++	writel(ctrldescl0_5,  lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++
++	return 0;
++}
++EXPORT_SYMBOL(lcdifv3_set_pix_fmt);
++
++void lcdifv3_set_bus_fmt(struct lcdifv3_soc *lcdifv3, u32 bus_format)
++{
++	uint32_t disp_para = 0;
++
++	disp_para = readl(lcdifv3->base + LCDIFV3_DISP_PARA);
++
++	/* clear line pattern bits */
++	disp_para &= ~DISP_PARA_LINE_PATTERN(0xf);
++
++	switch (bus_format) {
++	case MEDIA_BUS_FMT_RGB565_1X16:
++		disp_para |= DISP_PARA_LINE_PATTERN(LP_RGB565);
++		break;
++	case MEDIA_BUS_FMT_RGB888_1X24:
++		disp_para |= DISP_PARA_LINE_PATTERN(LP_RGB888_OR_YUV444);
++		break;
++	default:
++		dev_err(lcdifv3->dev, "unknown bus format: %#x\n", bus_format);
++		return;
++	}
++
++	/* config display mode: default is normal mode */
++	disp_para &= ~DISP_PARA_DISP_MODE(3);
++	disp_para |= DISP_PARA_DISP_MODE(0);
++
++	writel(disp_para, lcdifv3->base + LCDIFV3_DISP_PARA);
++}
++EXPORT_SYMBOL(lcdifv3_set_bus_fmt);
++
++void lcdifv3_set_fb_addr(struct lcdifv3_soc *lcdifv3, int id, u32 addr)
++{
++	switch (id) {
++	case 0:
++		/* primary plane */
++		writel(addr, lcdifv3->base + LCDIFV3_CTRLDESCL_LOW0_4);
++		break;
++	default:
++		/* TODO: add overlay support */
++		return;
++	}
++}
++EXPORT_SYMBOL(lcdifv3_set_fb_addr);
++
++void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w,
++			u32 pitch, bool crop)
++{
++	uint32_t ctrldescl0_3 = 0;
++
++	/* config P_SIZE and T_SIZE:
++	 * 1. P_SIZE and T_SIZE should never
++	 *    be less than AXI bus width.
++	 * 2. P_SIZE should never be less than T_SIZE.
++	 */
++	ctrldescl0_3 |= CTRLDESCL0_3_P_SIZE(2);
++	ctrldescl0_3 |= CTRLDESCL0_3_T_SIZE(2);
++
++	/* config pitch */
++	ctrldescl0_3 |= CTRLDESCL0_3_PITCH(pitch);
++
++	/* enable frame clear to clear FIFO data on
++	 * every vsync blank period to make sure no
++	 * dirty data exits to affect next frame
++	 * display, otherwise some flicker issue may
++	 * be observed in some cases.
++	 */
++	ctrldescl0_3 |= CTRLDESCL0_3_STATE_CLEAR_VSYNC;
++
++	writel(ctrldescl0_3, lcdifv3->base + LCDIFV3_CTRLDESCL0_3);
++}
++EXPORT_SYMBOL(lcdifv3_set_fb_hcrop);
++
++
++void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode)
++{
++	const struct of_device_id *of_id =
++			of_match_device(imx_lcdifv3_dt_ids, lcdifv3->dev);
++	const struct lcdifv3_soc_pdata *soc_pdata;
++	u32 disp_size, hsyn_para, vsyn_para, vsyn_hsyn_width, ctrldescl0_1;
++
++	if (unlikely(!of_id))
++		return;
++	soc_pdata = of_id->data;
++
++	/* set pixel clock rate */
++	clk_disable_unprepare(lcdifv3->clk_pix);
++	clk_set_rate(lcdifv3->clk_pix, vmode->pixelclock);
++	clk_prepare_enable(lcdifv3->clk_pix);
++
++	/* config display timings */
++	disp_size = DISP_SIZE_DELTA_Y(vmode->vactive) |
++		    DISP_SIZE_DELTA_X(vmode->hactive);
++	writel(disp_size, lcdifv3->base + LCDIFV3_DISP_SIZE);
++
++	WARN_ON(!vmode->hback_porch || !vmode->hfront_porch);
++	hsyn_para = HSYN_PARA_BP_H(vmode->hback_porch) |
++		    HSYN_PARA_FP_H(vmode->hfront_porch);
++	writel(hsyn_para, lcdifv3->base + LCDIFV3_HSYN_PARA);
++
++	WARN_ON(!vmode->vback_porch || !vmode->vfront_porch);
++	vsyn_para = VSYN_PARA_BP_V(vmode->vback_porch) |
++		    VSYN_PARA_FP_V(vmode->vfront_porch);
++	writel(vsyn_para, lcdifv3->base + LCDIFV3_VSYN_PARA);
++
++	WARN_ON(!vmode->vsync_len || !vmode->hsync_len);
++	vsyn_hsyn_width = VSYN_HSYN_WIDTH_PW_V(vmode->vsync_len) |
++			  VSYN_HSYN_WIDTH_PW_H(vmode->hsync_len);
++	writel(vsyn_hsyn_width, lcdifv3->base + LCDIFV3_VSYN_HSYN_WIDTH);
++
++	/* config layer size */
++	/* TODO: 32bits alignment for width */
++	ctrldescl0_1 = CTRLDESCL0_1_HEIGHT(vmode->vactive) |
++		       CTRLDESCL0_1_WIDTH(vmode->hactive);
++	writel(ctrldescl0_1, lcdifv3->base + LCDIFV3_CTRLDESCL0_1);
++
++	/* Polarities */
++	if (soc_pdata) {
++		if ((soc_pdata->hsync_invert &&
++		     vmode->flags & DISPLAY_FLAGS_HSYNC_HIGH) ||
++		    (!soc_pdata->hsync_invert &&
++		     vmode->flags & DISPLAY_FLAGS_HSYNC_LOW))
++			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_CLR);
++
++		if ((soc_pdata->vsync_invert &&
++		     vmode->flags & DISPLAY_FLAGS_VSYNC_HIGH) ||
++		    (!soc_pdata->vsync_invert &&
++		     vmode->flags & DISPLAY_FLAGS_VSYNC_LOW))
++			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_CLR);
++
++		if ((soc_pdata->de_invert &&
++		     vmode->flags & DISPLAY_FLAGS_DE_HIGH) ||
++		    (!soc_pdata->de_invert &&
++		     vmode->flags & DISPLAY_FLAGS_DE_LOW))
++			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_CLR);
++	} else {
++		if (vmode->flags & DISPLAY_FLAGS_HSYNC_LOW)
++			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_CLR);
++		if (vmode->flags & DISPLAY_FLAGS_VSYNC_LOW)
++			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_CLR);
++		if (vmode->flags & DISPLAY_FLAGS_DE_LOW)
++			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_SET);
++		else
++			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_CLR);
++	}
++
++	if (vmode->flags & DISPLAY_FLAGS_PIXDATA_NEGEDGE)
++		writel(CTRL_INV_PXCK, lcdifv3->base + LCDIFV3_CTRL_CLR);
++	else
++		writel(CTRL_INV_PXCK, lcdifv3->base + LCDIFV3_CTRL_SET);
++}
++EXPORT_SYMBOL(lcdifv3_set_mode);
++
++void lcdifv3_en_shadow_load(struct lcdifv3_soc *lcdifv3)
++{
++	u32 ctrldescl0_5;
++
++	ctrldescl0_5 = readl(lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++	ctrldescl0_5 |= CTRLDESCL0_5_SHADOW_LOAD_EN;
++
++	writel(ctrldescl0_5, lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++}
++EXPORT_SYMBOL(lcdifv3_en_shadow_load);
++
++void lcdifv3_enable_controller(struct lcdifv3_soc *lcdifv3)
++{
++	u32 disp_para, ctrldescl0_5;
++
++	disp_para = readl(lcdifv3->base + LCDIFV3_DISP_PARA);
++	ctrldescl0_5 = readl(lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++
++	/* disp on */
++	disp_para |= DISP_PARA_DISP_ON;
++	writel(disp_para, lcdifv3->base + LCDIFV3_DISP_PARA);
++
++	/* enable layer dma */
++	ctrldescl0_5 |= CTRLDESCL0_5_EN;
++	writel(ctrldescl0_5, lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++}
++EXPORT_SYMBOL(lcdifv3_enable_controller);
++
++void lcdifv3_disable_controller(struct lcdifv3_soc *lcdifv3)
++{
++	u32 disp_para, ctrldescl0_5;
++
++	disp_para = readl(lcdifv3->base + LCDIFV3_DISP_PARA);
++	ctrldescl0_5 = readl(lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++
++	/* disable dma */
++	ctrldescl0_5 &= ~CTRLDESCL0_5_EN;
++	writel(ctrldescl0_5, lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
++
++	/* dma config only takes effect at the end of
++	 * one frame, so add delay to wait dma disable
++	 * done before turn off disp.
++	 */
++	usleep_range(20000, 25000);
++
++	/* disp off */
++	disp_para &= ~DISP_PARA_DISP_ON;
++	writel(disp_para, lcdifv3->base + LCDIFV3_DISP_PARA);
++}
++EXPORT_SYMBOL(lcdifv3_disable_controller);
++
++long lcdifv3_pix_clk_round_rate(struct lcdifv3_soc *lcdifv3,
++				unsigned long rate)
++{
++	if (unlikely(!rate))
++		return -EINVAL;
++
++	return clk_round_rate(lcdifv3->clk_pix, rate);
++}
++EXPORT_SYMBOL(lcdifv3_pix_clk_round_rate);
++
++static int hdmimix_lcdif3_setup(struct lcdifv3_soc *lcdifv3)
++{
++	struct device *dev = lcdifv3->dev;
++	int ret;
++
++	struct clk_bulk_data clocks[] = {
++		{ .id = "mix_apb" },
++		{ .id = "mix_axi" },
++		{ .id = "xtl_24m" },
++		{ .id = "mix_pix" },
++		{ .id = "lcdif_apb" },
++		{ .id = "lcdif_axi" },
++		{ .id = "lcdif_pdi" },
++		{ .id = "lcdif_pix" },
++		{ .id = "lcdif_spu" },
++		{ .id = "noc_hdmi"  },
++	};
++
++	/* power up hdmimix lcdif and nor */
++	ret = device_reset(dev);
++	if (ret == -EPROBE_DEFER)
++		return ret;
++
++	/* enable lpcg of hdmimix lcdif and nor */
++	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(clocks), clocks);
++	if (ret < 0)
++		return ret;
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(clocks), clocks);
++	if (ret < 0)
++		return ret;
++
++	return 0;
++}
++
++static int platform_remove_device_fn(struct device *dev, void *data)
++{
++	struct platform_device *pdev = to_platform_device(dev);
++
++	platform_device_unregister(pdev);
++
++	return 0;
++}
++
++static void platform_device_unregister_children(struct platform_device *pdev)
++{
++	device_for_each_child(&pdev->dev, NULL, platform_remove_device_fn);
++}
++
++static DEFINE_MUTEX(lcdifv3_client_id_mutex);
++static int lcdifv3_client_id;
++
++static int lcdifv3_add_client_devices(struct lcdifv3_soc *lcdifv3)
++{
++	int ret = 0, i, id;
++	struct device *dev = lcdifv3->dev;
++	struct platform_device *pdev = NULL;
++	struct device_node *of_node;
++
++	for (i = 0; i < ARRAY_SIZE(client_reg); i++) {
++		of_node = of_graph_get_port_by_id(dev->of_node, i);
++		if (!of_node) {
++			dev_info(dev, "no port@%d node in %s\n",
++				 i, dev->of_node->full_name);
++			continue;
++		}
++		of_node_put(of_node);
++
++		mutex_lock(&lcdifv3_client_id_mutex);
++		id = lcdifv3_client_id++;
++		mutex_unlock(&lcdifv3_client_id_mutex);
++
++		pdev = platform_device_alloc(client_reg[i].name, id);
++		if (!pdev) {
++			dev_err(dev, "Can't allocate port pdev\n");
++			ret = -ENOMEM;
++			goto err_register;
++		}
++
++		pdev->dev.parent = dev;
++		client_reg[i].pdata.of_node = of_node;
++
++		/* make child device 'dma_mask' to point to its
++		 * coherent dma mask, otherwise later probe will
++		 * print warning message: 'DMA mask not set'.
++		 */
++		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
++
++		ret = platform_device_add_data(pdev, &client_reg[i].pdata,
++					       sizeof(client_reg[i].pdata));
++		if (!ret)
++			ret = platform_device_add(pdev);
++		if (ret) {
++			platform_device_put(pdev);
++			goto err_register;
++		}
++
++		pdev->dev.of_node = of_node;
++	}
++
++	if (!pdev)
++		return -ENODEV;
++
++	return 0;
++
++err_register:
++	platform_device_unregister_children(to_platform_device(dev));
++	return ret;
++}
++
++static int imx_lcdifv3_check_thres_value(u32 mul, u32 div)
++{
++	if (!div)
++		return -EINVAL;
++
++	if (mul > div)
++		return -EINVAL;
++
++	return 0;
++}
++
++static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
++{
++	int ret;
++	u32 thres_low[2], thres_high[2];
++	struct device_node *np = lcdifv3->dev->of_node;
++
++	/* default 'thres-low' value:  FIFO * 1/3;
++	 * default 'thres-high' value: FIFO * 2/3.
++	 */
++	lcdifv3->thres_low_mul	= 1;
++	lcdifv3->thres_low_div	= 3;
++	lcdifv3->thres_high_mul	= 2;
++	lcdifv3->thres_high_div	= 3;
++
++	ret = of_property_read_u32_array(np, "thres-low", thres_low, 2);
++	if (!ret) {
++		/* check the value effectiveness */
++		ret = imx_lcdifv3_check_thres_value(thres_low[0], thres_low[1]);
++		if (!ret) {
++			lcdifv3->thres_low_mul	= thres_low[0];
++			lcdifv3->thres_low_div	= thres_low[1];
++		}
++	}
++
++	ret = of_property_read_u32_array(np, "thres-high", thres_high, 2);
++	if (!ret) {
++		/* check the value effectiveness */
++		ret = imx_lcdifv3_check_thres_value(thres_high[0], thres_high[1]);
++		if (!ret) {
++			lcdifv3->thres_high_mul	= thres_high[0];
++			lcdifv3->thres_high_div	= thres_high[1];
++		}
++	}
++}
++
++static int imx_lcdifv3_probe(struct platform_device *pdev)
++{
++	int ret;
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct lcdifv3_soc *lcdifv3;
++	struct resource *res;
++	struct regmap *blk_ctl;
++	const struct of_device_id *of_id;
++	const struct lcdifv3_soc_pdata *soc_pdata;
++
++	dev_dbg(dev, "%s: probe begin\n", __func__);
++
++	of_id = of_match_device(imx_lcdifv3_dt_ids, dev);
++	if (!of_id) {
++		dev_err(&pdev->dev, "OF data missing\n");
++		return -EINVAL;
++	}
++
++	soc_pdata = of_id->data;
++
++	lcdifv3 = devm_kzalloc(dev, sizeof(*lcdifv3), GFP_KERNEL);
++	if (!lcdifv3) {
++		dev_err(dev, "Can't allocate 'lcdifv3_soc' structure\n");
++		return -ENOMEM;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -ENODEV;
++
++	lcdifv3->irq = platform_get_irq(pdev, 0);
++	if (lcdifv3->irq < 0) {
++		dev_err(dev, "No irq get\n");
++		return -EPROBE_DEFER;
++	}
++
++	lcdifv3->clk_pix = devm_clk_get(dev, "pix");
++	if (IS_ERR(lcdifv3->clk_pix)) {
++		dev_err(dev, "No pix clock get\n");
++		return -EPROBE_DEFER;
++	}
++
++	lcdifv3->clk_disp_axi = devm_clk_get(dev, "disp-axi");
++	if (IS_ERR(lcdifv3->clk_disp_axi))
++		lcdifv3->clk_disp_axi = NULL;
++
++	lcdifv3->clk_disp_apb = devm_clk_get(dev, "disp-apb");
++	if (IS_ERR(lcdifv3->clk_disp_apb))
++		lcdifv3->clk_disp_apb = NULL;
++
++	lcdifv3->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(lcdifv3->base))
++		return PTR_ERR(lcdifv3->base);
++
++	lcdifv3->dev = dev;
++
++	/* reset controller to avoid any conflict
++	 * with uboot splash screen settings.
++	 */
++	blk_ctl = syscon_regmap_lookup_by_phandle(np, "blk-ctl");
++	if (IS_ERR(blk_ctl))
++		blk_ctl = NULL;
++
++	if (blk_ctl) {
++		clk_prepare_enable(lcdifv3->clk_disp_apb);
++		writel(CTRL_SW_RESET, lcdifv3->base + LCDIFV3_CTRL_CLR);
++
++		/* reset LCDIFv3 controller */
++		regmap_update_bits(blk_ctl, 0x0, BIT(5), 0x0);
++		regmap_update_bits(blk_ctl, 0x0, BIT(5), BIT(5));
++
++		clk_disable_unprepare(lcdifv3->clk_disp_apb);
++	}
++
++	imx_lcdifv3_of_parse_thres(lcdifv3);
++
++	platform_set_drvdata(pdev, lcdifv3);
++
++	if (soc_pdata->hdmimix) {
++		ret = hdmimix_lcdif3_setup(lcdifv3);
++		if (ret < 0) {
++			dev_err(dev, "hdmimix lcdif3 setup failed\n");
++			return ret;
++		}
++	}
++
++	atomic_set(&lcdifv3->rpm_suspended, 0);
++	pm_runtime_enable(dev);
++	atomic_inc(&lcdifv3->rpm_suspended);
++
++	dev_dbg(dev, "%s: probe end\n", __func__);
++
++	return lcdifv3_add_client_devices(lcdifv3);
++}
++
++static int imx_lcdifv3_remove(struct platform_device *pdev)
++{
++	pm_runtime_disable(&pdev->dev);
++
++	return 0;
++}
++
++#ifdef CONFIG_PM
++static int imx_lcdifv3_runtime_suspend(struct device *dev)
++{
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(dev);
++
++	if (atomic_inc_return(&lcdifv3->rpm_suspended) > 1)
++		return 0;
++
++	lcdifv3_disable_clocks(lcdifv3);
++
++	release_bus_freq(BUS_FREQ_HIGH);
++
++	return 0;
++}
++
++static int imx_lcdifv3_runtime_resume(struct device *dev)
++{
++	int ret = 0;
++	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(dev);
++
++	if (unlikely(!atomic_read(&lcdifv3->rpm_suspended))) {
++		dev_warn(lcdifv3->dev, "Unbalanced %s!\n", __func__);
++		return 0;
++	}
++
++	if (!atomic_dec_and_test(&lcdifv3->rpm_suspended))
++		return 0;
++
++	request_bus_freq(BUS_FREQ_HIGH);
++
++	ret = lcdifv3_enable_clocks(lcdifv3);
++	if (ret) {
++		release_bus_freq(BUS_FREQ_HIGH);
++		return ret;
++	}
++
++	/* clear sw_reset */
++	writel(CTRL_SW_RESET, lcdifv3->base + LCDIFV3_CTRL_CLR);
++
++	/* enable plane FIFO panic */
++	lcdifv3_enable_plane_panic(lcdifv3);
++
++	return ret;
++}
++#endif
++
++#ifdef CONFIG_PM_SLEEP
++static int imx_lcdifv3_suspend(struct device *dev)
++{
++	return imx_lcdifv3_runtime_suspend(dev);
++}
++
++static int imx_lcdifv3_resume(struct device *dev)
++{
++	return imx_lcdifv3_runtime_resume(dev);
++}
++#endif
++
++static const struct dev_pm_ops imx_lcdifv3_pm_ops = {
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_lcdifv3_suspend,
++				     imx_lcdifv3_resume)
++	SET_RUNTIME_PM_OPS(imx_lcdifv3_runtime_suspend,
++			   imx_lcdifv3_runtime_resume, NULL)
++};
++
++struct platform_driver imx_lcdifv3_driver = {
++	.probe    = imx_lcdifv3_probe,
++	.remove   = imx_lcdifv3_remove,
++	.driver   = {
++		.name = DRIVER_NAME,
++		.of_match_table = imx_lcdifv3_dt_ids,
++		.pm = &imx_lcdifv3_pm_ops,
++	},
++};
++
++module_platform_driver(imx_lcdifv3_driver);
++
++MODULE_DESCRIPTION("NXP i.MX LCDIFV3 Display Controller driver");
++MODULE_AUTHOR("Fancy Fang <chen.fang@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/imx/lcdifv3/lcdifv3-regs.h b/drivers/gpu/imx/lcdifv3/lcdifv3-regs.h
+new file mode 100644
+index 000000000..d47c2f80b
+--- /dev/null
++++ b/drivers/gpu/imx/lcdifv3/lcdifv3-regs.h
+@@ -0,0 +1,150 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2019 NXP
++ */
++
++#ifndef __LCDIFV3_REGS_H
++#define __LCDIFV3_REGS_H
++
++/* regs offset */
++#define LCDIFV3_CTRL			0x00
++#define LCDIFV3_CTRL_SET		0x04
++#define LCDIFV3_CTRL_CLR		0x08
++#define LCDIFV3_CTRL_TOG		0x0c
++#define LCDIFV3_DISP_PARA		0x10
++#define LCDIFV3_DISP_SIZE		0x14
++#define LCDIFV3_HSYN_PARA		0x18
++#define LCDIFV3_VSYN_PARA		0x1c
++#define LCDIFV3_VSYN_HSYN_WIDTH		0x20
++#define LCDIFV3_INT_STATUS_D0		0x24
++#define LCDIFV3_INT_ENABLE_D0		0x28
++#define LCDIFV3_INT_STATUS_D1		0x30
++#define LCDIFV3_INT_ENABLE_D1		0x34
++
++#define LCDIFV3_CTRLDESCL0_1		0x200
++#define LCDIFV3_CTRLDESCL0_3		0x208
++#define LCDIFV3_CTRLDESCL_LOW0_4	0x20c
++#define LCDIFV3_CTRLDESCL_HIGH0_4	0x210
++#define LCDIFV3_CTRLDESCL0_5		0x214
++#define LCDIFV3_CSC0_CTRL		0x21c
++#define LCDIFV3_CSC0_COEF0		0x220
++#define LCDIFV3_CSC0_COEF1		0x224
++#define LCDIFV3_CSC0_COEF2		0x228
++#define LCDIFV3_CSC0_COEF3		0x22c
++#define LCDIFV3_CSC0_COEF4		0x230
++#define LCDIFV3_CSC0_COEF5		0x234
++#define LCDIFV3_PANIC0_THRES		0x238
++
++/* reg bit manipulation */
++#define REG_MASK(e, s) (((1 << ((e) - (s) + 1)) - 1) << (s))
++#define REG_PUT(x, e, s) (((x) << (s)) & REG_MASK(e, s))
++#define REG_GET(x, e, s) (((x) & REG_MASK(e, s)) >> (s))
++
++/* regs bit fields */
++#define CTRL_SW_RESET			BIT(31)
++#define CTRL_FETCH_START_OPTION(x)	REG_PUT((x), 9, 8)
++   #define FPV		0
++   #define PWV		1
++   #define BPV		2
++   #define RESV		3
++#define CTRL_NEG			BIT(4)
++#define CTRL_INV_PXCK			BIT(3)
++#define CTRL_INV_DE			BIT(2)
++#define CTRL_INV_VS			BIT(1)
++#define CTRL_INV_HS			BIT(0)
++
++#define DISP_PARA_DISP_ON		BIT(31)
++#define DISP_PARA_SWAP_EN		BIT(30)
++#define DISP_PARA_LINE_PATTERN(x)	REG_PUT((x), 29, 26)
++   /* line pattern formats (output) */
++   #define LP_RGB888_OR_YUV444		0x0
++   #define LP_RBG888			0x1
++   #define LP_GBR888			0x2
++   #define LP_GRB888_OR_UYV444		0x3
++   #define LP_BRG888			0x4
++   #define LP_BGR888			0x5
++   #define LP_RGB555			0x6
++   #define LP_RGB565			0x7
++   #define LP_YUYV_16_0			0x8
++   #define LP_UYVY_16_0			0x9
++   #define LP_YVYU_16_0			0xa
++   #define LP_VYUY_16_0			0xb
++   #define LP_YUYV_23_8			0xc
++   #define LP_UYVY_23_8			0xd
++   #define LP_YVYU_23_8			0xe
++   #define LP_VYUY_23_8			0xf
++
++#define DISP_PARA_DISP_MODE(x)		REG_PUT((x), 25, 24)
++#define DISP_PARA_BGND_R(x)		REG_PUT((x), 23, 16)
++#define DISP_PARA_BGND_G(x)		REG_PUT((x), 15,  8)
++#define DISP_PARA_BGND_B(x)		REG_PUT((x),  7,  0)
++
++#define DISP_SIZE_DELTA_Y(x)		REG_PUT((x), 31, 16)
++#define DISP_SIZE_DELTA_X(x)		REG_PUT((x), 15,  0)
++
++#define HSYN_PARA_BP_H(x)		REG_PUT((x), 31, 16)
++#define HSYN_PARA_FP_H(x)		REG_PUT((x), 15,  0)
++
++#define VSYN_PARA_BP_V(x)		REG_PUT((x), 31, 16)
++#define VSYN_PARA_FP_V(x)		REG_PUT((x), 15,  0)
++
++#define VSYN_HSYN_WIDTH_PW_V(x)		REG_PUT((x), 31, 16)
++#define VSYN_HSYN_WIDTH_PW_H(x)		REG_PUT((x), 15,  0)
++
++#define INT_STATUS_D0_FIFO_EMPTY	BIT(24)
++#define INT_STATUS_D0_DMA_DONE		BIT(16)
++#define INT_STATUS_D0_DMA_ERR		BIT(8)
++#define INT_STATUS_D0_VS_BLANK		BIT(2)
++#define INT_STATUS_D0_UNDERRUN		BIT(1)
++#define INT_STATUS_D0_VSYNC		BIT(0)
++
++#define INT_ENABLE_D0_FIFO_EMPTY_EN	BIT(24)
++#define INT_ENABLE_D0_DMA_DONE_EN	BIT(16)
++#define INT_ENABLE_D0_DMA_ERR_EN	BIT(8)
++#define INT_ENABLE_D0_VS_BLANK_EN	BIT(2)
++#define INT_ENABLE_D0_UNDERRUN_EN	BIT(1)
++#define INT_ENABLE_D0_VSYNC_EN		BIT(0)
++
++#define INT_STATUS_D1_PLANE_PANIC	BIT(0)
++#define INT_ENABLE_D1_PLANE_PANIC_EN	BIT(0)
++
++#define CTRLDESCL0_1_HEIGHT(x)		REG_PUT((x), 31, 16)
++#define CTRLDESCL0_1_WIDTH(x)		REG_PUT((x), 15,  0)
++#define CTRLDESCL0_3_STATE_CLEAR_VSYNC	BIT(23)
++#define CTRLDESCL0_3_P_SIZE(x)		REG_PUT((x), 22, 20)
++#define CTRLDESCL0_3_T_SIZE(x)		REG_PUT((x), 17, 16)
++#define CTRLDESCL0_3_PITCH(x)		REG_PUT((x), 15,  0)
++//#define CTRLDESCL_LOW0_4_ADDR_LOW(x)	REG_PUT((x), 31,  0)
++#define CTRLDESCL_HIGH0_4_ADDR_HIGH(x)	REG_PUT((x),  3,  0)
++#define CTRLDESCL0_5_EN			BIT(31)	/* enable layer for DMA */
++#define CTRLDESCL0_5_SHADOW_LOAD_EN	BIT(30)
++#define CTRLDESCL0_5_BPP(x)		REG_PUT((x), 27, 24)
++   /* layer encoding formats (input) */
++   #define BPP16_RGB565			0x4
++   #define BPP16_ARGB1555		0x5
++   #define BPP16_ARGB4444		0x6
++   #define BPP16_YCbCr422		0x7
++   #define BPP24_RGB888			0x8
++   #define BPP32_ARGB8888		0x9
++   #define BPP32_ABGR8888		0xa
++#define CTRLDESCL0_5_YUV_FORMAT(x)	REG_PUT((x), 15, 14)
++
++#define CSC0_CTRL_CSC_MODE(x)		REG_PUT((x),  2,  1)
++#define CSC0_CTRL_BYPASS		BIT(0)
++#define CSC0_COEF0_A2(x)		REG_PUT((x), 26, 16)
++#define CSC0_COEF0_A1(x)		REG_PUT((x), 10,  0)
++#define CSC0_COEF1_B1(x)		REG_PUT((x), 26, 16)
++#define CSC0_COEF1_A3(x)		REG_PUT((x), 10,  0)
++#define CSC0_COEF2_B3(x)		REG_PUT((x), 26, 16)
++#define CSC0_COEF2_B2(x)		REG_PUT((x), 10,  0)
++#define CSC0_COEF3_C2(x)		REG_PUT((x), 26, 16)
++#define CSC0_COEF3_C1(x)		REG_PUT((x), 10,  0)
++#define CSC0_COEF4_D1(x)		REG_PUT((x), 24, 16)
++#define CSC0_COEF4_C3(x)		REG_PUT((x), 10,  0)
++#define CSC0_COEF5_D3(x)		REG_PUT((x), 24, 16)
++#define CSC0_COEF5_D2(x)		REG_PUT((x),  8,  0)
++
++#define PANIC0_THRES_PANIC_THRES_LOW(x)	REG_PUT((x), 24, 16)
++#define PANIC0_THRES_PANIC_THRES_HIGH(x)	REG_PUT((x), 8, 0)
++
++#endif /* __LCDIFV3_REGS_H */
+diff --git a/drivers/video/Kconfig b/drivers/video/Kconfig
+index 427a993c7..179d7e807 100644
+--- a/drivers/video/Kconfig
++++ b/drivers/video/Kconfig
+@@ -17,6 +17,7 @@ source "drivers/gpu/vga/Kconfig"
+ source "drivers/gpu/host1x/Kconfig"
+ source "drivers/gpu/ipu-v3/Kconfig"
+ 
++source "drivers/gpu/imx/Kconfig"
+ source "drivers/gpu/drm/Kconfig"
+ 
+ menu "Frame buffer Devices"
+diff --git a/drivers/video/imx-lcdifv3.h b/drivers/video/imx-lcdifv3.h
+new file mode 100644
+index 000000000..f201edfe4
+--- /dev/null
++++ b/drivers/video/imx-lcdifv3.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2019 NXP
++ */
++
++#ifndef __IMX_LCDIFV3_H__
++#define __IMX_LCDIFV3_H__
++
++struct lcdifv3_soc;
++struct videomode;
++
++struct lcdifv3_client_platformdata {
++	struct device_node *of_node;
++};
++
++int  lcdifv3_vblank_irq_get(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_enable(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_disable(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_clear(struct lcdifv3_soc *lcdifv3);
++
++int  lcdifv3_get_bus_fmt_from_pix_fmt(struct lcdifv3_soc *lcdifv3,
++				    uint32_t format);
++int  lcdifv3_set_pix_fmt(struct lcdifv3_soc *lcdifv3, u32 format);
++void lcdifv3_set_bus_fmt(struct lcdifv3_soc *lcdifv3, u32 bus_format);
++void lcdifv3_set_fb_addr(struct lcdifv3_soc *lcdifv3, int id, u32 addr);
++void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode);
++void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w,
++			u32 fb_w, bool crop);
++void lcdifv3_en_shadow_load(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_enable_controller(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_disable_controller(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_dump_registers(struct lcdifv3_soc *lcdifv3);
++long lcdifv3_pix_clk_round_rate(struct lcdifv3_soc *lcdifv3,
++				unsigned long rate);
++
++#endif
+diff --git a/include/drm/drm_of.h b/include/drm/drm_of.h
+index ead34ab5c..9dcbbf6f6 100644
+--- a/include/drm/drm_of.h
++++ b/include/drm/drm_of.h
+@@ -7,6 +7,7 @@
+ #include <drm/drm_bridge.h>
+ #endif
+ 
++struct component_match;
+ struct component_master_ops;
+ struct component_match;
+ struct device;
+@@ -25,6 +26,10 @@ void drm_of_component_match_add(struct device *master,
+ 				struct component_match **matchptr,
+ 				int (*compare)(struct device *, void *),
+ 				struct device_node *node);
++extern int drm_of_component_probe_with_match(struct device *dev,
++			   struct component_match *match,
++			   int (*compare_of)(struct device *, void *),
++			   const struct component_master_ops *m_ops);
+ int drm_of_component_probe(struct device *dev,
+ 			   int (*compare_of)(struct device *, void *),
+ 			   const struct component_master_ops *m_ops);
+@@ -56,6 +61,14 @@ drm_of_component_match_add(struct device *master,
+ {
+ }
+ 
++static int drm_of_component_probe_with_match(struct device *dev,
++			   struct component_match *match,
++			   int (*compare_of)(struct device *, void *),
++			   const struct component_master_ops *m_ops)
++{
++	return -EINVAL;
++}
++
+ static inline int
+ drm_of_component_probe(struct device *dev,
+ 		       int (*compare_of)(struct device *, void *),
+diff --git a/include/video/dpu.h b/include/video/dpu.h
+new file mode 100644
+index 000000000..4115da97a
+--- /dev/null
++++ b/include/video/dpu.h
+@@ -0,0 +1,754 @@
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2020 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * for more details.
++ */
++
++#ifndef __DRM_DPU_H__
++#define __DRM_DPU_H__
++
++#include <drm/drm_crtc.h>
++#include <drm/drm_modes.h>
++#include <video/videomode.h>
++
++struct dpu_soc;
++
++enum dpu_irq {
++	IRQ_STORE9_SHDLOAD		= 0,
++	IRQ_STORE9_FRAMECOMPLETE	= 1,
++	IRQ_STORE9_SEQCOMPLETE		= 2,
++	IRQ_EXTDST0_SHDLOAD		= 3,
++	IRQ_EXTDST0_FRAMECOMPLETE	= 4,
++	IRQ_EXTDST0_SEQCOMPLETE		= 5,
++	IRQ_EXTDST4_SHDLOAD		= 6,
++	IRQ_EXTDST4_FRAMECOMPLETE	= 7,
++	IRQ_EXTDST4_SEQCOMPLETE		= 8,
++	IRQ_EXTDST1_SHDLOAD		= 9,
++	IRQ_EXTDST1_FRAMECOMPLETE	= 10,
++	IRQ_EXTDST1_SEQCOMPLETE		= 11,
++	IRQ_EXTDST5_SHDLOAD		= 12,
++	IRQ_EXTDST5_FRAMECOMPLETE	= 13,
++	IRQ_EXTDST5_SEQCOMPLETE		= 14,
++	IRQ_DISENGCFG_SHDLOAD0		= 15,
++	IRQ_DISENGCFG_FRAMECOMPLETE0	= 16,
++	IRQ_DISENGCFG_SEQCOMPLETE0	= 17,
++	IRQ_FRAMEGEN0_INT0		= 18,
++	IRQ_FRAMEGEN0_INT1		= 19,
++	IRQ_FRAMEGEN0_INT2		= 20,
++	IRQ_FRAMEGEN0_INT3		= 21,
++	IRQ_SIG0_SHDLOAD		= 22,
++	IRQ_SIG0_VALID			= 23,
++	IRQ_SIG0_ERROR			= 24,
++	IRQ_DISENGCFG_SHDLOAD1		= 25,
++	IRQ_DISENGCFG_FRAMECOMPLETE1	= 26,
++	IRQ_DISENGCFG_SEQCOMPLETE1	= 27,
++	IRQ_FRAMEGEN1_INT0		= 28,
++	IRQ_FRAMEGEN1_INT1		= 29,
++	IRQ_FRAMEGEN1_INT2		= 30,
++	IRQ_FRAMEGEN1_INT3		= 31,
++	IRQ_SIG1_SHDLOAD		= 32,
++	IRQ_SIG1_VALID			= 33,
++	IRQ_SIG1_ERROR			= 34,
++	IRQ_RESERVED			= 35,
++	IRQ_CMDSEQ_ERROR		= 36,
++	IRQ_COMCTRL_SW0			= 37,
++	IRQ_COMCTRL_SW1			= 38,
++	IRQ_COMCTRL_SW2			= 39,
++	IRQ_COMCTRL_SW3			= 40,
++	IRQ_FRAMEGEN0_PRIMSYNC_ON	= 41,
++	IRQ_FRAMEGEN0_PRIMSYNC_OFF	= 42,
++	IRQ_FRAMEGEN0_SECSYNC_ON	= 43,
++	IRQ_FRAMEGEN0_SECSYNC_OFF	= 44,
++	IRQ_FRAMEGEN1_PRIMSYNC_ON	= 45,
++	IRQ_FRAMEGEN1_PRIMSYNC_OFF	= 46,
++	IRQ_FRAMEGEN1_SECSYNC_ON	= 47,
++	IRQ_FRAMEGEN1_SECSYNC_OFF	= 48,
++};
++
++typedef enum {
++	ID_NONE		= 0x00,	/*  0 */
++	ID_FETCHDECODE9	= 0x01,	/*  1 */
++	ID_FETCHPERSP9	= 0x02,	/*  2 */
++	ID_FETCHECO9	= 0x03,	/*  3 */
++	ID_ROP9		= 0x04,	/*  4 */
++	ID_CLUT9	= 0x05,	/*  5 */
++	ID_MATRIX9	= 0x06,	/*  6 */
++	ID_HSCALER9	= 0x07,	/*  7 */
++	ID_VSCALER9	= 0x08,	/*  8 */
++	ID_FILTER9	= 0x09,	/*  9 */
++	ID_BLITBLEND9	= 0x0A,	/* 10 */
++	ID_CONSTFRAME0	= 0x0C,	/* 12 */
++	ID_CONSTFRAME4	= 0x0E,	/* 14 */
++	ID_CONSTFRAME1	= 0x10,	/* 16 */
++	ID_CONSTFRAME5	= 0x12,	/* 18 */
++	ID_FETCHWARP2	= 0x14,	/* 20 */
++	ID_FETCHECO2	= 0x15,	/* 21 */
++	ID_FETCHDECODE0	= 0x16,	/* 22 */
++	ID_FETCHECO0	= 0x17,	/* 23 */
++	ID_FETCHDECODE1	= 0x18,	/* 24 */
++	ID_FETCHECO1	= 0x19,	/* 25 */
++	ID_FETCHLAYER0	= 0x1a, /* 26 */
++	ID_MATRIX4	= 0x1B,	/* 27 */
++	ID_HSCALER4	= 0x1C,	/* 28 */
++	ID_VSCALER4	= 0x1D,	/* 29 */
++	ID_MATRIX5	= 0x1E,	/* 30 */
++	ID_HSCALER5	= 0x1F,	/* 31 */
++	ID_VSCALER5	= 0x20,	/* 32 */
++	ID_LAYERBLEND0	= 0x21,	/* 33 */
++	ID_LAYERBLEND1	= 0x22,	/* 34 */
++	ID_LAYERBLEND2	= 0x23,	/* 35 */
++	ID_LAYERBLEND3	= 0x24,	/* 36 */
++} dpu_block_id_t;
++
++typedef enum {
++	DEC_SIG_SEL_FRAMEGEN = 0,
++	DEC_SIG_SEL_GAMMACOR,
++	DEC_SIG_SEL_MATRIX,
++	DEC_SIG_SEL_DITHER,
++} dec_sig_sel_t;
++
++typedef enum {
++	ED_SRC_DISABLE		= ID_NONE,
++	ED_SRC_BLITBLEND9	= ID_BLITBLEND9,
++	ED_SRC_CONSTFRAME0	= ID_CONSTFRAME0,
++	ED_SRC_CONSTFRAME1	= ID_CONSTFRAME1,
++	ED_SRC_CONSTFRAME4	= ID_CONSTFRAME4,
++	ED_SRC_CONSTFRAME5	= ID_CONSTFRAME5,
++	ED_SRC_MATRIX4		= ID_MATRIX4,
++	ED_SRC_HSCALER4		= ID_HSCALER4,
++	ED_SRC_VSCALER4		= ID_VSCALER4,
++	/* content stream(extdst 0/1) only */
++	ED_SRC_MATRIX5		= ID_MATRIX5,
++	ED_SRC_HSCALER5		= ID_HSCALER5,
++	ED_SRC_VSCALER5		= ID_VSCALER5,
++	/* content stream(extdst 0/1) only */
++	ED_SRC_LAYERBLEND3	= ID_LAYERBLEND3,
++	ED_SRC_LAYERBLEND2	= ID_LAYERBLEND2,
++	ED_SRC_LAYERBLEND1	= ID_LAYERBLEND1,
++	ED_SRC_LAYERBLEND0	= ID_LAYERBLEND0,
++} extdst_src_sel_t;
++
++typedef enum {
++	SINGLE,	/* Reconfig pipeline after explicit trigger */
++	AUTO,	/* Reconfig pipeline after every kick when idle */
++} ed_sync_mode_t;
++
++typedef enum {
++	PSTATUS_EMPTY,
++	PSTATUS_RUNNING,
++	PSTATUS_RUNNING_RETRIGGERED,
++	PSTATUS_RESERVED
++} ed_pipeline_status_t;
++
++typedef enum {
++	SOFTWARE = 0,		/* kick generation by KICK field only */
++	EXTERNAL = BIT(8),	/* kick signal from external allowed */
++} ed_kick_mode_t;
++
++typedef enum {
++	FD_SRC_DISABLE		= ID_NONE,
++	FD_SRC_FETCHECO0	= ID_FETCHECO0,
++	FD_SRC_FETCHECO1	= ID_FETCHECO1,
++	FD_SRC_FETCHECO2	= ID_FETCHECO2,
++	FD_SRC_FETCHDECODE0	= ID_FETCHDECODE0,
++	FD_SRC_FETCHDECODE1	= ID_FETCHDECODE1,
++	FD_SRC_FETCHWARP2	= ID_FETCHWARP2,
++} fd_dynamic_src_sel_t;
++
++typedef enum {
++	/* RL and RLAD decoder */
++	FETCHTYPE__DECODE,
++	/* fractional plane(8 layers) */
++	FETCHTYPE__LAYER,
++	/* arbitrary warping and fractional plane(8 layers) */
++	FETCHTYPE__WARP,
++	/* minimum feature set for alpha, chroma and coordinate planes */
++	FETCHTYPE__ECO,
++	/* affine, perspective and arbitrary warping */
++	FETCHTYPE__PERSP,
++	/* affine and arbitrary warping */
++	FETCHTYPE__ROT,
++	/* RL and RLAD decoder, reduced feature set */
++	FETCHTYPE__DECODEL,
++	/* fractional plane(8 layers), reduced feature set */
++	FETCHTYPE__LAYERL,
++	/* affine and arbitrary warping, reduced feature set */
++	FETCHTYPE__ROTL,
++} fetchtype_t;
++
++typedef enum {
++	/* No side-by-side synchronization. */
++	FGSYNCMODE__OFF = 0,
++	/* Framegen is master. */
++	FGSYNCMODE__MASTER = 1 << 1,
++	/* Runs in cyclic synchronization mode. */
++	FGSYNCMODE__SLAVE_CYC = 2 << 1,
++	/* Runs in one time synchronization mode. */
++	FGSYNCMODE__SLAVE_ONCE = 3 << 1,
++} fgsyncmode_t;
++
++typedef enum {
++	FGDM__BLACK,
++	/* Constant Color Background is shown. */
++	FGDM__CONSTCOL,
++	FGDM__PRIM,
++	FGDM__SEC,
++	FGDM__PRIM_ON_TOP,
++	FGDM__SEC_ON_TOP,
++	/* White color background with test pattern is shown. */
++	FGDM__TEST,
++} fgdm_t;
++
++typedef enum {
++	HS_SRC_SEL__DISABLE		= ID_NONE,
++	HS_SRC_SEL__MATRIX9		= ID_MATRIX9,
++	HS_SRC_SEL__VSCALER9		= ID_VSCALER9,
++	HS_SRC_SEL__FILTER9		= ID_FILTER9,
++	HS_SRC_SEL__FETCHDECODE0	= ID_FETCHDECODE0,
++	HS_SRC_SEL__FETCHDECODE1	= ID_FETCHDECODE1,
++	HS_SRC_SEL__MATRIX4		= ID_MATRIX4,
++	HS_SRC_SEL__VSCALER4		= ID_VSCALER4,
++	HS_SRC_SEL__MATRIX5		= ID_MATRIX5,
++	HS_SRC_SEL__VSCALER5		= ID_VSCALER5,
++} hs_src_sel_t;
++
++typedef enum {
++	/* common options */
++	LB_PRIM_SEL__DISABLE		= ID_NONE,
++	LB_PRIM_SEL__BLITBLEND9		= ID_BLITBLEND9,
++	LB_PRIM_SEL__CONSTFRAME0	= ID_CONSTFRAME0,
++	LB_PRIM_SEL__CONSTFRAME1	= ID_CONSTFRAME1,
++	LB_PRIM_SEL__CONSTFRAME4	= ID_CONSTFRAME4,
++	LB_PRIM_SEL__CONSTFRAME5	= ID_CONSTFRAME5,
++	LB_PRIM_SEL__MATRIX4		= ID_MATRIX4,
++	LB_PRIM_SEL__HSCALER4		= ID_HSCALER4,
++	LB_PRIM_SEL__VSCALER4		= ID_VSCALER4,
++	LB_PRIM_SEL__MATRIX5		= ID_MATRIX5,
++	LB_PRIM_SEL__HSCALER5		= ID_HSCALER5,
++	LB_PRIM_SEL__VSCALER5		= ID_VSCALER5,
++	/*
++	 * special options:
++	 * layerblend(n) has n special options,
++	 * from layerblend0 to layerblend(n - 1), e.g.,
++	 * layerblend3 has 3 special options -
++	 * layerblend0/1/2.
++	 */
++	LB_PRIM_SEL__LAYERBLEND3	= ID_LAYERBLEND3,
++	LB_PRIM_SEL__LAYERBLEND2	= ID_LAYERBLEND2,
++	LB_PRIM_SEL__LAYERBLEND1	= ID_LAYERBLEND1,
++	LB_PRIM_SEL__LAYERBLEND0	= ID_LAYERBLEND0,
++} lb_prim_sel_t;
++
++typedef enum {
++	LB_SEC_SEL__DISABLE		= ID_NONE,
++	LB_SEC_SEL__FETCHWARP2		= ID_FETCHWARP2,
++	LB_SEC_SEL__FETCHDECODE0	= ID_FETCHDECODE0,
++	LB_SEC_SEL__FETCHDECODE1	= ID_FETCHDECODE1,
++	LB_SEC_SEL__MATRIX4		= ID_MATRIX4,
++	LB_SEC_SEL__HSCALER4		= ID_HSCALER4,
++	LB_SEC_SEL__VSCALER4		= ID_VSCALER4,
++	LB_SEC_SEL__MATRIX5		= ID_MATRIX5,
++	LB_SEC_SEL__HSCALER5		= ID_HSCALER5,
++	LB_SEC_SEL__VSCALER5		= ID_VSCALER5,
++	LB_SEC_SEL__FETCHLAYER0		= ID_FETCHLAYER0,
++} lb_sec_sel_t;
++
++typedef enum {
++	PRIMARY,	/* background plane */
++	SECONDARY,	/* foreground plane */
++	BOTH,
++} lb_shadow_sel_t;
++
++typedef enum {
++	LB_NEUTRAL,	/* Output is same as primary input. */
++	LB_BLEND,
++} lb_mode_t;
++
++typedef enum {
++	/* Constant 0 indicates frame or top field. */
++	SCALER_ALWAYS0 = 0x0,
++	/* Constant 1 indicates bottom field. */
++	SCALER_ALWAYS1 = 0x1 << 12,
++	/* Output field polarity is taken from input field polarity. */
++	SCALER_INPUT = 0x2 << 12,
++	/* Output field polarity toggles, starting with 0 after reset. */
++	SCALER_TOGGLE = 0x3 << 12,
++} scaler_field_mode_t;
++
++typedef enum {
++	/* pointer-sampling */
++	SCALER_NEAREST = 0x0,
++	/* box filter */
++	SCALER_LINEAR = 0x100,
++} scaler_filter_mode_t;
++
++typedef enum {
++	SCALER_DOWNSCALE = 0x0,
++	SCALER_UPSCALE = 0x10,
++} scaler_scale_mode_t;
++
++typedef enum {
++	/* Pixel by-pass the scaler, all other settings are ignored. */
++	SCALER_NEUTRAL = 0x0,
++	/* Scaler is active. */
++	SCALER_ACTIVE = 0x1,
++} scaler_mode_t;
++
++typedef enum {
++	VS_SRC_SEL__DISABLE		= ID_NONE,
++	VS_SRC_SEL__MATRIX9		= ID_MATRIX9,
++	VS_SRC_SEL__HSCALER9		= ID_HSCALER9,
++	VS_SRC_SEL__FETCHDECODE0	= ID_FETCHDECODE0,
++	VS_SRC_SEL__FETCHDECODE1	= ID_FETCHDECODE1,
++	VS_SRC_SEL__MATRIX4		= ID_MATRIX4,
++	VS_SRC_SEL__HSCALER4		= ID_HSCALER4,
++	VS_SRC_SEL__MATRIX5		= ID_MATRIX5,
++	VS_SRC_SEL__HSCALER5		= ID_HSCALER5,
++} vs_src_sel_t;
++
++#define CLKEN_MASK		(0x3 << 24)
++#define CLKEN_MASK_SHIFT	24
++typedef enum {
++	CLKEN__DISABLE = 0x0,
++	CLKEN__AUTOMATIC = 0x1,
++	CLKEN__FULL = 0x3,
++} pixengcfg_clken_t;
++
++/* fetch unit types */
++enum {
++	FU_T_NA,
++	FU_T_FD,
++	FU_T_FE,
++	FU_T_FL,
++	FU_T_FW,
++};
++
++enum dpu_crc_source {
++	DPU_CRC_SRC_NONE,
++	DPU_CRC_SRC_FRAMEGEN,
++	DPU_CRC_SRC_FRAMEGEN_ROI,
++};
++
++struct dpu_fetchunit;
++
++struct dpu_fetchunit_ops {
++	void (*set_burstlength)(struct dpu_fetchunit *fu,
++			        unsigned int x_offset, unsigned int mt_w,
++			        int bpp, dma_addr_t baddr, bool use_prefetch);
++
++	void (*set_baseaddress)(struct dpu_fetchunit *fu, unsigned int width,
++			        unsigned int x_offset, unsigned int y_offset,
++			        unsigned int mt_w, unsigned int mt_h,
++			        int bpp, dma_addr_t baddr);
++
++	void (*set_src_bpp)(struct dpu_fetchunit *fu, int bpp);
++
++	void (*set_src_stride)(struct dpu_fetchunit *fu,
++			       unsigned int width, unsigned int x_offset,
++			       unsigned int mt_w, int bpp, unsigned int stride,
++			       dma_addr_t baddr, bool use_prefetch);
++
++	void (*set_src_buf_dimensions)(struct dpu_fetchunit *fu,
++				       unsigned int w, unsigned int h, u32 fmt,
++				       bool deinterlace);
++
++	void (*set_fmt)(struct dpu_fetchunit *fu, u32 fmt,
++			enum drm_color_encoding color_encoding,
++			enum drm_color_range color_range,
++			bool deinterlace);
++
++	void (*set_pixel_blend_mode)(struct dpu_fetchunit *fu,
++				     unsigned int pixel_blend_mode, u16 alpha,
++				     u32 fb_format);
++
++	void (*enable_src_buf)(struct dpu_fetchunit *fu);
++	void (*disable_src_buf)(struct dpu_fetchunit *fu);
++	bool (*is_enabled)(struct dpu_fetchunit *fu);
++
++	void (*set_framedimensions)(struct dpu_fetchunit *fu,
++				    unsigned int w, unsigned int h,
++				    bool deinterlace);
++
++	void (*set_controltrigger)(struct dpu_fetchunit *fu);
++
++	unsigned int (*get_stream_id)(struct dpu_fetchunit *fu);
++	void (*set_stream_id)(struct dpu_fetchunit *fu, unsigned int id);
++};
++
++struct dpu_fetchunit {
++	void __iomem *pec_base;
++	void __iomem *base;
++	char *name;
++	struct mutex mutex;
++	int id;
++	int sub_id;	/* for fractional fetch units */
++	int type;
++	bool inuse;
++	struct dpu_soc *dpu;
++	/* see DPU_PLANE_SRC_xxx */
++	unsigned int stream_id;
++	struct dprc *dprc;
++	const struct dpu_fetchunit_ops *ops;
++};
++
++int dpu_map_irq(struct dpu_soc *dpu, int irq);
++
++/* Constant Frame Unit */
++struct dpu_constframe;
++void constframe_shden(struct dpu_constframe *cf, bool enable);
++void constframe_framedimensions(struct dpu_constframe *cf, unsigned int w,
++				unsigned int h);
++void constframe_framedimensions_copy_prim(struct dpu_constframe *cf);
++void constframe_constantcolor(struct dpu_constframe *cf, unsigned int r,
++			      unsigned int g, unsigned int b, unsigned int a);
++void constframe_controltrigger(struct dpu_constframe *cf, bool trigger);
++struct dpu_constframe *dpu_cf_get(struct dpu_soc *dpu, int id);
++void dpu_cf_put(struct dpu_constframe *cf);
++struct dpu_constframe *dpu_aux_cf_peek(struct dpu_constframe *cf);
++
++/* Display Engine Configuration Unit */
++struct dpu_disengcfg;
++void disengcfg_sig_select(struct dpu_disengcfg *dec, dec_sig_sel_t sig_sel);
++struct dpu_disengcfg *dpu_dec_get(struct dpu_soc *dpu, int id);
++void dpu_dec_put(struct dpu_disengcfg *dec);
++struct dpu_disengcfg *dpu_aux_dec_peek(struct dpu_disengcfg *dec);
++
++/* External Destination Unit */
++struct dpu_extdst;
++void extdst_pixengcfg_shden(struct dpu_extdst *ed, bool enable);
++void extdst_pixengcfg_powerdown(struct dpu_extdst *ed, bool powerdown);
++void extdst_pixengcfg_sync_mode(struct dpu_extdst *ed, ed_sync_mode_t mode);
++void extdst_pixengcfg_reset(struct dpu_extdst *ed, bool reset);
++void extdst_pixengcfg_div(struct dpu_extdst *ed, u16 div);
++void extdst_pixengcfg_syncmode_master(struct dpu_extdst *ed, bool enable);
++int extdst_pixengcfg_src_sel(struct dpu_extdst *ed, extdst_src_sel_t src);
++void extdst_pixengcfg_sel_shdldreq(struct dpu_extdst *ed);
++void extdst_pixengcfg_shdldreq(struct dpu_extdst *ed, u32 req_mask);
++void extdst_pixengcfg_sync_trigger(struct dpu_extdst *ed);
++void extdst_pixengcfg_trigger_sequence_complete(struct dpu_extdst *ed);
++bool extdst_pixengcfg_is_sync_busy(struct dpu_extdst *ed);
++ed_pipeline_status_t extdst_pixengcfg_pipeline_status(struct dpu_extdst *ed);
++void extdst_shden(struct dpu_extdst *ed, bool enable);
++void extdst_kick_mode(struct dpu_extdst *ed, ed_kick_mode_t mode);
++void extdst_perfcountmode(struct dpu_extdst *ed, bool enable);
++void extdst_gamma_apply_enable(struct dpu_extdst *ed, bool enable);
++void extdst_kick(struct dpu_extdst *ed);
++void extdst_cnt_err_clear(struct dpu_extdst *ed);
++bool extdst_cnt_err_status(struct dpu_extdst *ed);
++u32 extdst_last_control_word(struct dpu_extdst *ed);
++void extdst_pixel_cnt(struct dpu_extdst *ed, u16 *x, u16 *y);
++void extdst_last_pixel_cnt(struct dpu_extdst *ed, u16 *x, u16 *y);
++u32 extdst_perfresult(struct dpu_extdst *ed);
++bool extdst_is_master(struct dpu_extdst *ed);
++struct dpu_extdst *dpu_ed_get(struct dpu_soc *dpu, int id);
++void dpu_ed_put(struct dpu_extdst *ed);
++struct dpu_extdst *dpu_aux_ed_peek(struct dpu_extdst *ed);
++
++/* Fetch Decode Unit */
++int fetchdecode_pixengcfg_dynamic_src_sel(struct dpu_fetchunit *fu,
++					  fd_dynamic_src_sel_t src);
++void fetchdecode_layeroffset(struct dpu_fetchunit *fd, unsigned int x,
++			     unsigned int y);
++void fetchdecode_clipoffset(struct dpu_fetchunit *fd, unsigned int x,
++			    unsigned int y);
++void fetchdecode_clipdimensions(struct dpu_fetchunit *fd, unsigned int w,
++				unsigned int h);
++void fetchdecode_rgb_constantcolor(struct dpu_fetchunit *fd,
++					u8 r, u8 g, u8 b, u8 a);
++void fetchdecode_yuv_constantcolor(struct dpu_fetchunit *fd,
++					u8 y, u8 u, u8 v);
++int fetchdecode_fetchtype(struct dpu_fetchunit *fd, fetchtype_t *type);
++u32 fetchdecode_get_vproc_mask(struct dpu_fetchunit *fd);
++bool fetchdecode_need_fetcheco(struct dpu_fetchunit *fd, u32 fmt);
++struct dpu_fetchunit *dpu_fd_get(struct dpu_soc *dpu, int id);
++void dpu_fd_put(struct dpu_fetchunit *fu);
++
++/* Fetch ECO Unit */
++void fetcheco_layeroffset(struct dpu_fetchunit *fu, unsigned int x,
++			  unsigned int y);
++void fetcheco_clipoffset(struct dpu_fetchunit *fu, unsigned int x,
++			 unsigned int y);
++void fetcheco_clipdimensions(struct dpu_fetchunit *fu, unsigned int w,
++			     unsigned int h);
++void fetcheco_frameresampling(struct dpu_fetchunit *fu, unsigned int x,
++			      unsigned int y);
++int fetcheco_fetchtype(struct dpu_fetchunit *fu, fetchtype_t *type);
++dpu_block_id_t fetcheco_get_block_id(struct dpu_fetchunit *fu);
++struct dpu_fetchunit *dpu_fe_get(struct dpu_soc *dpu, int id);
++void dpu_fe_put(struct dpu_fetchunit *fu);
++
++/* Fetch Layer Unit */
++void fetchlayer_rgb_constantcolor(struct dpu_fetchunit *fu,
++					u8 r, u8 g, u8 b, u8 a);
++void fetchlayer_yuv_constantcolor(struct dpu_fetchunit *fu, u8 y, u8 u, u8 v);
++int fetchlayer_fetchtype(struct dpu_fetchunit *fu, fetchtype_t *type);
++struct dpu_fetchunit *dpu_fl_get(struct dpu_soc *dpu, int id);
++void dpu_fl_put(struct dpu_fetchunit *fu);
++
++/* Fetch Warp Unit */
++void fetchwarp_rgb_constantcolor(struct dpu_fetchunit *fu,
++				 u8 r, u8 g, u8 b, u8 a);
++void fetchwarp_yuv_constantcolor(struct dpu_fetchunit *fu, u8 y, u8 u, u8 v);
++int fetchwarp_fetchtype(struct dpu_fetchunit *fu, fetchtype_t *type);
++struct dpu_fetchunit *dpu_fw_get(struct dpu_soc *dpu, int id);
++void dpu_fw_put(struct dpu_fetchunit *fu);
++
++/* Frame Generator Unit */
++struct dpu_framegen;
++void framegen_enable(struct dpu_framegen *fg);
++void framegen_disable(struct dpu_framegen *fg);
++void framegen_enable_pixel_link(struct dpu_framegen *fg);
++void framegen_disable_pixel_link(struct dpu_framegen *fg);
++void framegen_shdtokgen(struct dpu_framegen *fg);
++void framegen_syncmode(struct dpu_framegen *fg, fgsyncmode_t mode);
++void framegen_cfg_videomode(struct dpu_framegen *fg, struct drm_display_mode *m,
++			    bool side_by_side, unsigned int encoder_type);
++void framegen_pkickconfig(struct dpu_framegen *fg, bool enable);
++void framegen_syncmode_fixup(struct dpu_framegen *fg, bool enable);
++void framegen_displaymode(struct dpu_framegen *fg, fgdm_t mode);
++void framegen_panic_displaymode(struct dpu_framegen *fg, fgdm_t mode);
++void framegen_wait_done(struct dpu_framegen *fg, struct drm_display_mode *m);
++void framegen_read_timestamp(struct dpu_framegen *fg,
++			     u32 *frame_index, u32 *line_index);
++void framegen_wait_for_frame_counter_moving(struct dpu_framegen *fg);
++bool framegen_secondary_requests_to_read_empty_fifo(struct dpu_framegen *fg);
++void framegen_secondary_clear_channel_status(struct dpu_framegen *fg);
++bool framegen_secondary_is_syncup(struct dpu_framegen *fg);
++void framegen_wait_for_secondary_syncup(struct dpu_framegen *fg);
++void framegen_enable_clock(struct dpu_framegen *fg);
++void framegen_disable_clock(struct dpu_framegen *fg);
++bool framegen_is_master(struct dpu_framegen *fg);
++bool framegen_is_slave(struct dpu_framegen *fg);
++struct dpu_framegen *dpu_fg_get(struct dpu_soc *dpu, int id);
++void dpu_fg_put(struct dpu_framegen *fg);
++struct dpu_framegen *dpu_aux_fg_peek(struct dpu_framegen *fg);
++
++/* Horizontal Scaler Unit */
++struct dpu_hscaler;
++int hscaler_pixengcfg_dynamic_src_sel(struct dpu_hscaler *hs, hs_src_sel_t src);
++void hscaler_pixengcfg_clken(struct dpu_hscaler *hs, pixengcfg_clken_t clken);
++void hscaler_shden(struct dpu_hscaler *hs, bool enable);
++void hscaler_setup1(struct dpu_hscaler *hs, unsigned int src, unsigned int dst);
++void hscaler_setup2(struct dpu_hscaler *hs, u32 phase_offset);
++void hscaler_output_size(struct dpu_hscaler *hs, u32 line_num);
++void hscaler_filter_mode(struct dpu_hscaler *hs, scaler_filter_mode_t m);
++void hscaler_scale_mode(struct dpu_hscaler *hs, scaler_scale_mode_t m);
++void hscaler_mode(struct dpu_hscaler *hs, scaler_mode_t m);
++bool hscaler_is_enabled(struct dpu_hscaler *hs);
++dpu_block_id_t hscaler_get_block_id(struct dpu_hscaler *hs);
++unsigned int hscaler_get_stream_id(struct dpu_hscaler *hs);
++void hscaler_set_stream_id(struct dpu_hscaler *hs, unsigned int id);
++struct dpu_hscaler *dpu_hs_get(struct dpu_soc *dpu, int id);
++void dpu_hs_put(struct dpu_hscaler *hs);
++
++/* Layer Blend Unit */
++struct dpu_layerblend;
++int layerblend_pixengcfg_dynamic_prim_sel(struct dpu_layerblend *lb,
++					  lb_prim_sel_t prim);
++void layerblend_pixengcfg_dynamic_sec_sel(struct dpu_layerblend *lb,
++					  lb_sec_sel_t sec);
++void layerblend_pixengcfg_clken(struct dpu_layerblend *lb,
++				pixengcfg_clken_t clken);
++void layerblend_shden(struct dpu_layerblend *lb, bool enable);
++void layerblend_shdtoksel(struct dpu_layerblend *lb, lb_shadow_sel_t sel);
++void layerblend_shdldsel(struct dpu_layerblend *lb, lb_shadow_sel_t sel);
++void layerblend_control(struct dpu_layerblend *lb, lb_mode_t mode);
++void layerblend_blendcontrol(struct dpu_layerblend *lb, unsigned int zpos,
++			     unsigned int pixel_blend_mode, u16 alpha);
++void layerblend_position(struct dpu_layerblend *lb, int x, int y);
++struct dpu_layerblend *dpu_lb_get(struct dpu_soc *dpu, int id);
++void dpu_lb_put(struct dpu_layerblend *lb);
++
++/* Signature Unit */
++#define MAX_DPU_SIGNATURE_WIN_NUM	8
++struct dpu_signature;
++void signature_shden(struct dpu_signature *sig, bool enable);
++void signature_shdldsel_local(struct dpu_signature *sig);
++void signature_shdldsel_global(struct dpu_signature *sig);
++void
++signature_global_panic(struct dpu_signature *sig, unsigned int win, bool enable);
++void
++signature_local_panic(struct dpu_signature *sig, unsigned int win, bool enable);
++void
++signature_alpha_mask(struct dpu_signature *sig, unsigned int win, bool enable);
++void signature_crc(struct dpu_signature *sig, unsigned int win, bool enable);
++void
++signature_eval_win(struct dpu_signature *sig, unsigned int win, bool enable);
++void signature_win(struct dpu_signature *sig, unsigned int win,
++		   int xul, int yul, int xlr, int ylr);
++void signature_crc_value(struct dpu_signature *sig, unsigned int win,
++			 u32 *red, u32 *green, u32 *blue);
++void signature_shdldreq(struct dpu_signature *sig, u8 win_mask);
++void signature_continuous_mode(struct dpu_signature *sig, bool enable);
++void signature_kick(struct dpu_signature *sig);
++bool signature_is_idle(struct dpu_signature *sig);
++void signature_wait_for_idle(struct dpu_signature *sig);
++bool signature_is_valid(struct dpu_signature *sig);
++bool signature_is_error(struct dpu_signature *sig, u8 *err_win_mask);
++struct dpu_signature *dpu_sig_get(struct dpu_soc *dpu, int id);
++void dpu_sig_put(struct dpu_signature *sig);
++struct dpu_signature *dpu_aux_sig_peek(struct dpu_signature *sig);
++
++/* Store Unit */
++struct dpu_store;
++void store_pixengcfg_syncmode_fixup(struct dpu_store *st, bool enable);
++struct dpu_store *dpu_st_get(struct dpu_soc *dpu, int id);
++void dpu_st_put(struct dpu_store *st);
++
++/* Timing Controller Unit */
++struct dpu_tcon;
++int tcon_set_fmt(struct dpu_tcon *tcon, u32 bus_format);
++void tcon_set_operation_mode(struct dpu_tcon *tcon);
++void tcon_cfg_videomode(struct dpu_tcon *tcon,
++			struct drm_display_mode *m, bool side_by_side);
++bool tcon_is_master(struct dpu_tcon *tcon);
++bool tcon_is_slave(struct dpu_tcon *tcon);
++void tcon_configure_pc(struct dpu_tcon *tcon, unsigned int di,
++			unsigned int frame_width, u32 mode, u32 format);
++void tcon_enable_pc(struct dpu_tcon *tcon);
++void tcon_disable_pc(struct dpu_tcon *tcon);
++struct dpu_tcon *dpu_tcon_get(struct dpu_soc *dpu, int id);
++void dpu_tcon_put(struct dpu_tcon *tcon);
++struct dpu_tcon *dpu_aux_tcon_peek(struct dpu_tcon *tcon);
++
++/* Vertical Scaler Unit */
++struct dpu_vscaler;
++int vscaler_pixengcfg_dynamic_src_sel(struct dpu_vscaler *vs, vs_src_sel_t src);
++void vscaler_pixengcfg_clken(struct dpu_vscaler *vs, pixengcfg_clken_t clken);
++void vscaler_shden(struct dpu_vscaler *vs, bool enable);
++void vscaler_setup1(struct dpu_vscaler *vs, u32 src, u32 dst, bool deinterlace);
++void vscaler_setup2(struct dpu_vscaler *vs, bool deinterlace);
++void vscaler_setup3(struct dpu_vscaler *vs, bool deinterlace);
++void vscaler_setup4(struct dpu_vscaler *vs, u32 phase_offset);
++void vscaler_setup5(struct dpu_vscaler *vs, u32 phase_offset);
++void vscaler_output_size(struct dpu_vscaler *vs, u32 line_num);
++void vscaler_field_mode(struct dpu_vscaler *vs, scaler_field_mode_t m);
++void vscaler_filter_mode(struct dpu_vscaler *vs, scaler_filter_mode_t m);
++void vscaler_scale_mode(struct dpu_vscaler *vs, scaler_scale_mode_t m);
++void vscaler_mode(struct dpu_vscaler *vs, scaler_mode_t m);
++bool vscaler_is_enabled(struct dpu_vscaler *vs);
++dpu_block_id_t vscaler_get_block_id(struct dpu_vscaler *vs);
++unsigned int vscaler_get_stream_id(struct dpu_vscaler *vs);
++void vscaler_set_stream_id(struct dpu_vscaler *vs, unsigned int id);
++struct dpu_vscaler *dpu_vs_get(struct dpu_soc *dpu, int id);
++void dpu_vs_put(struct dpu_vscaler *vs);
++
++struct dpu_fetchunit *fetchdecode_get_fetcheco(struct dpu_fetchunit *fu);
++struct dpu_hscaler *fetchdecode_get_hscaler(struct dpu_fetchunit *fu);
++struct dpu_vscaler *fetchdecode_get_vscaler(struct dpu_fetchunit *fu);
++
++unsigned int dpu_get_syncmode_min_prate(struct dpu_soc *dpu);
++unsigned int dpu_get_singlemode_max_width(struct dpu_soc *dpu);
++unsigned int dpu_get_master_stream_id(struct dpu_soc *dpu);
++
++bool dpu_vproc_has_fetcheco_cap(u32 cap_mask);
++bool dpu_vproc_has_hscale_cap(u32 cap_mask);
++bool dpu_vproc_has_vscale_cap(u32 cap_mask);
++
++u32 dpu_vproc_get_fetcheco_cap(u32 cap_mask);
++u32 dpu_vproc_get_hscale_cap(u32 cap_mask);
++u32 dpu_vproc_get_vscale_cap(u32 cap_mask);
++
++unsigned int fetchunit_burst_size_fixup_tkt343664(dma_addr_t baddr);
++unsigned int
++fetchunit_stride_fixup_tkt339017(unsigned int stride, unsigned int burst_size,
++				 dma_addr_t baddr, bool nonzero_mod);
++void fetchunit_get_dprc(struct dpu_fetchunit *fu, void *data);
++void fetchunit_shden(struct dpu_fetchunit *fu, bool enable);
++void fetchunit_baddr_autoupdate(struct dpu_fetchunit *fu, u8 layer_mask);
++void fetchunit_shdldreq_sticky(struct dpu_fetchunit *fu, u8 layer_mask);
++void fetchunit_set_burstlength(struct dpu_fetchunit *fu,
++			       unsigned int x_offset, unsigned int mt_w,
++			       int bpp, dma_addr_t baddr, bool use_prefetch);
++void fetchunit_set_baseaddress(struct dpu_fetchunit *fu, unsigned int width,
++			       unsigned int x_offset, unsigned int y_offset,
++			       unsigned int mt_w, unsigned int mt_h,
++			       int bpp, dma_addr_t baddr);
++void fetchunit_set_src_bpp(struct dpu_fetchunit *fu, int bpp);
++void fetchunit_set_src_stride(struct dpu_fetchunit *fu,
++			      unsigned int width, unsigned int x_offset,
++			      unsigned int mt_w, int bpp, unsigned int stride,
++			      dma_addr_t baddr, bool use_prefetch);
++void fetchunit_set_pixel_blend_mode(struct dpu_fetchunit *fu,
++				    unsigned int pixel_blend_mode, u16 alpha,
++				    u32 fb_format);
++void fetchunit_enable_src_buf(struct dpu_fetchunit *fu);
++void fetchunit_disable_src_buf(struct dpu_fetchunit *fu);
++bool fetchunit_is_enabled(struct dpu_fetchunit *fu);
++unsigned int fetchunit_get_stream_id(struct dpu_fetchunit *fu);
++void fetchunit_set_stream_id(struct dpu_fetchunit *fu, unsigned int id);
++bool fetchunit_is_fetchdecode(struct dpu_fetchunit *fu);
++bool fetchunit_is_fetcheco(struct dpu_fetchunit *fu);
++bool fetchunit_is_fetchlayer(struct dpu_fetchunit *fu);
++bool fetchunit_is_fetchwarp(struct dpu_fetchunit *fu);
++
++/*
++ * to avoid on-the-fly/hot plane resource migration
++ * between two display interfaces
++ */
++#define DPU_PLANE_SRC_TO_DISP_STREAM0	BIT(0)
++#define DPU_PLANE_SRC_TO_DISP_STREAM1	BIT(1)
++#define DPU_PLANE_SRC_DISABLED		0
++
++struct dpu_plane_res {
++	struct dpu_extdst	*ed[2];
++	struct dpu_fetchunit	*fd[2];
++	struct dpu_fetchunit	*fe[2];
++	struct dpu_fetchunit	*fl[1];
++	struct dpu_fetchunit	*fw[1];
++	struct dpu_framegen	*fg[2];
++	struct dpu_hscaler	*hs[2];
++	struct dpu_layerblend	*lb[4];
++	struct dpu_vscaler	*vs[2];
++};
++
++/*
++ * Each DPU plane can be a primary plane or an overlay plane
++ * of one of the DPU's two CRTCs.
++ */
++#define	DPU_PLANE_SRC_FL0_ID	BIT(0)
++#define	DPU_PLANE_SRC_FW2_ID	BIT(1)
++#define	DPU_PLANE_SRC_FD0_ID	BIT(2)
++#define	DPU_PLANE_SRC_FD1_ID	BIT(3)
++
++struct dpu_plane_grp {
++	struct dpu_plane_res	res;
++	unsigned int		hw_plane_num;
++	unsigned int		hw_plane_fetcheco_num;
++	unsigned int		hw_plane_hscaler_num;
++	unsigned int		hw_plane_vscaler_num;
++	unsigned int		id;
++	bool			has_vproc;
++
++	/* used when assigning plane source */
++	struct mutex		mutex;
++	u32			src_mask;
++	u32			src_a_mask;
++	u32			src_use_vproc_mask;
++};
++
++static inline struct dpu_plane_grp *plane_res_to_grp(struct dpu_plane_res *res)
++{
++	return container_of(res, struct dpu_plane_grp, res);
++}
++
++struct dpu_client_platformdata {
++	const unsigned int	stream_id;
++	unsigned int		di_grp_id;
++	struct dpu_plane_grp	*plane_grp;
++
++	/* Store9 could be shared bewteen display engine and blit engine */
++	struct dpu_store	*st9;
++
++	struct device_node	*of_node;
++};
++#endif /* __DRM_DPU_H__ */
+diff --git a/include/video/imx-lcdif.h b/include/video/imx-lcdif.h
+new file mode 100644
+index 000000000..96b124852
+--- /dev/null
++++ b/include/video/imx-lcdif.h
+@@ -0,0 +1,42 @@
++/*
++ * Copyright 2018 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef __IMX_LCDIF_H__
++#define __IMX_LCDIF_H__
++
++struct lcdif_soc;
++struct videomode;
++
++struct lcdif_client_platformdata {
++	struct device_node *of_node;
++};
++
++int  lcdif_vblank_irq_get(struct lcdif_soc *lcdif);
++void lcdif_vblank_irq_enable(struct lcdif_soc *lcdif);
++void lcdif_vblank_irq_disable(struct lcdif_soc *lcdif);
++void lcdif_vblank_irq_clear(struct lcdif_soc *lcdif);
++
++int  lcdif_get_bus_fmt_from_pix_fmt(struct lcdif_soc *lcdif,
++				    uint32_t format);
++int  lcdif_set_pix_fmt(struct lcdif_soc *lcdif, u32 format);
++void lcdif_set_bus_fmt(struct lcdif_soc *lcdif, u32 bus_format);
++void lcdif_set_fb_addr(struct lcdif_soc *lcdif, int id, u32 addr);
++void lcdif_set_mode(struct lcdif_soc *lcdif, struct videomode *vmode);
++void lcdif_set_fb_hcrop(struct lcdif_soc *lcdif, u32 src_w,
++			u32 fb_w, bool crop);
++void lcdif_enable_controller(struct lcdif_soc *lcdif);
++void lcdif_disable_controller(struct lcdif_soc *lcdif);
++void lcdif_dump_registers(struct lcdif_soc *lcdif);
++
++#endif
+diff --git a/include/video/imx-lcdifv3.h b/include/video/imx-lcdifv3.h
+new file mode 100644
+index 000000000..f201edfe4
+--- /dev/null
++++ b/include/video/imx-lcdifv3.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2019 NXP
++ */
++
++#ifndef __IMX_LCDIFV3_H__
++#define __IMX_LCDIFV3_H__
++
++struct lcdifv3_soc;
++struct videomode;
++
++struct lcdifv3_client_platformdata {
++	struct device_node *of_node;
++};
++
++int  lcdifv3_vblank_irq_get(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_enable(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_disable(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_vblank_irq_clear(struct lcdifv3_soc *lcdifv3);
++
++int  lcdifv3_get_bus_fmt_from_pix_fmt(struct lcdifv3_soc *lcdifv3,
++				    uint32_t format);
++int  lcdifv3_set_pix_fmt(struct lcdifv3_soc *lcdifv3, u32 format);
++void lcdifv3_set_bus_fmt(struct lcdifv3_soc *lcdifv3, u32 bus_format);
++void lcdifv3_set_fb_addr(struct lcdifv3_soc *lcdifv3, int id, u32 addr);
++void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode);
++void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w,
++			u32 fb_w, bool crop);
++void lcdifv3_en_shadow_load(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_enable_controller(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_disable_controller(struct lcdifv3_soc *lcdifv3);
++void lcdifv3_dump_registers(struct lcdifv3_soc *lcdifv3);
++long lcdifv3_pix_clk_round_rate(struct lcdifv3_soc *lcdifv3,
++				unsigned long rate);
++
++#endif
+-- 
+2.17.1
+

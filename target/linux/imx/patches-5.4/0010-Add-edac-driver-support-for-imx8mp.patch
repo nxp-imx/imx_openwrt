@@ -1,0 +1,427 @@
+From 0fb9c06df2f13763e2bb4e7c55382cac0b0961e5 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Fri, 14 Jan 2022 15:38:00 +0800
+Subject: [PATCH 10/15] Add edac driver support for imx8mp
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/edac/synopsys_edac.c | 269 ++++++++++++++++++++++++-----------
+ 1 file changed, 184 insertions(+), 85 deletions(-)
+
+diff --git a/drivers/edac/synopsys_edac.c b/drivers/edac/synopsys_edac.c
+index 6becf3363..b9939a2ba 100644
+--- a/drivers/edac/synopsys_edac.c
++++ b/drivers/edac/synopsys_edac.c
+@@ -101,6 +101,7 @@
+ /* DDR ECC Quirks */
+ #define DDR_ECC_INTR_SUPPORT		BIT(0)
+ #define DDR_ECC_DATA_POISON_SUPPORT	BIT(1)
++#define DDR_ECC_IMX8MP			BIT(2)
+ 
+ /* ZynqMP Enhanced DDR memory controller registers that are relevant to ECC */
+ /* ECC Configuration Registers */
+@@ -266,6 +267,11 @@
+ 
+ #define RANK_B0_BASE			6
+ 
++/* ECCCTL UE/CE Interrupt enable/disable for IMX8MP*/
++#define DDR_CE_INTR_EN_MASK			0x100
++#define DDR_UE_INTR_EN_MASK			0x200
++#define ECC_INTR_MASK				0x10100
++
+ /**
+  * struct ecc_error_info - ECC error log information.
+  * @row:	Row number.
+@@ -281,9 +287,11 @@ struct ecc_error_info {
+ 	u32 col;
+ 	u32 bank;
+ 	u32 bitpos;
+-	u32 data;
++	u32 data_low;
++	u32 data_high;
+ 	u32 bankgrpnr;
+ 	u32 blknr;
++	u32 syndrome;
+ };
+ 
+ /**
+@@ -348,6 +356,70 @@ struct synps_platform_data {
+ 	int quirks;
+ };
+ 
++/**
++ * zynq_get_dtype - Return the controller memory width.
++ * @base:	DDR memory controller base address.
++ *
++ * Get the EDAC device type width appropriate for the current controller
++ * configuration.
++ *
++ * Return: a device type width enumeration.
++ */
++static enum dev_type zynq_get_dtype(const void __iomem *base)
++{
++	enum dev_type dt;
++	u32 width;
++
++	width = readl(base + CTRL_OFST);
++	width = (width & CTRL_BW_MASK) >> CTRL_BW_SHIFT;
++
++	switch (width) {
++	case DDRCTL_WDTH_16:
++		dt = DEV_X2;
++		break;
++	case DDRCTL_WDTH_32:
++		dt = DEV_X4;
++		break;
++	default:
++		dt = DEV_UNKNOWN;
++	}
++
++	return dt;
++}
++
++/**
++ * zynqmp_get_dtype - Return the controller memory width.
++ * @base:	DDR memory controller base address.
++ *
++ * Get the EDAC device type width appropriate for the current controller
++ * configuration.
++ *
++ * Return: a device type width enumeration.
++ */
++static enum dev_type zynqmp_get_dtype(const void __iomem *base)
++{
++	enum dev_type dt;
++	u32 width;
++
++	width = readl(base + CTRL_OFST);
++	width = (width & ECC_CTRL_BUSWIDTH_MASK) >> ECC_CTRL_BUSWIDTH_SHIFT;
++	switch (width) {
++	case DDRCTL_EWDTH_16:
++		dt = DEV_X2;
++		break;
++	case DDRCTL_EWDTH_32:
++		dt = DEV_X4;
++		break;
++	case DDRCTL_EWDTH_64:
++		dt = DEV_X8;
++		break;
++	default:
++		dt = DEV_UNKNOWN;
++	}
++
++	return dt;
++}
++
+ /**
+  * zynq_get_error_info - Get the current ECC error info.
+  * @priv:	DDR memory controller private instance data.
+@@ -379,9 +451,9 @@ static int zynq_get_error_info(struct synps_edac_priv *priv)
+ 	p->ceinfo.row = (regval & ADDR_ROW_MASK) >> ADDR_ROW_SHIFT;
+ 	p->ceinfo.col = regval & ADDR_COL_MASK;
+ 	p->ceinfo.bank = (regval & ADDR_BANK_MASK) >> ADDR_BANK_SHIFT;
+-	p->ceinfo.data = readl(base + CE_DATA_31_0_OFST);
++	p->ceinfo.data_low = readl(base + CE_DATA_31_0_OFST);
+ 	edac_dbg(3, "CE bit position: %d data: %d\n", p->ceinfo.bitpos,
+-		 p->ceinfo.data);
++		 p->ceinfo.data_low);
+ 	clearval = ECC_CTRL_CLR_CE_ERR;
+ 
+ ue_err:
+@@ -393,7 +465,7 @@ static int zynq_get_error_info(struct synps_edac_priv *priv)
+ 	p->ueinfo.row = (regval & ADDR_ROW_MASK) >> ADDR_ROW_SHIFT;
+ 	p->ueinfo.col = regval & ADDR_COL_MASK;
+ 	p->ueinfo.bank = (regval & ADDR_BANK_MASK) >> ADDR_BANK_SHIFT;
+-	p->ueinfo.data = readl(base + UE_DATA_31_0_OFST);
++	p->ueinfo.data_low = readl(base + UE_DATA_31_0_OFST);
+ 	clearval |= ECC_CTRL_CLR_UE_ERR;
+ 
+ out:
+@@ -437,10 +509,13 @@ static int zynqmp_get_error_info(struct synps_edac_priv *priv)
+ 	p->ceinfo.bankgrpnr = (regval &	ECC_CEADDR1_BNKGRP_MASK) >>
+ 					ECC_CEADDR1_BNKGRP_SHIFT;
+ 	p->ceinfo.blknr = (regval & ECC_CEADDR1_BLKNR_MASK);
+-	p->ceinfo.data = readl(base + ECC_CSYND0_OFST);
+-	edac_dbg(2, "ECCCSYN0: 0x%08X ECCCSYN1: 0x%08X ECCCSYN2: 0x%08X\n",
+-		 readl(base + ECC_CSYND0_OFST), readl(base + ECC_CSYND1_OFST),
+-		 readl(base + ECC_CSYND2_OFST));
++	p->ceinfo.data_low = readl(base + ECC_CSYND0_OFST);
++	if (zynqmp_get_dtype(base) == DEV_X8) {
++		p->ceinfo.data_high = readl(base + ECC_CSYND1_OFST);
++		p->ceinfo.syndrome = readl(base + ECC_CSYND2_OFST);
++		edac_dbg(2, "ECCCSYN0: 0x%08X ECCCSYN1: 0x%08X ECCCSYN2: 0x%08X\n",
++			 p->ceinfo.data_low, p->ceinfo.data_high, p->ceinfo.syndrome);
++	}
+ ue_err:
+ 	if (!p->ue_cnt)
+ 		goto out;
+@@ -453,7 +528,11 @@ static int zynqmp_get_error_info(struct synps_edac_priv *priv)
+ 	p->ueinfo.bank = (regval & ECC_CEADDR1_BNKNR_MASK) >>
+ 					ECC_CEADDR1_BNKNR_SHIFT;
+ 	p->ueinfo.blknr = (regval & ECC_CEADDR1_BLKNR_MASK);
+-	p->ueinfo.data = readl(base + ECC_UESYND0_OFST);
++	p->ueinfo.data_low = readl(base + ECC_UESYND0_OFST);
++	if (zynqmp_get_dtype(base) == DEV_X8) {
++		p->ueinfo.data_high = readl(base + ECC_UESYND1_OFST);
++		p->ueinfo.syndrome = readl(base + ECC_UESYND2_OFST);
++	}
+ out:
+ 	clearval = ECC_CTRL_CLR_CE_ERR | ECC_CTRL_CLR_CE_ERRCNT;
+ 	clearval |= ECC_CTRL_CLR_UE_ERR | ECC_CTRL_CLR_UE_ERRCNT;
+@@ -479,15 +558,28 @@ static void handle_error(struct mem_ctl_info *mci, struct synps_ecc_status *p)
+ 		pinf = &p->ceinfo;
+ 		if (!priv->p_data->quirks) {
+ 			snprintf(priv->message, SYNPS_EDAC_MSG_SIZE,
+-				 "DDR ECC error type:%s Row %d Bank %d Col %d Bit Position: %d Data: 0x%08x",
++				 "DDR ECC error type:%s Row %d Bank %d Col %d "
++				 "Bit Position: %d Data: 0x%08x",
+ 				 "CE", pinf->row, pinf->bank, pinf->col,
+-				 pinf->bitpos, pinf->data);
++				 pinf->bitpos, pinf->data_low);
+ 		} else {
+-			snprintf(priv->message, SYNPS_EDAC_MSG_SIZE,
+-				 "DDR ECC error type:%s Row %d Bank %d Col %d BankGroup Number %d Block Number %d Bit Position: %d Data: 0x%08x",
+-				 "CE", pinf->row, pinf->bank, pinf->col,
+-				 pinf->bankgrpnr, pinf->blknr,
+-				 pinf->bitpos, pinf->data);
++			if (zynqmp_get_dtype(priv->baseaddr) == DEV_X8) {
++				snprintf(priv->message, SYNPS_EDAC_MSG_SIZE,
++					"DDR ECC error type:%s Row %d Bank %d "
++					"BankGroup Number %d Block Number %d "
++					"Bit Position: %d Data_low: 0x%08x "
++					"Data_high: 0x%08x Syndrome: 0x%08x",
++					"CE", pinf->row, pinf->bank, pinf->bankgrpnr,
++					pinf->blknr, pinf->bitpos, pinf->data_low,
++					pinf->data_high, pinf->syndrome);
++			} else {
++				snprintf(priv->message, SYNPS_EDAC_MSG_SIZE,
++					"DDR ECC error type:%s Row %d Bank %d "
++					"BankGroup Number %d Block Number %d "
++					"Bit Position: %d Data: 0x%08x",
++					"CE", pinf->row, pinf->bank, pinf->bankgrpnr,
++					pinf->blknr, pinf->bitpos, pinf->data_low);
++			}
+ 		}
+ 
+ 		edac_mc_handle_error(HW_EVENT_ERR_CORRECTED, mci,
+@@ -503,9 +595,10 @@ static void handle_error(struct mem_ctl_info *mci, struct synps_ecc_status *p)
+ 				"UE", pinf->row, pinf->bank, pinf->col);
+ 		} else {
+ 			snprintf(priv->message, SYNPS_EDAC_MSG_SIZE,
+-				 "DDR ECC error type :%s Row %d Bank %d Col %d BankGroup Number %d Block Number %d",
+-				 "UE", pinf->row, pinf->bank, pinf->col,
+-				 pinf->bankgrpnr, pinf->blknr);
++				 "DDR ECC error type :%s Row %d Bank %d "
++				 "BankGroup Number %d Block Number %d",
++				 "UE", pinf->row, pinf->bank, pinf->bankgrpnr,
++				 pinf->blknr);
+ 		}
+ 
+ 		edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci,
+@@ -516,6 +609,45 @@ static void handle_error(struct mem_ctl_info *mci, struct synps_ecc_status *p)
+ 	memset(p, 0, sizeof(*p));
+ }
+ 
++static void enable_intr_imx8mp(struct synps_edac_priv *priv)
++{
++	int regval;
++
++	regval = readl(priv->baseaddr + ECC_CLR_OFST);
++	regval |= (DDR_CE_INTR_EN_MASK | DDR_UE_INTR_EN_MASK);
++	writel(regval, priv->baseaddr + ECC_CLR_OFST);
++}
++
++/* Interrupt Handler for ECC interrupts on imx8mp platform. */
++static irqreturn_t intr_handler_imx8mp(int irq, void *dev_id)
++{
++	const struct synps_platform_data *p_data;
++	struct mem_ctl_info *mci = dev_id;
++	struct synps_edac_priv *priv;
++	int status, regval;
++
++	priv = mci->pvt_info;
++	p_data = priv->p_data;
++
++	regval = readl(priv->baseaddr + ECC_STAT_OFST);
++	if (!(regval & ECC_INTR_MASK))
++		return IRQ_NONE;
++
++	status = p_data->get_error_info(priv);
++	if (status)
++		return IRQ_NONE;
++
++	priv->ce_cnt += priv->stat.ce_cnt;
++	priv->ue_cnt += priv->stat.ue_cnt;
++	handle_error(mci, &priv->stat);
++
++	edac_dbg(3, "Total error count CE %d UE %d\n",
++		 priv->ce_cnt, priv->ue_cnt);
++	enable_intr_imx8mp(priv);
++
++	return IRQ_HANDLED;
++}
++
+ /**
+  * intr_handler - Interrupt Handler for ECC interrupts.
+  * @irq:        IRQ number.
+@@ -533,6 +665,9 @@ static irqreturn_t intr_handler(int irq, void *dev_id)
+ 	priv = mci->pvt_info;
+ 	p_data = priv->p_data;
+ 
++	if (p_data->quirks & DDR_ECC_IMX8MP)
++		return intr_handler_imx8mp(irq, dev_id);
++
+ 	regval = readl(priv->baseaddr + DDR_QOS_IRQ_STAT_OFST);
+ 	regval &= (DDR_QOSCE_MASK | DDR_QOSUE_MASK);
+ 	if (!(regval & ECC_CE_UE_INTR_MASK))
+@@ -579,70 +714,6 @@ static void check_errors(struct mem_ctl_info *mci)
+ 		 priv->ce_cnt, priv->ue_cnt);
+ }
+ 
+-/**
+- * zynq_get_dtype - Return the controller memory width.
+- * @base:	DDR memory controller base address.
+- *
+- * Get the EDAC device type width appropriate for the current controller
+- * configuration.
+- *
+- * Return: a device type width enumeration.
+- */
+-static enum dev_type zynq_get_dtype(const void __iomem *base)
+-{
+-	enum dev_type dt;
+-	u32 width;
+-
+-	width = readl(base + CTRL_OFST);
+-	width = (width & CTRL_BW_MASK) >> CTRL_BW_SHIFT;
+-
+-	switch (width) {
+-	case DDRCTL_WDTH_16:
+-		dt = DEV_X2;
+-		break;
+-	case DDRCTL_WDTH_32:
+-		dt = DEV_X4;
+-		break;
+-	default:
+-		dt = DEV_UNKNOWN;
+-	}
+-
+-	return dt;
+-}
+-
+-/**
+- * zynqmp_get_dtype - Return the controller memory width.
+- * @base:	DDR memory controller base address.
+- *
+- * Get the EDAC device type width appropriate for the current controller
+- * configuration.
+- *
+- * Return: a device type width enumeration.
+- */
+-static enum dev_type zynqmp_get_dtype(const void __iomem *base)
+-{
+-	enum dev_type dt;
+-	u32 width;
+-
+-	width = readl(base + CTRL_OFST);
+-	width = (width & ECC_CTRL_BUSWIDTH_MASK) >> ECC_CTRL_BUSWIDTH_SHIFT;
+-	switch (width) {
+-	case DDRCTL_EWDTH_16:
+-		dt = DEV_X2;
+-		break;
+-	case DDRCTL_EWDTH_32:
+-		dt = DEV_X4;
+-		break;
+-	case DDRCTL_EWDTH_64:
+-		dt = DEV_X8;
+-		break;
+-	default:
+-		dt = DEV_UNKNOWN;
+-	}
+-
+-	return dt;
+-}
+-
+ /**
+  * zynq_get_ecc_state - Return the controller ECC enable/disable status.
+  * @base:	DDR memory controller base address.
+@@ -782,7 +853,7 @@ static void init_csrows(struct mem_ctl_info *mci)
+ 
+ 		for (j = 0; j < csi->nr_channels; j++) {
+ 			dimm		= csi->channels[j]->dimm;
+-			dimm->edac_mode	= EDAC_SECDED;
++			dimm->edac_mode	= EDAC_FLAG_SECDED;
+ 			dimm->mtype	= p_data->get_mtype(priv->baseaddr);
+ 			dimm->nr_pages	= (size >> PAGE_SHIFT) / csi->nr_channels;
+ 			dimm->grain	= SYNPS_EDAC_ERR_GRAIN;
+@@ -809,7 +880,8 @@ static void mc_init(struct mem_ctl_info *mci, struct platform_device *pdev)
+ 	platform_set_drvdata(pdev, mci);
+ 
+ 	/* Initialize controller capabilities and configuration */
+-	mci->mtype_cap = MEM_FLAG_DDR3 | MEM_FLAG_DDR2;
++	mci->mtype_cap = MEM_FLAG_LRDDR4 | MEM_FLAG_DDR4 |
++			 MEM_FLAG_DDR3 | MEM_FLAG_DDR2;
+ 	mci->edac_ctl_cap = EDAC_FLAG_NONE | EDAC_FLAG_SECDED;
+ 	mci->scrub_cap = SCRUB_HW_SRC;
+ 	mci->scrub_mode = SCRUB_NONE;
+@@ -831,9 +903,21 @@ static void mc_init(struct mem_ctl_info *mci, struct platform_device *pdev)
+ 	init_csrows(mci);
+ }
+ 
++static void disable_intr_imx8mp(struct synps_edac_priv *priv)
++{
++	int regval;
++
++	regval = readl(priv->baseaddr + ECC_CLR_OFST);
++	regval &= ~(DDR_CE_INTR_EN_MASK | DDR_UE_INTR_EN_MASK);
++	writel(regval, priv->baseaddr + ECC_CLR_OFST);
++}
++
+ static void enable_intr(struct synps_edac_priv *priv)
+ {
+ 	/* Enable UE/CE Interrupts */
++	if (priv->p_data->quirks & DDR_ECC_IMX8MP)
++		return enable_intr_imx8mp(priv);
++
+ 	writel(DDR_QOSUE_MASK | DDR_QOSCE_MASK,
+ 			priv->baseaddr + DDR_QOS_IRQ_EN_OFST);
+ }
+@@ -841,6 +925,9 @@ static void enable_intr(struct synps_edac_priv *priv)
+ static void disable_intr(struct synps_edac_priv *priv)
+ {
+ 	/* Disable UE/CE Interrupts */
++	if (priv->p_data->quirks & DDR_ECC_IMX8MP)
++		return disable_intr_imx8mp(priv);
++
+ 	writel(DDR_QOSUE_MASK | DDR_QOSCE_MASK,
+ 			priv->baseaddr + DDR_QOS_IRQ_DB_OFST);
+ }
+@@ -890,6 +977,14 @@ static const struct synps_platform_data zynqmp_edac_def = {
+ 			  ),
+ };
+ 
++static const struct synps_platform_data imx8mp_edac_def = {
++	.get_error_info	= zynqmp_get_error_info,
++	.get_mtype	= zynqmp_get_mtype,
++	.get_dtype	= zynqmp_get_dtype,
++	.get_ecc_state	= zynqmp_get_ecc_state,
++	.quirks         = (DDR_ECC_INTR_SUPPORT | DDR_ECC_IMX8MP),
++};
++
+ static const struct of_device_id synps_edac_match[] = {
+ 	{
+ 		.compatible = "xlnx,zynq-ddrc-a05",
+@@ -899,6 +994,10 @@ static const struct of_device_id synps_edac_match[] = {
+ 		.compatible = "xlnx,zynqmp-ddrc-2.40a",
+ 		.data = (void *)&zynqmp_edac_def
+ 	},
++	{
++		.compatible = "fsl,imx8mp-ddrc",
++		.data = (void *)&imx8mp_edac_def
++	},
+ 	{
+ 		/* end of table */
+ 	}
+-- 
+2.17.1
+

@@ -1,0 +1,554 @@
+From cc38050cf42a277445b705b340f266579771eb0a Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Thu, 10 Mar 2022 14:40:57 +0800
+Subject: [PATCH 22/24] Add imx8mp hdmimix clk driver. Remove imx8mm, imx8mn,
+ imx8mq, imx8qxp clk driver.
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/defconfig  |   8 +-
+ drivers/clk/imx/Makefile      |   2 +-
+ drivers/clk/imx/clk-hdmimix.c | 151 ++++++++++++++++++++++++++++++++++
+ drivers/clk/imx/clk-imx8mp.c  |   2 +-
+ drivers/clk/imx/clk-pll14xx.c |  24 +++++-
+ drivers/clk/imx/clk.c         |  35 ++++----
+ drivers/clk/imx/clk.h         |  97 ++++++++++++++++++++--
+ 7 files changed, 284 insertions(+), 35 deletions(-)
+ create mode 100644 drivers/clk/imx/clk-hdmimix.c
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 2d4c1af7a..5113af7d1 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -720,11 +720,11 @@ CONFIG_COMMON_CLK_S2MPS11=y
+ CONFIG_CLK_QORIQ=y
+ CONFIG_COMMON_CLK_PWM=y
+ CONFIG_CLK_RASPBERRYPI=m
+-CONFIG_CLK_IMX8MM=y
+-CONFIG_CLK_IMX8MN=y
+-CONFIG_CLK_IMX8MQ=y
++CONFIG_CLK_IMX8MM=n
++CONFIG_CLK_IMX8MN=n
++CONFIG_CLK_IMX8MQ=n
+ CONFIG_CLK_IMX8MP=y
+-CONFIG_CLK_IMX8QXP=y
++CONFIG_CLK_IMX8QXP=n
+ CONFIG_TI_SCI_CLK=y
+ CONFIG_COMMON_CLK_QCOM=y
+ CONFIG_QCOM_A53PLL=y
+diff --git a/drivers/clk/imx/Makefile b/drivers/clk/imx/Makefile
+index 843ef2da8..c50aea008 100644
+--- a/drivers/clk/imx/Makefile
++++ b/drivers/clk/imx/Makefile
+@@ -27,7 +27,7 @@ obj-$(CONFIG_MXC_CLK_SCU) += \
+ 
+ obj-$(CONFIG_CLK_IMX8MM) += clk-imx8mm.o
+ obj-$(CONFIG_CLK_IMX8MN) += clk-imx8mn.o
+-obj-$(CONFIG_CLK_IMX8MP) += clk-imx8mp.o clk-gate-shared.o #clk-audiomix.o
++obj-$(CONFIG_CLK_IMX8MP) += clk-imx8mp.o clk-gate-shared.o clk-hdmimix.o clk-audiomix.o
+ obj-$(CONFIG_CLK_IMX8MQ) += clk-imx8mq.o
+ obj-$(CONFIG_CLK_IMX8QXP) += clk-imx8qxp.o clk-imx8qxp-lpcg.o
+ 
+diff --git a/drivers/clk/imx/clk-hdmimix.c b/drivers/clk/imx/clk-hdmimix.c
+new file mode 100644
+index 000000000..d7fbca975
+--- /dev/null
++++ b/drivers/clk/imx/clk-hdmimix.c
+@@ -0,0 +1,151 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2020 NXP.
++ */
++
++#include <dt-bindings/clock/imx8mp-clock.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/types.h>
++
++#include "clk.h"
++
++static struct clk *clks[IMX8MP_CLK_HDMIMIX_END];
++static struct clk_onecell_data clk_data;
++static uint32_t hdmimix_clk_saved_regs[2];
++
++static const char *imx_hdmi_phy_clks_sels[] = { "hdmi_glb_24m", "dummy",};
++static const char *imx_lcdif_clks_sels[] = { "dummy", "hdmi_glb_pix", };
++static const char *imx_hdmi_pipe_clks_sels[] = {"dummy","hdmi_glb_pix", };
++
++static int imx_hdmimix_clk_suspend(struct device *dev)
++{
++	void __iomem *base;
++
++	base = dev_get_drvdata(dev->parent);
++
++	hdmimix_clk_saved_regs[0] = readl(base + 0x40);
++	hdmimix_clk_saved_regs[1] = readl(base + 0x50);
++
++	return 0;
++}
++
++static int imx_hdmimix_clk_resume(struct device *dev)
++{
++	void __iomem *base;
++
++	base = dev_get_drvdata(dev->parent);
++
++	writel(hdmimix_clk_saved_regs[0], base + 0x40);
++	writel(hdmimix_clk_saved_regs[1], base + 0x50);
++
++	return 0;
++}
++
++static int imx_hdmimix_clk_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	void __iomem *base;
++	struct clk *clk_dummy;
++	int ret;
++
++	pm_runtime_enable(dev);
++	pm_runtime_get_sync(dev);
++
++	/* Defer until CCM driver is probed */
++	clk_dummy = of_clk_get_by_name(np, "dummy");
++	if (IS_ERR(clk_dummy))
++		return PTR_ERR(clk_dummy);
++
++	base = dev_get_drvdata(dev->parent);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_APB_CLK]	   = imx_dev_clk_gate(dev, "hdmi_glb_apb",     "hdmi_apb",      base + 0x40, 0);
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_B_CLK]      = imx_dev_clk_gate(dev, "hdmi_glb_b",       "hdmi_axi",      base + 0x40, 1);
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_REF266M_CLK]= imx_dev_clk_gate(dev, "hdmi_glb_ref_266m","hdmi_ref_266m", base + 0x40, 2);
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_XTAL24M_CLK]= imx_dev_clk_gate(dev, "hdmi_glb_24m",     "hdmi_24m",      base + 0x40, 4);
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_XTAL32K_CLK]= imx_dev_clk_gate(dev, "hdmi_glb_32k",     "osc_32k",       base + 0x40, 5);
++	clks[IMX8MP_CLK_HDMIMIX_GLOBAL_TX_PIX_CLK] = imx_dev_clk_gate(dev, "hdmi_glb_pix",     "hdmi_phy",      base + 0x40, 7);
++	clks[IMX8MP_CLK_HDMIMIX_IRQS_STEER_CLK]	   = imx_dev_clk_gate(dev, "hdmi_irq_steer",   "hdmi_glb_apb",  base + 0x40, 9);
++	clks[IMX8MP_CLK_HDMIMIX_NOC_HDMI_CLK]      = imx_dev_clk_gate(dev, "hdmi_noc",         "hdmi_glb_apb",  base + 0x40, 10);
++	clks[IMX8MP_CLK_HDMIMIX_NOC_HDCP_CLK]      = imx_dev_clk_gate(dev, "hdcp_noc",         "hdmi_glb_apb",  base + 0x40, 11);
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_APB_CLK]     = imx_dev_clk_gate(dev, "lcdif3_apb",       "hdmi_glb_apb",  base + 0x40, 16);
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_B_CLK]       = imx_dev_clk_gate(dev, "lcdif3_b",         "hdmi_glb_b",    base + 0x40, 17);
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_PDI_CLK]     = imx_dev_clk_gate(dev, "lcdif3_pdi",       "hdmi_glb_apb",  base + 0x40, 18);
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_PIX_CLK]     = imx_dev_clk_gate(dev, "lcdif3_pxl",       "hdmi_glb_pix",  base + 0x40, 19);
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_SPU_CLK]     = imx_dev_clk_gate(dev, "lcdif3_spu",       "hdmi_glb_apb",  base + 0x40, 20);
++
++	clks[IMX8MP_CLK_HDMIMIX_FDCC_REF_CLK]      = imx_dev_clk_gate(dev, "hdmi_fdcc_ref",    "hdmi_fdcc_tst", base + 0x50, 2);
++	clks[IMX8MP_CLK_HDMIMIX_HRV_MWR_APB_CLK]   = imx_dev_clk_gate(dev, "hrv_mwr_apb",       "hdmi_glb_apb", base + 0x50, 3);
++	clks[IMX8MP_CLK_HDMIMIX_HRV_MWR_B_CLK]     = imx_dev_clk_gate(dev, "hrv_mwr_b",         "hdmi_glb_axi", base + 0x50, 4);
++	clks[IMX8MP_CLK_HDMIMIX_HRV_MWR_CEA_CLK]   = imx_dev_clk_gate(dev, "hrv_mwr_cea",       "hdmi_glb_apb", base + 0x50, 5);
++	clks[IMX8MP_CLK_HDMIMIX_VSFD_CEA_CLK]      = imx_dev_clk_gate(dev, "vsfd_cea",          "hdmi_glb_apb", base + 0x50, 6);
++	clks[IMX8MP_CLK_HDMIMIX_TX_HPI_CLK]        = imx_dev_clk_gate(dev, "hdmi_tx_hpi",       "hdmi_glb_apb", base + 0x50, 13);
++	clks[IMX8MP_CLK_HDMIMIX_TX_APB_CLK]        = imx_dev_clk_gate(dev, "hdmi_tx_apb",       "hdmi_glb_apb", base + 0x50, 14);
++	clks[IMX8MP_CLK_HDMIMIX_TX_CEC_CLK]        = imx_dev_clk_gate(dev, "hdmi_cec",          "hdmi_glb_32k", base + 0x50, 15);
++	clks[IMX8MP_CLK_HDMIMIX_TX_ESM_CLK]        = imx_dev_clk_gate(dev, "hdmi_esm",     "hdmi_glb_ref_266m", base + 0x50, 16);
++	clks[IMX8MP_CLK_HDMIMIX_TX_GPA_CLK]        = imx_dev_clk_gate(dev, "hdmi_tx_gpa",       "hdmi_glb_apb", base + 0x50, 17);
++	clks[IMX8MP_CLK_HDMIMIX_TX_PIXEL_CLK]      = imx_dev_clk_gate(dev, "hdmi_tx_pix",       "hdmi_glb_pix", base + 0x50, 18);
++	clks[IMX8MP_CLK_HDMIMIX_TX_SFR_CLK]        = imx_dev_clk_gate(dev, "hdmi_tx_sfr",       "hdmi_glb_apb", base + 0x50, 19);
++	clks[IMX8MP_CLK_HDMIMIX_TX_SKP_CLK]        = imx_dev_clk_gate(dev, "hdmi_tx_skp",       "hdmi_glb_apb", base + 0x50, 20);
++	clks[IMX8MP_CLK_HDMIMIX_TX_PREP_CLK]       = imx_dev_clk_gate(dev, "hdmi_tx_prep",      "hdmi_glb_apb", base + 0x50, 21);
++	clks[IMX8MP_CLK_HDMIMIX_TX_PHY_APB_CLK]	   = imx_dev_clk_gate(dev, "hdmi_phy_apb",      "hdmi_glb_apb", base + 0x50, 22);
++	clks[IMX8MP_CLK_HDMIMIX_TX_PHY_INT_CLK]	   = imx_dev_clk_gate(dev, "hdmi_phy_int",      "hdmi_glb_apb", base + 0x50, 24);
++	clks[IMX8MP_CLK_HDMIMIX_TX_SEC_MEM_CLK]	   = imx_dev_clk_gate(dev, "hdmi_sec_mem", "hdmi_glb_ref_266m", base + 0x50, 25);
++	clks[IMX8MP_CLK_HDMIMIX_TX_TRNG_SKP_CLK]   = imx_dev_clk_gate(dev, "hdmi_trng_skp",     "hdmi_glb_apb", base + 0x50, 27);
++	clks[IMX8MP_CLK_HDMIMIX_TX_VID_LINK_PIX_CLK]= imx_dev_clk_gate(dev, "hdmi_vid_pix",     "hdmi_glb_pix", base + 0x50, 28);
++	clks[IMX8MP_CLK_HDMIMIX_TX_TRNG_APB_CLK]   = imx_dev_clk_gate(dev, "hdmi_trng_apb",     "hdmi_glb_apb", base + 0x50, 30);
++
++	clks[IMX8MP_CLK_HDMIMIX_HTXPHY_CLK_SEL]    = imx_dev_clk_mux(dev, "hdmi_phy_sel", base + 0x50, 10, 1, imx_hdmi_phy_clks_sels, ARRAY_SIZE(imx_hdmi_phy_clks_sels));
++	clks[IMX8MP_CLK_HDMIMIX_LCDIF_CLK_SEL]     = imx_dev_clk_mux(dev, "lcdif_clk_sel", base + 0x50, 11, 1, imx_lcdif_clks_sels, ARRAY_SIZE(imx_hdmi_phy_clks_sels));
++	clks[IMX8MP_CLK_HDMIMIX_TX_PIPE_CLK_SEL]   = imx_dev_clk_mux(dev, "hdmi_pipe_sel", base + 0x50, 12, 1, imx_hdmi_pipe_clks_sels, ARRAY_SIZE(imx_hdmi_pipe_clks_sels));
++
++	/* hdmi/lcdif pixel clock parent to hdmi phy */
++	clk_set_parent(clks[IMX8MP_CLK_HDMIMIX_TX_PIPE_CLK_SEL], clks[IMX8MP_CLK_HDMIMIX_GLOBAL_TX_PIX_CLK]);
++	clk_set_parent(clks[IMX8MP_CLK_HDMIMIX_LCDIF_CLK_SEL], clks[IMX8MP_CLK_HDMIMIX_GLOBAL_TX_PIX_CLK]);
++	/* hdmi ref clock from 24MHz */
++	clk_set_parent(clks[IMX8MP_CLK_HDMIMIX_HTXPHY_CLK_SEL], clks[IMX8MP_CLK_HDMIMIX_GLOBAL_XTAL24M_CLK]);
++
++	imx_check_clocks(clks, ARRAY_SIZE(clks));
++
++	clk_data.clks = clks;
++	clk_data.clk_num = ARRAY_SIZE(clks);
++	ret = of_clk_add_provider(np, of_clk_src_onecell_get, &clk_data);
++	if (ret < 0) {
++		pr_err("failed to register clks for i.MX8MP\n");
++		return -EINVAL;
++	}
++
++	pm_runtime_put(dev);
++
++	return 0;
++}
++
++UNIVERSAL_DEV_PM_OPS(imx_hdmimix_clk_pm_ops, imx_hdmimix_clk_suspend,
++			imx_hdmimix_clk_resume, NULL);
++
++static const struct of_device_id imx_hdmimix_clk_of_match[] = {
++	{ .compatible = "fsl,imx8mp-hdmimix-clk" },
++	{ /* Sentinel */ },
++};
++MODULE_DEVICE_TABLE(of, imx_hdmimix_clk_of_match);
++
++
++static struct platform_driver imx_hdmimix_clk_driver = {
++	.probe = imx_hdmimix_clk_probe,
++	.driver = {
++		.name = "imx-hdmimix-clk",
++		.of_match_table = of_match_ptr(imx_hdmimix_clk_of_match),
++		.pm = &imx_hdmimix_clk_pm_ops,
++	},
++};
++module_platform_driver(imx_hdmimix_clk_driver);
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/clk/imx/clk-imx8mp.c b/drivers/clk/imx/clk-imx8mp.c
+index ca7a60d98..a92cf7727 100644
+--- a/drivers/clk/imx/clk-imx8mp.c
++++ b/drivers/clk/imx/clk-imx8mp.c
+@@ -864,7 +864,7 @@ static int imx8mp_clocks_probe(struct platform_device *pdev)
+ 	clk_prepare_enable(clks[IMX8MP_CLK_QOS_ENET_ROOT]);
+ 	clk_prepare_enable(clks[IMX8MP_CLK_ENET_QOS_ROOT]);
+ 
+-	imx_register_uart_8mp_clocks();
++	imx_register_uart_clocks();
+ 
+ 	pr_info("i.MX8MP clock driver probe done\n");
+ 
+diff --git a/drivers/clk/imx/clk-pll14xx.c b/drivers/clk/imx/clk-pll14xx.c
+index 4d9d0a931..92756b954 100644
+--- a/drivers/clk/imx/clk-pll14xx.c
++++ b/drivers/clk/imx/clk-pll14xx.c
+@@ -92,9 +92,12 @@ static unsigned long clk_pll1443x_recalc_rate(struct clk_hw *hw,
+ 						  unsigned long parent_rate)
+ {
+ 	struct clk_pll14xx *pll = to_clk_pll14xx(hw);
++	const struct imx_pll14xx_rate_table *rate_table = pll->rate_table;
+ 	u32 mdiv, pdiv, sdiv, pll_div_ctl0, pll_div_ctl1;
+ 	short int kdiv;
+ 	u64 fvco = parent_rate;
++	long rate = 0;
++	int i;
+ 
+ 	pll_div_ctl0 = readl_relaxed(pll->base + 4);
+ 	pll_div_ctl1 = readl_relaxed(pll->base + 8);
+@@ -103,13 +106,25 @@ static unsigned long clk_pll1443x_recalc_rate(struct clk_hw *hw,
+ 	sdiv = (pll_div_ctl0 & SDIV_MASK) >> SDIV_SHIFT;
+ 	kdiv = pll_div_ctl1 & KDIV_MASK;
+ 
++	/*
++	 * Sometimes, the recalculated rate has deviation due to
++	 * the frac part. So find the accurate pll rate from the table
++	 * first, if no match rate in the table, use the rate calculated
++	 * from the equation below.
++	 */
++	for (i = 0; i < pll->rate_count; i++) {
++		if (rate_table[i].pdiv == pdiv && rate_table[i].mdiv == mdiv &&
++		    rate_table[i].sdiv == sdiv && rate_table[i].kdiv == kdiv)
++			rate = rate_table[i].rate;
++	}
++
+ 	/* fvco = (m * 65536 + k) * Fin / (p * 65536) */
+ 	fvco *= (mdiv * 65536 + kdiv);
+ 	pdiv *= 65536;
+ 
+ 	do_div(fvco, pdiv << sdiv);
+ 
+-	return fvco;
++	return rate ? (unsigned long) rate : (unsigned long)fvco;
+ }
+ 
+ static inline bool clk_pll14xx_mp_change(const struct imx_pll14xx_rate_table *rate,
+@@ -357,8 +372,8 @@ static const struct clk_ops clk_pll1443x_ops = {
+ 	.set_rate	= clk_pll1443x_set_rate,
+ };
+ 
+-struct clk *imx_clk_pll14xx(const char *name, const char *parent_name,
+-			    void __iomem *base,
++struct clk *imx_dev_clk_pll14xx(struct device *dev, const char *name,
++			    const char *parent_name, void __iomem *base,
+ 			    const struct imx_pll14xx_clk *pll_clk)
+ {
+ 	struct clk_pll14xx *pll;
+@@ -400,7 +415,7 @@ struct clk *imx_clk_pll14xx(const char *name, const char *parent_name,
+ 	val &= ~BYPASS_MASK;
+ 	writel_relaxed(val, pll->base + GNRL_CTL);
+ 
+-	clk = clk_register(NULL, &pll->hw);
++	clk = clk_register(dev, &pll->hw);
+ 	if (IS_ERR(clk)) {
+ 		pr_err("%s: failed to register pll %s %lu\n",
+ 			__func__, name, PTR_ERR(clk));
+@@ -409,3 +424,4 @@ struct clk *imx_clk_pll14xx(const char *name, const char *parent_name,
+ 
+ 	return clk;
+ }
++EXPORT_SYMBOL_GPL(imx_dev_clk_pll14xx);
+diff --git a/drivers/clk/imx/clk.c b/drivers/clk/imx/clk.c
+index ad0483630..140eb2153 100644
+--- a/drivers/clk/imx/clk.c
++++ b/drivers/clk/imx/clk.c
+@@ -13,6 +13,9 @@
+ #define CCDR_MMDC_CH1_MASK		BIT(16)
+ 
+ DEFINE_SPINLOCK(imx_ccm_lock);
++EXPORT_SYMBOL_GPL(imx_ccm_lock);
++
++bool uart_from_osc;
+ 
+ void imx_unregister_clocks(struct clk *clks[], unsigned int count)
+ {
+@@ -21,6 +24,7 @@ void imx_unregister_clocks(struct clk *clks[], unsigned int count)
+ 	for (i = 0; i < count; i++)
+ 		clk_unregister(clks[i]);
+ }
++EXPORT_SYMBOL_GPL(imx_unregister_clocks);
+ 
+ void __init imx_mmdc_mask_handshake(void __iomem *ccm_base,
+ 				    unsigned int chn)
+@@ -41,6 +45,7 @@ void imx_check_clocks(struct clk *clks[], unsigned int count)
+ 			pr_err("i.MX clk %u: register failed with %ld\n",
+ 			       i, PTR_ERR(clks[i]));
+ }
++EXPORT_SYMBOL_GPL(imx_check_clocks);
+ 
+ void imx_check_clk_hws(struct clk_hw *clks[], unsigned int count)
+ {
+@@ -133,7 +138,6 @@ void imx_cscmr1_fixup(u32 *val)
+ }
+ 
+ static int imx_keep_uart_clocks;
+-static struct clk ** const *imx_uart_clocks;
+ static bool imx_uart_clks_on;
+ 
+ static int __init imx_keep_uart_clocks_param(char *str)
+@@ -174,32 +178,23 @@ static void imx_earlycon_uart_clks_onoff(bool is_on)
+ 		imx_uart_clks_on = true;
+ }
+ 
+-void imx_register_uart_8mp_clocks(void)
++void imx_register_uart_clocks(void)
+ {
+-    imx_earlycon_uart_clks_onoff(true);
++	imx_earlycon_uart_clks_onoff(true);
+ }
+ EXPORT_SYMBOL_GPL(imx_register_uart_clocks);
+ 
+-void imx_register_uart_clocks(struct clk ** const clks[])
+-{
+-	if (imx_keep_uart_clocks) {
+-		int i;
+-
+-		imx_uart_clocks = clks;
+-		for (i = 0; imx_uart_clocks[i]; i++)
+-			clk_prepare_enable(*imx_uart_clocks[i]);
+-	}
+-}
+-
+ static int __init imx_clk_disable_uart(void)
+ {
+-	if (imx_keep_uart_clocks && imx_uart_clocks) {
+-		int i;
+-
+-		for (i = 0; imx_uart_clocks[i]; i++)
+-			clk_disable_unprepare(*imx_uart_clocks[i]);
+-	}
++	imx_earlycon_uart_clks_onoff(false);
+ 
+ 	return 0;
+ }
+ late_initcall_sync(imx_clk_disable_uart);
++
++static int __init setup_uart_clk(char *uart_rate)
++{
++       uart_from_osc = true;
++       return 1;
++}
++__setup("uart_from_osc", setup_uart_clk);
+diff --git a/drivers/clk/imx/clk.h b/drivers/clk/imx/clk.h
+index eae3bc325..b940f68c9 100644
+--- a/drivers/clk/imx/clk.h
++++ b/drivers/clk/imx/clk.h
+@@ -4,17 +4,20 @@
+ 
+ #include <linux/spinlock.h>
+ #include <linux/clk-provider.h>
++#include <soc/imx/src.h>
+ 
+ extern spinlock_t imx_ccm_lock;
+ 
+ void imx_check_clocks(struct clk *clks[], unsigned int count);
+ void imx_check_clk_hws(struct clk_hw *clks[], unsigned int count);
+-void imx_register_uart_8mp_clocks(void);
+-void imx_register_uart_clocks(struct clk ** const clks[]);
++void imx_register_uart_clocks(void);
+ void imx_mmdc_mask_handshake(void __iomem *ccm_base, unsigned int chn);
+ void imx_unregister_clocks(struct clk *clks[], unsigned int count);
+ 
+ extern void imx_cscmr1_fixup(u32 *val);
++extern struct imx_sema4_mutex *amp_power_mutex;
++extern struct imx_shared_mem *shared_mem;
++extern bool uart_from_osc;
+ 
+ enum imx_pllv1_type {
+ 	IMX_PLLV1_IMX1,
+@@ -95,8 +98,9 @@ struct imx_pll14xx_clk {
+ #define imx_clk_mux(name, reg, shift, width, parents, num_parents) \
+ 	to_clk(imx_clk_hw_mux(name, reg, shift, width, parents, num_parents))
+ 
+-struct clk *imx_clk_pll14xx(const char *name, const char *parent_name,
+-		 void __iomem *base, const struct imx_pll14xx_clk *pll_clk);
++struct clk *imx_dev_clk_pll14xx(struct device *dev, const char *name,
++				const char *parent_name, void __iomem *base,
++				const struct imx_pll14xx_clk *pll_clk);
+ 
+ struct clk *imx_clk_pllv1(enum imx_pllv1_type type, const char *name,
+ 		const char *parent, void __iomem *base);
+@@ -127,6 +131,25 @@ enum imx_pllv3_type {
+ 	IMX_PLLV3_AV_IMX7,
+ };
+ 
++#define MAX_SHARED_CLK_NUMBER		100
++#define SHARED_MEM_MAGIC_NUMBER		0x12345678
++#define MCC_POWER_SHMEM_NUMBER		(6)
++
++struct imx_shared_clk {
++	struct clk *self;
++	struct clk *parent;
++	void *m4_clk;
++	void *m4_clk_parent;
++	u8 ca9_enabled;
++	u8 cm4_enabled;
++};
++
++struct imx_shared_mem {
++	u32 ca9_valid;
++	u32 cm4_valid;
++	struct imx_shared_clk imx_clk[MAX_SHARED_CLK_NUMBER];
++};
++
+ struct clk_hw *imx_clk_hw_pllv3(enum imx_pllv3_type type, const char *name,
+ 		const char *parent_name, void __iomem *base, u32 div_mask);
+ 
+@@ -182,6 +205,13 @@ struct clk_hw *imx_clk_hw_busy_mux(const char *name, void __iomem *reg, u8 shift
+ 			     u8 width, void __iomem *busy_reg, u8 busy_shift,
+ 			     const char * const *parent_names, int num_parents);
+ 
++int imx_update_shared_mem(struct clk_hw *hw, bool enable);
++
++static inline int clk_on_imx6sx(void)
++{
++	return of_machine_is_compatible("fsl,imx6sx");
++}
++
+ struct clk_hw *imx7ulp_clk_composite(const char *name,
+ 				     const char * const *parent_names,
+ 				     int num_parents, bool mux_present,
+@@ -286,6 +316,25 @@ static inline struct clk *imx_clk_gate(const char *name, const char *parent,
+ 			shift, 0, &imx_ccm_lock);
+ }
+ 
++static inline struct clk *imx_dev_clk_gate(struct device *dev,
++		const char *name, const char *parent,
++		void __iomem *reg, u8 shift)
++{
++	return clk_register_gate(dev, name, parent, CLK_SET_RATE_PARENT, reg,
++			shift, 0, &imx_ccm_lock);
++}
++
++struct clk *imx_dev_clk_gate_shared(struct device *dev, const char *name,
++					const char *parent, void __iomem *reg,
++					u8 shift, unsigned int *share_count);
++
++static inline struct clk *imx_clk_gate_shared(const char *name,
++		const char *parent, void __iomem *reg, u8 shift,
++		unsigned int *share_count)
++{
++	return imx_dev_clk_gate_shared(NULL, name, parent, reg, shift, share_count);
++}
++
+ static inline struct clk_hw *imx_clk_hw_gate_flags(const char *name, const char *parent,
+ 		void __iomem *reg, u8 shift, unsigned long flags)
+ {
+@@ -355,7 +404,17 @@ static inline struct clk *imx_clk_gate2_cgr(const char *name,
+ static inline struct clk_hw *imx_clk_hw_gate3(const char *name, const char *parent,
+ 		void __iomem *reg, u8 shift)
+ {
+-	return clk_hw_register_gate(NULL, name, parent,
++	/*
++	 * per design team's suggestion, clk root is NOT consuming
++	 * much power, and clk root enable/disable does NOT have domain
++	 * control, so they suggest to leave clk root always on when
++	 * M4 is enabled.
++	 */
++	if (imx_src_is_m4_enabled())
++		return clk_hw_register_fixed_factor(NULL, name, parent,
++						 CLK_SET_RATE_PARENT, 1, 1);
++	else
++		return clk_hw_register_gate(NULL, name, parent,
+ 			CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
+ 			reg, shift, 0, &imx_ccm_lock);
+ }
+@@ -395,6 +454,15 @@ static inline struct clk_hw *imx_clk_hw_mux(const char *name, void __iomem *reg,
+ 			width, 0, &imx_ccm_lock);
+ }
+ 
++static inline struct clk *imx_dev_clk_mux(struct device *dev, const char *name,
++			void __iomem *reg, u8 shift, u8 width,
++			const char * const *parents, int num_parents)
++{
++	return clk_register_mux(dev, name, parents, num_parents,
++			CLK_SET_RATE_NO_REPARENT | CLK_SET_PARENT_GATE,
++			reg, shift, width, 0, &imx_ccm_lock);
++}
++
+ static inline struct clk *imx_clk_mux2(const char *name, void __iomem *reg,
+ 			u8 shift, u8 width, const char * const *parents,
+ 			int num_parents)
+@@ -425,6 +493,16 @@ static inline struct clk *imx_clk_mux_flags(const char *name,
+ 			&imx_ccm_lock);
+ }
+ 
++static inline struct clk *imx_dev_clk_mux_flags(struct device *dev,
++			const char *name, void __iomem *reg, u8 shift,
++			u8 width, const char * const *parents, int num_parents,
++			unsigned long flags)
++{
++	return clk_register_mux(dev, name, parents, num_parents,
++			flags | CLK_SET_RATE_NO_REPARENT | CLK_SET_PARENT_GATE,
++			reg, shift, width, 0, &imx_ccm_lock);
++}
++
+ static inline struct clk *imx_clk_mux2_flags(const char *name,
+ 		void __iomem *reg, u8 shift, u8 width,
+ 		const char * const *parents,
+@@ -447,6 +525,14 @@ static inline struct clk_hw *imx_clk_hw_mux_flags(const char *name,
+ 				   reg, shift, width, 0, &imx_ccm_lock);
+ }
+ 
++static inline struct clk *imx_clk_pll14xx(const char *name,
++					const char *parent_name,
++					void __iomem *base,
++					const struct imx_pll14xx_clk *pll_clk)
++{
++	return imx_dev_clk_pll14xx(NULL, name, parent_name, base, pll_clk);
++}
++
+ struct clk_hw *imx_clk_hw_cpu(const char *name, const char *parent_name,
+ 		struct clk *div, struct clk *mux, struct clk *pll,
+ 		struct clk *step);
+@@ -471,6 +557,7 @@ struct clk_hw *imx_clk_divider_gate(const char *name, const char *parent_name,
+ 		unsigned long flags, void __iomem *reg, u8 shift, u8 width,
+ 		u8 clk_divider_flags, const struct clk_div_table *table,
+ 		spinlock_t *lock);
++
+ void clk_set_delta_k(struct clk_hw *hw, short int delta_k);
+ void clk_get_pll_setting(struct clk_hw *hw, u32 *pll_div_ctrl0, u32 *pll_div_ctrl1);
+ #endif
+-- 
+2.17.1
+

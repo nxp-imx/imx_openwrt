@@ -1,0 +1,61 @@
+From 3571fec4b04f6a587d89ad4148eec9912f25a5c9 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Fri, 14 Jan 2022 16:15:44 +0800
+Subject: [PATCH 11/15] Reset: Add perst for imx8mp pcie
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/reset/reset-imx7.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/reset/reset-imx7.c b/drivers/reset/reset-imx7.c
+index 1443a55a0..9c03b31cf 100644
+--- a/drivers/reset/reset-imx7.c
++++ b/drivers/reset/reset-imx7.c
+@@ -165,6 +165,9 @@ static const struct imx7_src_signal imx8mq_src_signals[IMX8MQ_RESET_NUM] = {
+ 	[IMX8MQ_RESET_A53_SOC_DBG_RESET]	= { SRC_A53RCR0, BIT(20) },
+ 	[IMX8MQ_RESET_A53_L2RESET]		= { SRC_A53RCR0, BIT(21) },
+ 	[IMX8MQ_RESET_SW_NON_SCLR_M4C_RST]	= { SRC_M4RCR, BIT(0) },
++	[IMX8MQ_RESET_SW_M4C_RST]		= { SRC_M4RCR, BIT(1) },
++	[IMX8MQ_RESET_SW_M4P_RST]		= { SRC_M4RCR, BIT(2) },
++	[IMX8MQ_RESET_M4_ENABLE]		= { SRC_M4RCR, BIT(3) },
+ 	[IMX8MQ_RESET_OTG1_PHY_RESET]		= { SRC_USBOPHY1_RCR, BIT(0) },
+ 	[IMX8MQ_RESET_OTG2_PHY_RESET]		= { SRC_USBOPHY2_RCR, BIT(0) },
+ 	[IMX8MQ_RESET_MIPI_DSI_RESET_BYTE_N]	= { SRC_MIPIPHY_RCR, BIT(1) },
+@@ -175,6 +178,7 @@ static const struct imx7_src_signal imx8mq_src_signals[IMX8MQ_RESET_NUM] = {
+ 	[IMX8MQ_RESET_PCIEPHY]			= { SRC_PCIEPHY_RCR,
+ 						    BIT(2) | BIT(1) },
+ 	[IMX8MQ_RESET_PCIEPHY_PERST]		= { SRC_PCIEPHY_RCR, BIT(3) },
++	[IMX8MQ_RESET_PCIE_CTRL_APPS_CLK_REQ]	= { SRC_PCIEPHY_RCR, BIT(4) },
+ 	[IMX8MQ_RESET_PCIE_CTRL_APPS_EN]	= { SRC_PCIEPHY_RCR, BIT(6) },
+ 	[IMX8MQ_RESET_PCIE_CTRL_APPS_TURNOFF]	= { SRC_PCIEPHY_RCR, BIT(11) },
+ 	[IMX8MQ_RESET_HDMI_PHY_APB_RESET]	= { SRC_HDMI_RCR, BIT(0) },
+@@ -184,6 +188,7 @@ static const struct imx7_src_signal imx8mq_src_signals[IMX8MQ_RESET_NUM] = {
+ 	[IMX8MQ_RESET_PCIEPHY2]			= { SRC_PCIE2_RCR,
+ 						    BIT(2) | BIT(1) },
+ 	[IMX8MQ_RESET_PCIEPHY2_PERST]		= { SRC_PCIE2_RCR, BIT(3) },
++	[IMX8MQ_RESET_PCIE2_CTRL_APPS_CLK_REQ]	= { SRC_PCIE2_RCR, BIT(4) },
+ 	[IMX8MQ_RESET_PCIE2_CTRL_APPS_EN]	= { SRC_PCIE2_RCR, BIT(6) },
+ 	[IMX8MQ_RESET_PCIE2_CTRL_APPS_TURNOFF]	= { SRC_PCIE2_RCR, BIT(11) },
+ 	[IMX8MQ_RESET_MIPI_CSI1_CORE_RESET]	= { SRC_MIPIPHY1_RCR, BIT(0) },
+@@ -218,13 +223,17 @@ static int imx8mq_reset_set(struct reset_controller_dev *rcdev,
+ 			udelay(10);
+ 		break;
+ 
++	case IMX8MQ_RESET_PCIEPHY_PERST:
+ 	case IMX8MQ_RESET_PCIE_CTRL_APPS_EN:
++	case IMX8MQ_RESET_PCIE_CTRL_APPS_CLK_REQ:
+ 	case IMX8MQ_RESET_PCIE2_CTRL_APPS_EN:	/* fallthrough */
++	case IMX8MQ_RESET_PCIE2_CTRL_APPS_CLK_REQ:
+ 	case IMX8MQ_RESET_MIPI_DSI_PCLK_RESET_N:	/* fallthrough */
+ 	case IMX8MQ_RESET_MIPI_DSI_ESC_RESET_N:	/* fallthrough */
+ 	case IMX8MQ_RESET_MIPI_DSI_DPI_RESET_N:	/* fallthrough */
+ 	case IMX8MQ_RESET_MIPI_DSI_RESET_N:	/* fallthrough */
+ 	case IMX8MQ_RESET_MIPI_DSI_RESET_BYTE_N:	/* fallthrough */
++	case IMX8MQ_RESET_M4_ENABLE:
+ 		value = assert ? 0 : bit;
+ 		break;
+ 	}
+-- 
+2.17.1
+

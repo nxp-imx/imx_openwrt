@@ -1,0 +1,161 @@
+From 57eb8e6690a8016e4d33e97f7775319376a77eb3 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Tue, 11 Jan 2022 13:22:24 +0800
+Subject: [PATCH 02/15] Add imx8mp ddr4 evk board support
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |   1 +
+ .../boot/dts/freescale/imx8mp-ddr4-evk.dts    | 129 ++++++++++++++++++
+ 2 files changed, 130 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx8mp-ddr4-evk.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 51b5981bc..3db2c7049 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -31,5 +31,6 @@ dtb-$(CONFIG_ARCH_MXC) += imx8mq-pico-pi.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mq-zii-ultra-rmb3.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mq-zii-ultra-zest.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8mp-evk.dtb
++dtb-$(CONFIG_ARCH_MXC) += imx8mp-ddr4-evk.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8qxp-ai_ml.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8qxp-mek.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx8mp-ddr4-evk.dts b/arch/arm64/boot/dts/freescale/imx8mp-ddr4-evk.dts
+new file mode 100644
+index 000000000..7cb9e4919
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx8mp-ddr4-evk.dts
+@@ -0,0 +1,129 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2018 NXP
++ */
++
++#include "imx8mp-evk.dts"
++
++/ {
++	model = "NXP i.MX8MPlus DDR4 EVK board";
++};
++
++&flexspi {
++	status = "disabled";
++};
++
++&clk {
++	assigned-clocks = <&clk IMX8MP_CLK_AUDIO_AHB>,
++			  <&clk IMX8MP_CLK_AUDIO_AXI_SRC>,
++			  <&clk IMX8MP_CLK_IPG_AUDIO_ROOT>,
++			  <&clk IMX8MP_AUDIO_PLL1>,
++			  <&clk IMX8MP_AUDIO_PLL2>,
++			  <&clk IMX8MP_VIDEO_PLL1>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_SYS_PLL3_OUT>;
++	assigned-clock-rates = <400000000>,
++			       <600000000>,
++			       <400000000>,
++			       <393216000>,
++			       <361267200>,
++			       <1039500000>;
++};
++
++&gpmi {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_gpmi_nand>;
++	status = "okay";
++	nand-on-flash-bbt;
++};
++
++&gpu_2d {
++	assigned-clocks = <&clk IMX8MP_CLK_GPU2D_SRC>,
++			  <&clk IMX8MP_CLK_GPU_AXI>,
++			  <&clk IMX8MP_CLK_GPU_AHB>,
++			  <&clk IMX8MP_GPU_PLL>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_GPU_PLL_OUT>,
++				 <&clk IMX8MP_GPU_PLL_OUT>;
++	assigned-clock-rates = <800000000>, <600000000>,
++			       <300000000>, <600000000>;
++};
++
++&gpu_3d {
++	assigned-clocks = <&clk IMX8MP_CLK_GPU3D_CORE_SRC>,
++			  <&clk IMX8MP_CLK_GPU3D_SHADER_SRC>,
++			  <&clk IMX8MP_CLK_GPU_AXI>,
++			  <&clk IMX8MP_CLK_GPU_AHB>,
++			  <&clk IMX8MP_GPU_PLL>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_GPU_PLL_OUT>,
++				 <&clk IMX8MP_SYS_PLL1_800M>;
++	assigned-clock-rates = <800000000>, <800000000>,
++			       <600000000>, <300000000>,
++			       <600000000>;
++};
++
++&ml_vipsi {
++	assigned-clocks = <&clk IMX8MP_CLK_ML_SRC>,
++			  <&clk IMX8MP_CLK_ML_AXI>,
++			  <&clk IMX8MP_CLK_ML_AHB>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_SYS_PLL1_800M>,
++				 <&clk IMX8MP_GPU_PLL_OUT>;
++	assigned-clock-rates = <800000000>, <800000000>, <300000000>;
++};
++
++&usdhc3 {
++	status = "disabled";
++};
++
++&vpu_g1 {
++
++	assigned-clocks = <&clk IMX8MP_VPU_PLL>, <&clk IMX8MP_CLK_VPU_G1>, <&clk IMX8MP_CLK_VPU_BUS>;
++	assigned-clock-parents = <0>, <&clk IMX8MP_VPU_PLL_OUT>, <&clk IMX8MP_VPU_PLL_OUT>;
++	assigned-clock-rates = <600000000>, <600000000>, <600000000>;
++};
++
++&vpu_g2 {
++	assigned-clocks = <&clk IMX8MP_CLK_VPU_G2>, <&clk IMX8MP_CLK_VPU_BUS>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL2_1000M>, <&clk IMX8MP_VPU_PLL_OUT>;
++	assigned-clock-rates = <500000000>, <600000000>;
++};
++
++&vpu_vc8000e {
++	assigned-clocks = <&clk IMX8MP_CLK_VPU_VC8000E>,<&clk IMX8MP_CLK_VPU_BUS>;
++	assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_800M>, <&clk IMX8MP_VPU_PLL_OUT>;
++	assigned-clock-rates = <400000000>, <600000000>;
++};
++
++&iomuxc {
++	pinctrl_gpmi_nand: gpmi-nand {
++		fsl,pins = <
++			MX8MP_IOMUXC_NAND_ALE__NAND_ALE			0x00000096
++			MX8MP_IOMUXC_NAND_CE0_B__NAND_CE0_B		0x00000096
++			MX8MP_IOMUXC_NAND_CE1_B__NAND_CE1_B		0x00000096
++			MX8MP_IOMUXC_NAND_CE2_B__NAND_CE2_B		0x00000096
++			MX8MP_IOMUXC_NAND_CE3_B__NAND_CE3_B		0x00000096
++			MX8MP_IOMUXC_NAND_CLE__NAND_CLE			0x00000096
++			MX8MP_IOMUXC_NAND_DATA00__NAND_DATA00		0x00000096
++			MX8MP_IOMUXC_NAND_DATA01__NAND_DATA01		0x00000096
++			MX8MP_IOMUXC_NAND_DATA02__NAND_DATA02		0x00000096
++			MX8MP_IOMUXC_NAND_DATA03__NAND_DATA03		0x00000096
++			MX8MP_IOMUXC_NAND_DATA04__NAND_DATA04		0x00000096
++			MX8MP_IOMUXC_NAND_DATA05__NAND_DATA05		0x00000096
++			MX8MP_IOMUXC_NAND_DATA06__NAND_DATA06		0x00000096
++			MX8MP_IOMUXC_NAND_DATA07__NAND_DATA07		0x00000096
++			MX8MP_IOMUXC_NAND_RE_B__NAND_RE_B		0x00000096
++			MX8MP_IOMUXC_NAND_READY_B__NAND_READY_B		0x00000056
++			MX8MP_IOMUXC_NAND_WE_B__NAND_WE_B		0x00000096
++			MX8MP_IOMUXC_NAND_WP_B__NAND_WP_B		0x00000096
++		>;
++	};
++};
++
++&lcdif3 {
++	thres-low  = <2 3>;             /* (FIFO * 2 / 3) */
++	thres-high = <3 3>;             /* (FIFO * 3 / 3) */
++	status = "okay";
++};
+-- 
+2.17.1
+

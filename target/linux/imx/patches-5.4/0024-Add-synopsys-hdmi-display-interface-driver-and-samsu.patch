@@ -1,0 +1,2863 @@
+From 48445300b2fd8ee31d9badde1047e23127100917 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Fri, 11 Mar 2022 13:39:05 +0800
+Subject: [PATCH 24/24] Add synopsys hdmi display interface driver and samsung
+ hdmi phy driver for i.MX8MP
+
+Set mipi_dsi, adv_bridge, ldb, ldb_phy status to "disabled" in dts,
+since mipi_dsi and ldb driver is not ready here, it will influence imx_drm_bind for hdmi.
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx8mp-evk.dts |    8 +-
+ arch/arm64/configs/defconfig                 |    4 +
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.c    |  189 ++-
+ drivers/gpu/drm/bridge/synopsys/dw-hdmi.h    |   11 +
+ drivers/gpu/drm/imx/Kconfig                  |   14 +-
+ drivers/gpu/drm/imx/Makefile                 |    2 +-
+ drivers/gpu/drm/imx/dw_hdmi-imx.c            |  236 +++-
+ drivers/gpu/drm/imx/imx8mp-hdmi-pavi.c       |  220 ++++
+ drivers/gpu/drm/imx/imx8mp-hdmi-pavi.h       |   38 +
+ drivers/irqchip/irq-imx-irqsteer.c           |  136 ++-
+ drivers/mfd/Kconfig                          |    6 +
+ drivers/mfd/Makefile                         |    1 +
+ drivers/mfd/imx-audiomix.c                   |   49 +
+ drivers/phy/freescale/Kconfig                |    7 +
+ drivers/phy/freescale/Makefile               |    1 +
+ drivers/phy/freescale/phy-fsl-samsung-hdmi.c | 1110 ++++++++++++++++++
+ drivers/reset/Kconfig                        |    7 +
+ drivers/reset/Makefile                       |    1 +
+ drivers/reset/reset-imx-hdmimix.c            |  164 +++
+ include/drm/bridge/dw_hdmi.h                 |   13 +-
+ 20 files changed, 2176 insertions(+), 41 deletions(-)
+ create mode 100644 drivers/gpu/drm/imx/imx8mp-hdmi-pavi.c
+ create mode 100644 drivers/gpu/drm/imx/imx8mp-hdmi-pavi.h
+ create mode 100644 drivers/mfd/imx-audiomix.c
+ create mode 100644 drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+ create mode 100644 drivers/reset/reset-imx-hdmimix.c
+
+diff --git a/arch/arm64/boot/dts/freescale/imx8mp-evk.dts b/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+index c7e158429..b97d20769 100644
+--- a/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+@@ -433,7 +433,7 @@
+ 		reg = <0x3d>;
+ 		adi,addr-cec = <0x3b>;
+ 		adi,dsi-lanes = <4>;
+-		status = "okay";
++		status = "disabled";
+ 
+ 		port {
+ 			adv7535_from_dsim: endpoint {
+@@ -627,7 +627,7 @@
+ };
+ 
+ &ldb {
+-	status = "okay";
++	status = "disabled";
+ 
+ 	lvds-channel@0 {
+ 		fsl,data-mapping = "jeida";
+@@ -645,11 +645,11 @@
+ };
+ 
+ &ldb_phy {
+-	status = "okay";
++	status = "disabled";
+ };
+ 
+ &mipi_dsi {
+-	status = "okay";
++	status = "disabled";
+ 
+ 	port@1 {
+ 		dsim_to_adv7535: endpoint {
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index 1173f4b3c..f05e421c8 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -470,6 +470,7 @@ CONFIG_MFD_AXP20X_RSB=y
+ CONFIG_MFD_CROS_EC=y
+ CONFIG_MFD_CROS_EC_CHARDEV=m
+ CONFIG_MFD_EXYNOS_LPASS=m
++CONFIG_MFD_IMX_AUDIOMIX=y
+ CONFIG_MFD_HI6421_PMIC=y
+ CONFIG_MFD_HI655X_PMIC=y
+ CONFIG_MFD_MAX77620=y
+@@ -522,7 +523,9 @@ CONFIG_VIDEO_RENESAS_VSP1=m
+ CONFIG_IMX_LCDIF_CORE=y
+ CONFIG_IMX_LCDIFV3_CORE=y
+ CONFIG_DRM=y
++CONFIG_DRM_DW_HDMI_CEC=y
+ CONFIG_DRM_IMX=y
++CONFIG_DRM_IMX_HDMI=y
+ CONFIG_DRM_I2C_NXP_TDA998X=m
+ CONFIG_DRM_NOUVEAU=m
+ CONFIG_DRM_EXYNOS=m
+@@ -810,6 +813,7 @@ CONFIG_PWM_SUN4I=m
+ CONFIG_PWM_TEGRA=m
+ CONFIG_RESET_TI_SCI=y
+ CONFIG_PHY_XGENE=y
++CONFIG_PHY_SAMSUNG_HDMI_PHY=y
+ CONFIG_PHY_SUN4I_USB=y
+ CONFIG_PHY_HI6220_USB=y
+ CONFIG_PHY_HISTB_COMBPHY=y
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+index 41bf4aaff..73b006c2f 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -180,7 +180,10 @@ struct dw_hdmi {
+ 
+ 	spinlock_t audio_lock;
+ 	struct mutex audio_mutex;
++	unsigned int sample_non_pcm;
++	unsigned int sample_width;
+ 	unsigned int sample_rate;
++	unsigned int channels;
+ 	unsigned int audio_cts;
+ 	unsigned int audio_n;
+ 	bool audio_enable;
+@@ -192,6 +195,10 @@ struct dw_hdmi {
+ 
+ 	struct mutex cec_notifier_mutex;
+ 	struct cec_notifier *cec_notifier;
++
++	hdmi_codec_plugged_cb plugged_cb;
++	struct device *codec_dev;
++	enum drm_connector_status last_connector_result;
+ };
+ 
+ #define HDMI_IH_PHY_STAT0_RX_SENSE \
+@@ -216,6 +223,28 @@ static inline u8 hdmi_readb(struct dw_hdmi *hdmi, int offset)
+ 	return val;
+ }
+ 
++static void handle_plugged_change(struct dw_hdmi *hdmi, bool plugged)
++{
++	if (hdmi->plugged_cb && hdmi->codec_dev)
++		hdmi->plugged_cb(hdmi->codec_dev, plugged);
++}
++
++int dw_hdmi_set_plugged_cb(struct dw_hdmi *hdmi, hdmi_codec_plugged_cb fn,
++			   struct device *codec_dev)
++{
++	bool plugged;
++
++	mutex_lock(&hdmi->mutex);
++	hdmi->plugged_cb = fn;
++	hdmi->codec_dev = codec_dev;
++	plugged = hdmi->last_connector_result == connector_status_connected;
++	handle_plugged_change(hdmi, plugged);
++	mutex_unlock(&hdmi->mutex);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(dw_hdmi_set_plugged_cb);
++
+ static void hdmi_modb(struct dw_hdmi *hdmi, u8 data, u8 mask, unsigned reg)
+ {
+ 	regmap_update_bits(hdmi->regm, reg << hdmi->reg_shift, mask, data);
+@@ -552,6 +581,8 @@ static unsigned int hdmi_compute_n(unsigned int freq, unsigned long pixel_clk)
+ 			n = 4096;
+ 		else if (pixel_clk == 74176000 || pixel_clk == 148352000)
+ 			n = 11648;
++		else if (pixel_clk == 297000000)
++			n = 3072;
+ 		else
+ 			n = 4096;
+ 		n *= mult;
+@@ -564,6 +595,8 @@ static unsigned int hdmi_compute_n(unsigned int freq, unsigned long pixel_clk)
+ 			n = 17836;
+ 		else if (pixel_clk == 148352000)
+ 			n = 8918;
++		else if (pixel_clk == 297000000)
++			n = 4704;
+ 		else
+ 			n = 6272;
+ 		n *= mult;
+@@ -578,6 +611,8 @@ static unsigned int hdmi_compute_n(unsigned int freq, unsigned long pixel_clk)
+ 			n = 11648;
+ 		else if (pixel_clk == 148352000)
+ 			n = 5824;
++		else if (pixel_clk == 297000000)
++			n = 5120;
+ 		else
+ 			n = 6144;
+ 		n *= mult;
+@@ -603,7 +638,7 @@ static void hdmi_set_clk_regenerator(struct dw_hdmi *hdmi,
+ 	config3 = hdmi_readb(hdmi, HDMI_CONFIG3_ID);
+ 
+ 	/* Only compute CTS when using internal AHB audio */
+-	if (config3 & HDMI_CONFIG3_AHBAUDDMA) {
++	if ((config3 & HDMI_CONFIG3_AHBAUDDMA) || (config3 & HDMI_CONFIG3_GPAUD)) {
+ 		/*
+ 		 * Compute the CTS value from the N value.  Note that CTS and N
+ 		 * can be up to 20 bits in total, so we need 64-bit math.  Also
+@@ -645,6 +680,22 @@ static void hdmi_clk_regenerator_update_pixel_clock(struct dw_hdmi *hdmi)
+ 	mutex_unlock(&hdmi->audio_mutex);
+ }
+ 
++void dw_hdmi_set_sample_width(struct dw_hdmi *hdmi, unsigned int width)
++{
++	mutex_lock(&hdmi->audio_mutex);
++	hdmi->sample_width = width;
++	mutex_unlock(&hdmi->audio_mutex);
++}
++EXPORT_SYMBOL_GPL(dw_hdmi_set_sample_width);
++
++void dw_hdmi_set_sample_non_pcm(struct dw_hdmi *hdmi, unsigned int non_pcm)
++{
++	mutex_lock(&hdmi->audio_mutex);
++	hdmi->sample_non_pcm = non_pcm;
++	mutex_unlock(&hdmi->audio_mutex);
++}
++EXPORT_SYMBOL_GPL(dw_hdmi_set_sample_non_pcm);
++
+ void dw_hdmi_set_sample_rate(struct dw_hdmi *hdmi, unsigned int rate)
+ {
+ 	mutex_lock(&hdmi->audio_mutex);
+@@ -660,6 +711,7 @@ void dw_hdmi_set_channel_count(struct dw_hdmi *hdmi, unsigned int cnt)
+ 	u8 layout;
+ 
+ 	mutex_lock(&hdmi->audio_mutex);
++	hdmi->channels = cnt;
+ 
+ 	/*
+ 	 * For >2 channel PCM audio, we need to select layout 1
+@@ -700,6 +752,87 @@ static void hdmi_enable_audio_clk(struct dw_hdmi *hdmi, bool enable)
+ 	hdmi_writeb(hdmi, hdmi->mc_clkdis, HDMI_MC_CLKDIS);
+ }
+ 
++static void dw_hdmi_gp_audio_enable(struct dw_hdmi *hdmi)
++{
++	int sample_freq = 0x2, org_sample_freq = 0xD;
++	int ch_mask = BIT(hdmi->channels) - 1;
++
++	switch (hdmi->sample_rate) {
++	case 32000:
++		sample_freq = 0x03;
++		org_sample_freq = 0x0C;
++		break;
++	case 44100:
++		sample_freq = 0x00;
++		org_sample_freq = 0x0F;
++		break;
++	case 48000:
++		sample_freq = 0x02;
++		org_sample_freq = 0x0D;
++		break;
++	case 88200:
++		sample_freq = 0x08;
++		org_sample_freq = 0x07;
++		break;
++	case 96000:
++		sample_freq = 0x0A;
++		org_sample_freq = 0x05;
++		break;
++	case 176400:
++		sample_freq = 0x0C;
++		org_sample_freq = 0x03;
++		break;
++	case 192000:
++		sample_freq = 0x0E;
++		org_sample_freq = 0x01;
++		break;
++	default:
++		break;
++        }
++
++	hdmi_set_cts_n(hdmi, hdmi->audio_cts, hdmi->audio_n);
++	hdmi_enable_audio_clk(hdmi, true);
++
++	hdmi_writeb(hdmi, 0x1, HDMI_FC_AUDSCHNL0);
++	hdmi_writeb(hdmi, hdmi->channels, HDMI_FC_AUDSCHNL2);
++	hdmi_writeb(hdmi, 0x22, HDMI_FC_AUDSCHNL3);
++	hdmi_writeb(hdmi, 0x22, HDMI_FC_AUDSCHNL4);
++	hdmi_writeb(hdmi, 0x11, HDMI_FC_AUDSCHNL5);
++	hdmi_writeb(hdmi, 0x11, HDMI_FC_AUDSCHNL6);
++	hdmi_writeb(hdmi, (0x3 << 4) | sample_freq, HDMI_FC_AUDSCHNL7);
++	hdmi_writeb(hdmi, (org_sample_freq << 4) | 0xb, HDMI_FC_AUDSCHNL8);
++
++	hdmi_writeb(hdmi, ch_mask, HDMI_GP_CONF1);
++	hdmi_writeb(hdmi, 0x02, HDMI_GP_CONF2);
++	hdmi_writeb(hdmi, 0x01, HDMI_GP_CONF0);
++
++	hdmi_modb(hdmi,  0x3, 0x3, HDMI_FC_DATAUTO3);
++
++	/* hbr */
++	if (hdmi->sample_rate == 192000 && hdmi->channels == 8 &&
++	    hdmi->sample_width == 32 && hdmi->sample_non_pcm) {
++		hdmi_modb(hdmi, 0x01, 0x01, HDMI_GP_CONF2);
++	}
++
++	if (hdmi->phy.ops->enable_audio)
++		hdmi->phy.ops->enable_audio(hdmi, hdmi->phy.data,
++					    hdmi->channels,
++					    hdmi->sample_width,
++					    hdmi->sample_rate,
++					    hdmi->sample_non_pcm);
++}
++
++static void dw_hdmi_gp_audio_disable(struct dw_hdmi *hdmi)
++{
++	hdmi_set_cts_n(hdmi, hdmi->audio_cts, 0);
++
++	hdmi_modb(hdmi,  0, 0x3, HDMI_FC_DATAUTO3);
++	if (hdmi->phy.ops->disable_audio)
++		hdmi->phy.ops->disable_audio(hdmi, hdmi->phy.data);
++
++	hdmi_enable_audio_clk(hdmi, false);
++}
++
+ static void dw_hdmi_ahb_audio_enable(struct dw_hdmi *hdmi)
+ {
+ 	hdmi_set_cts_n(hdmi, hdmi->audio_cts, hdmi->audio_n);
+@@ -1079,6 +1212,14 @@ static void hdmi_video_packetize(struct dw_hdmi *hdmi)
+ 		HDMI_VP_PR_CD_DESIRED_PR_FACTOR_MASK);
+ 	hdmi_writeb(hdmi, val, HDMI_VP_PR_CD);
+ 
++	val = hdmi_readb(hdmi, HDMI_FC_DATAUTO3);
++	if (color_depth == 4)
++		/* disable Auto GCP when bpp 24 */
++		val &= ~0x4;
++	else
++		val |= 0x4;
++	hdmi_writeb(hdmi, val, HDMI_FC_DATAUTO3);
++
+ 	hdmi_modb(hdmi, HDMI_VP_STUFF_PR_STUFFING_STUFFING_MODE,
+ 		  HDMI_VP_STUFF_PR_STUFFING_MASK, HDMI_VP_STUFF);
+ 
+@@ -1277,12 +1418,20 @@ static void dw_hdmi_phy_sel_interface_control(struct dw_hdmi *hdmi, u8 enable)
+ }
+ 
+ void dw_hdmi_phy_reset(struct dw_hdmi *hdmi)
++{
++	/* PHY reset. The reset signal is active high on Gen1 PHYs. */
++	hdmi_writeb(hdmi, 0, HDMI_MC_PHYRSTZ);
++	hdmi_writeb(hdmi, HDMI_MC_PHYRSTZ_PHYRSTZ, HDMI_MC_PHYRSTZ);
++}
++EXPORT_SYMBOL_GPL(dw_hdmi_phy_reset);
++
++void dw_hdmi_phy_gen2_reset(struct dw_hdmi *hdmi)
+ {
+ 	/* PHY reset. The reset signal is active high on Gen2 PHYs. */
+ 	hdmi_writeb(hdmi, HDMI_MC_PHYRSTZ_PHYRSTZ, HDMI_MC_PHYRSTZ);
+ 	hdmi_writeb(hdmi, 0, HDMI_MC_PHYRSTZ);
+ }
+-EXPORT_SYMBOL_GPL(dw_hdmi_phy_reset);
++EXPORT_SYMBOL_GPL(dw_hdmi_phy_gen2_reset);
+ 
+ void dw_hdmi_phy_i2c_set_addr(struct dw_hdmi *hdmi, u8 address)
+ {
+@@ -1435,7 +1584,7 @@ static int hdmi_phy_configure(struct dw_hdmi *hdmi)
+ 	if (phy->has_svsret)
+ 		dw_hdmi_phy_enable_svsret(hdmi, 1);
+ 
+-	dw_hdmi_phy_reset(hdmi);
++	dw_hdmi_phy_gen2_reset(hdmi);
+ 
+ 	hdmi_writeb(hdmi, HDMI_MC_HEACPHY_RST_ASSERT, HDMI_MC_HEACPHY_RST);
+ 
+@@ -2177,6 +2326,7 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+ {
+ 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
+ 					     connector);
++	enum drm_connector_status result;
+ 
+ 	mutex_lock(&hdmi->mutex);
+ 	hdmi->force = DRM_FORCE_UNSPECIFIED;
+@@ -2184,7 +2334,18 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
+ 	dw_hdmi_update_phy_mask(hdmi);
+ 	mutex_unlock(&hdmi->mutex);
+ 
+-	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
++	result = hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
++
++	mutex_lock(&hdmi->mutex);
++	if (result != hdmi->last_connector_result) {
++		dev_dbg(hdmi->dev, "read_hpd result: %d", result);
++		handle_plugged_change(hdmi,
++				      result == connector_status_connected);
++		hdmi->last_connector_result = result;
++	}
++	mutex_unlock(&hdmi->mutex);
++
++	return result;
+ }
+ 
+ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+@@ -2631,10 +2792,12 @@ __dw_hdmi_probe(struct platform_device *pdev,
+ 	hdmi->plat_data = plat_data;
+ 	hdmi->dev = dev;
+ 	hdmi->sample_rate = 48000;
++	hdmi->channels = 2;
+ 	hdmi->disabled = true;
+ 	hdmi->rxsense = true;
+ 	hdmi->phy_mask = (u8)~(HDMI_PHY_HPD | HDMI_PHY_RX_SENSE);
+ 	hdmi->mc_clkdis = 0x7f;
++	hdmi->last_connector_result = connector_status_disconnected;
+ 
+ 	mutex_init(&hdmi->mutex);
+ 	mutex_init(&hdmi->audio_mutex);
+@@ -2846,6 +3009,24 @@ __dw_hdmi_probe(struct platform_device *pdev,
+ 		pdevinfo.size_data = sizeof(audio);
+ 		pdevinfo.dma_mask = DMA_BIT_MASK(32);
+ 		hdmi->audio = platform_device_register_full(&pdevinfo);
++	} else if (iores && config3 & HDMI_CONFIG3_GPAUD) {
++		struct dw_hdmi_audio_data audio;
++
++		audio.phys = iores->start;
++		audio.base = hdmi->regs;
++		audio.irq = irq;
++		audio.hdmi = hdmi;
++		audio.eld = hdmi->connector.eld;
++
++		hdmi->enable_audio = dw_hdmi_gp_audio_enable;
++		hdmi->disable_audio = dw_hdmi_gp_audio_disable;
++
++		pdevinfo.name = "dw-hdmi-gp-audio";
++		pdevinfo.id = PLATFORM_DEVID_NONE;
++		pdevinfo.data = &audio;
++		pdevinfo.size_data = sizeof(audio);
++		pdevinfo.dma_mask = DMA_BIT_MASK(32);
++		hdmi->audio = platform_device_register_full(&pdevinfo);
+ 	}
+ 
+ 	if (config0 & HDMI_CONFIG0_CEC) {
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
+index 6988f12d8..8f6daa55f 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.h
+@@ -158,6 +158,17 @@
+ #define HDMI_FC_SPDDEVICEINF                    0x1062
+ #define HDMI_FC_AUDSCONF                        0x1063
+ #define HDMI_FC_AUDSSTAT                        0x1064
++#define HDMI_FC_AUDSV                           0x1065
++#define HDMI_FC_AUDSU                           0x1066
++#define HDMI_FC_AUDSCHNL0                       0x1067
++#define HDMI_FC_AUDSCHNL1                       0x1068
++#define HDMI_FC_AUDSCHNL2                       0x1069
++#define HDMI_FC_AUDSCHNL3                       0x106A
++#define HDMI_FC_AUDSCHNL4                       0x106B
++#define HDMI_FC_AUDSCHNL5                       0x106C
++#define HDMI_FC_AUDSCHNL6                       0x106D
++#define HDMI_FC_AUDSCHNL7                       0x106E
++#define HDMI_FC_AUDSCHNL8                       0x106F
+ #define HDMI_FC_DATACH0FILL                     0x1070
+ #define HDMI_FC_DATACH1FILL                     0x1071
+ #define HDMI_FC_DATACH2FILL                     0x1072
+diff --git a/drivers/gpu/drm/imx/Kconfig b/drivers/gpu/drm/imx/Kconfig
+index 7fbd4e7ef..c30d6778f 100644
+--- a/drivers/gpu/drm/imx/Kconfig
++++ b/drivers/gpu/drm/imx/Kconfig
+@@ -24,17 +24,17 @@ config DRM_IMX_TVE
+ 	  Choose this to enable the internal Television Encoder (TVe)
+ 	  found on i.MX53 processors.
+ 
+-config DRM_IMX_LDB
+-	tristate "Support for LVDS displays"
+-	depends on DRM_IMX && MFD_SYSCON
+-	select DRM_PANEL
++config IMX8MP_HDMI_PAVI
++	tristate "NXP i.MX8MP HDMI Audio Video (PVI/PAI)"
+ 	help
+-	  Choose this to enable the internal LVDS Display Bridge (LDB)
+-	  found on i.MX53 and i.MX6 processors.
++		Choose this if you want to use HDMI PAI/PVI on i.MX8MP.
+ 
+ config DRM_IMX_HDMI
+ 	tristate "Freescale i.MX DRM HDMI"
+ 	select DRM_DW_HDMI
++	select IMX8MP_HDMI_PAVI
+ 	depends on DRM_IMX
+ 	help
+-	  Choose this if you want to use HDMI on i.MX6.
++	  Choose this if you want to use HDMI on i.MX6/i.MX8.
++
++source "drivers/gpu/drm/imx/lcdifv3/Kconfig"
+diff --git a/drivers/gpu/drm/imx/Makefile b/drivers/gpu/drm/imx/Makefile
+index 4f996dc20..bae0d064b 100644
+--- a/drivers/gpu/drm/imx/Makefile
++++ b/drivers/gpu/drm/imx/Makefile
+@@ -6,7 +6,7 @@ obj-$(CONFIG_DRM_IMX) += imxdrm.o
+ 
+ obj-$(CONFIG_DRM_IMX_PARALLEL_DISPLAY) += parallel-display.o
+ obj-$(CONFIG_DRM_IMX_TVE) += imx-tve.o
+-obj-$(CONFIG_DRM_IMX_LDB) += imx-ldb.o
+ 
+ obj-$(CONFIG_DRM_IMX_HDMI) += dw_hdmi-imx.o
++obj-$(CONFIG_IMX8MP_HDMI_PAVI) += imx8mp-hdmi-pavi.o
+ obj-$(CONFIG_DRM_IMX_LCDIFV3) += lcdifv3/
+diff --git a/drivers/gpu/drm/imx/dw_hdmi-imx.c b/drivers/gpu/drm/imx/dw_hdmi-imx.c
+index 2e12a4a3b..0c54acd52 100644
+--- a/drivers/gpu/drm/imx/dw_hdmi-imx.c
++++ b/drivers/gpu/drm/imx/dw_hdmi-imx.c
+@@ -9,7 +9,9 @@
+ #include <linux/mfd/syscon/imx6q-iomuxc-gpr.h>
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
++#include <linux/phy/phy.h>
+ #include <linux/regmap.h>
++#include <linux/reset.h>
+ 
+ #include <video/imx-ipu-v3.h>
+ 
+@@ -19,13 +21,23 @@
+ #include <drm/drm_encoder.h>
+ #include <drm/drm_of.h>
+ 
++#include "imx8mp-hdmi-pavi.h"
+ #include "imx-drm.h"
+ 
++/* GPR reg */
++struct imx_hdmi_chip_data {
++	int	reg_offset;
++	u32	mask_bits;
++	u32	shift_bit;
++};
++
+ struct imx_hdmi {
+ 	struct device *dev;
+ 	struct drm_encoder encoder;
+ 	struct dw_hdmi *hdmi;
+ 	struct regmap *regmap;
++	const struct imx_hdmi_chip_data *chip_data;
++	struct phy *phy;
+ };
+ 
+ static inline struct imx_hdmi *enc_to_imx_hdmi(struct drm_encoder *e)
+@@ -33,6 +45,19 @@ static inline struct imx_hdmi *enc_to_imx_hdmi(struct drm_encoder *e)
+ 	return container_of(e, struct imx_hdmi, encoder);
+ }
+ 
++struct clk_bulk_data imx8mp_clocks[] = {
++	{ .id = "pix_clk"  },
++	{ .id = "phy_int"  },
++	{ .id = "prep_clk" },
++	{ .id = "skp_clk"  },
++	{ .id = "sfr_clk"  },
++	{ .id = "cec_clk"  },
++	{ .id = "apb_clk"  },
++	{ .id = "hpi_clk"  },
++	{ .id = "fdcc_ref" },
++	{ .id = "pipe_clk" },
++};
++
+ static const struct dw_hdmi_mpll_config imx_mpll_cfg[] = {
+ 	{
+ 		45250000, {
+@@ -91,7 +116,7 @@ static const struct dw_hdmi_curr_ctrl imx_cur_ctr[] = {
+  * PREEMP config 0.00
+  * TX/CK level 10
+  */
+-static const struct dw_hdmi_phy_config imx_phy_config[] = {
++static const struct dw_hdmi_phy_config imx6_phy_config[] = {
+ 	/*pixelclk   symbol   term   vlev */
+ 	{ 216000000, 0x800d, 0x0005, 0x01ad},
+ 	{ ~0UL,      0x0000, 0x0000, 0x0000}
+@@ -100,6 +125,7 @@ static const struct dw_hdmi_phy_config imx_phy_config[] = {
+ static int dw_hdmi_imx_parse_dt(struct imx_hdmi *hdmi)
+ {
+ 	struct device_node *np = hdmi->dev->of_node;
++	int ret;
+ 
+ 	hdmi->regmap = syscon_regmap_lookup_by_phandle(np, "gpr");
+ 	if (IS_ERR(hdmi->regmap)) {
+@@ -107,6 +133,14 @@ static int dw_hdmi_imx_parse_dt(struct imx_hdmi *hdmi)
+ 		return PTR_ERR(hdmi->regmap);
+ 	}
+ 
++	hdmi->phy = devm_phy_optional_get(hdmi->dev, "hdmi");
++	if (IS_ERR(hdmi->phy)) {
++		ret = PTR_ERR(hdmi->phy);
++		if (ret != -EPROBE_DEFER)
++			dev_err(hdmi->dev, "failed to get phy\n");
++		return ret;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -119,9 +153,11 @@ static void dw_hdmi_imx_encoder_enable(struct drm_encoder *encoder)
+ 	struct imx_hdmi *hdmi = enc_to_imx_hdmi(encoder);
+ 	int mux = drm_of_encoder_active_port_id(hdmi->dev->of_node, encoder);
+ 
+-	regmap_update_bits(hdmi->regmap, IOMUXC_GPR3,
+-			   IMX6Q_GPR3_HDMI_MUX_CTL_MASK,
+-			   mux << IMX6Q_GPR3_HDMI_MUX_CTL_SHIFT);
++	if (hdmi->chip_data->reg_offset < 0)
++		return;
++
++	regmap_update_bits(hdmi->regmap, hdmi->chip_data->reg_offset,
++			   hdmi->chip_data->mask_bits, mux << hdmi->chip_data->shift_bit);
+ }
+ 
+ static int dw_hdmi_imx_atomic_check(struct drm_encoder *encoder,
+@@ -131,6 +167,7 @@ static int dw_hdmi_imx_atomic_check(struct drm_encoder *encoder,
+ 	struct imx_crtc_state *imx_crtc_state = to_imx_crtc_state(crtc_state);
+ 
+ 	imx_crtc_state->bus_format = MEDIA_BUS_FMT_RGB888_1X24;
++	imx_crtc_state->bus_flags = DRM_BUS_FLAG_DE_HIGH;
+ 	imx_crtc_state->di_hsync_pin = 2;
+ 	imx_crtc_state->di_vsync_pin = 3;
+ 
+@@ -173,18 +210,167 @@ imx6dl_hdmi_mode_valid(struct drm_connector *con,
+ 	return MODE_OK;
+ }
+ 
++static bool imx8mp_hdmi_check_clk_rate(int rate_khz)
++{
++	int rate = rate_khz * 1000;
++
++	/* Check hdmi phy pixel clock support rate */
++	if (rate != clk_round_rate(imx8mp_clocks[0].clk, rate))
++		return  false;
++	return true;
++}
++
++static enum drm_mode_status
++imx8mp_hdmi_mode_valid(struct drm_connector *con,
++		       const struct drm_display_mode *mode)
++{
++	if (mode->clock < 13500)
++		return MODE_CLOCK_LOW;
++	if (mode->clock > 297000)
++		return MODE_CLOCK_HIGH;
++
++	if (!imx8mp_hdmi_check_clk_rate(mode->clock))
++		return MODE_CLOCK_RANGE;
++
++	/* We don't support double-clocked and Interlaced modes */
++	if (mode->flags & DRM_MODE_FLAG_DBLCLK ||
++			mode->flags & DRM_MODE_FLAG_INTERLACE)
++		return MODE_BAD;
++
++	return MODE_OK;
++}
++
++struct imx_hdmi_chip_data imx6_chip_data = {
++	.reg_offset = IOMUXC_GPR3,
++	.mask_bits = IMX6Q_GPR3_HDMI_MUX_CTL_MASK,
++	.shift_bit = IMX6Q_GPR3_HDMI_MUX_CTL_SHIFT,
++};
++
+ static struct dw_hdmi_plat_data imx6q_hdmi_drv_data = {
+ 	.mpll_cfg   = imx_mpll_cfg,
+ 	.cur_ctr    = imx_cur_ctr,
+-	.phy_config = imx_phy_config,
++	.phy_config = imx6_phy_config,
+ 	.mode_valid = imx6q_hdmi_mode_valid,
++	.phy_data   = &imx6_chip_data,
+ };
+ 
+ static struct dw_hdmi_plat_data imx6dl_hdmi_drv_data = {
+ 	.mpll_cfg = imx_mpll_cfg,
+ 	.cur_ctr  = imx_cur_ctr,
+-	.phy_config = imx_phy_config,
++	.phy_config = imx6_phy_config,
+ 	.mode_valid = imx6dl_hdmi_mode_valid,
++	.phy_data   = &imx6_chip_data,
++};
++
++static int imx8mp_hdmi_phy_init(struct dw_hdmi *dw_hdmi, void *data,
++			     struct drm_display_mode *mode)
++{
++	struct imx_hdmi *hdmi = (struct imx_hdmi *)data;
++	int val;
++
++	dev_dbg(hdmi->dev, "%s\n", __func__);
++
++	dw_hdmi_phy_reset(dw_hdmi);
++
++	/* enable PVI */
++	imx8mp_hdmi_pavi_powerup();
++	imx8mp_hdmi_pvi_enable(mode);
++
++	regmap_read(hdmi->regmap, 0x200, &val);
++	/* HDMI PHY power off */
++	val |= 0x8;
++	regmap_write(hdmi->regmap, 0x200, val);
++	/* HDMI PHY power on */
++	val &= ~0x8;
++	/* Enable CEC */
++	val |= 0x2;
++	regmap_write(hdmi->regmap, 0x200, val);
++
++	if (!hdmi->phy)
++		return 0;
++
++	phy_power_on(hdmi->phy);
++
++	return 0;
++}
++
++static void imx8mp_hdmi_phy_disable(struct dw_hdmi *dw_hdmi, void *data)
++{
++	struct imx_hdmi *hdmi = (struct imx_hdmi *)data;
++	int val;
++
++	dev_dbg(hdmi->dev, "%s\n", __func__);
++	if (!hdmi->phy)
++		return;
++
++	/* disable PVI */
++	imx8mp_hdmi_pvi_disable();
++	imx8mp_hdmi_pavi_powerdown();
++
++	/* TODO */
++	regmap_read(hdmi->regmap, 0x200, &val);
++	/* Disable CEC */
++	val &= ~0x2;
++	/* Power down HDMI PHY
++	 * TODO move PHY power off to hdmi phy driver
++	 * val |= 0x8;
++	 * regmap_write(hdmi->regmap, 0x200, val);
++	*/
++}
++
++static int imx8mp_hdmimix_setup(struct imx_hdmi *hdmi)
++{
++	int ret;
++
++	if (NULL == imx8mp_hdmi_pavi_init()) {
++		dev_err(hdmi->dev, "No pavi info found\n");
++		return -EPROBE_DEFER;
++	}
++
++	ret = device_reset(hdmi->dev);
++	if (ret == -EPROBE_DEFER)
++		return ret;
++
++	ret = devm_clk_bulk_get(hdmi->dev, ARRAY_SIZE(imx8mp_clocks), imx8mp_clocks);
++	if (ret < 0) {
++		dev_err(hdmi->dev, "No hdmimix bulk clk got\n");
++		return -EPROBE_DEFER;
++	}
++
++	return clk_bulk_prepare_enable(ARRAY_SIZE(imx8mp_clocks), imx8mp_clocks);
++}
++
++void imx8mp_hdmi_enable_audio(struct dw_hdmi *dw_hdmi, void *data, int channel,
++			      int width, int rate, int non_pcm)
++{
++	imx8mp_hdmi_pai_enable(channel, width, rate, non_pcm);
++}
++
++void imx8mp_hdmi_disable_audio(struct dw_hdmi *dw_hdmi, void *data)
++{
++	imx8mp_hdmi_pai_disable();
++}
++
++static const struct dw_hdmi_phy_ops imx8mp_hdmi_phy_ops = {
++	.init		= imx8mp_hdmi_phy_init,
++	.disable	= imx8mp_hdmi_phy_disable,
++	.read_hpd = dw_hdmi_phy_read_hpd,
++	.update_hpd = dw_hdmi_phy_update_hpd,
++	.setup_hpd = dw_hdmi_phy_setup_hpd,
++	.enable_audio	= imx8mp_hdmi_enable_audio,
++	.disable_audio  = imx8mp_hdmi_disable_audio,
++};
++
++struct imx_hdmi_chip_data imx8mp_chip_data = {
++	.reg_offset = -1,
++};
++
++static const struct dw_hdmi_plat_data imx8mp_hdmi_drv_data = {
++	.mode_valid = imx8mp_hdmi_mode_valid,
++	.phy_data   = &imx8mp_chip_data,
++	.phy_ops    = &imx8mp_hdmi_phy_ops,
++	.phy_name   = "samsung_dw_hdmi_phy2",
++	.phy_force_vendor = true,
+ };
+ 
+ static const struct of_device_id dw_hdmi_imx_dt_ids[] = {
+@@ -193,6 +379,9 @@ static const struct of_device_id dw_hdmi_imx_dt_ids[] = {
+ 	}, {
+ 	  .compatible = "fsl,imx6dl-hdmi",
+ 	  .data = &imx6dl_hdmi_drv_data
++	}, {
++	  .compatible = "fsl,imx8mp-hdmi",
++	  .data = &imx8mp_hdmi_drv_data
+ 	},
+ 	{},
+ };
+@@ -202,7 +391,7 @@ static int dw_hdmi_imx_bind(struct device *dev, struct device *master,
+ 			    void *data)
+ {
+ 	struct platform_device *pdev = to_platform_device(dev);
+-	const struct dw_hdmi_plat_data *plat_data;
++	struct dw_hdmi_plat_data *plat_data;
+ 	const struct of_device_id *match;
+ 	struct drm_device *drm = data;
+ 	struct drm_encoder *encoder;
+@@ -216,9 +405,18 @@ static int dw_hdmi_imx_bind(struct device *dev, struct device *master,
+ 	memset(hdmi, 0, sizeof(*hdmi));
+ 
+ 	match = of_match_node(dw_hdmi_imx_dt_ids, pdev->dev.of_node);
+-	plat_data = match->data;
++	if (!match)
++		return -ENODEV;
++
++	plat_data = devm_kmemdup(&pdev->dev, match->data,
++					     sizeof(*plat_data), GFP_KERNEL);
++	if (!plat_data)
++		return -ENOMEM;
++
+ 	hdmi->dev = &pdev->dev;
+ 	encoder = &hdmi->encoder;
++	hdmi->chip_data = plat_data->phy_data;
++	plat_data->phy_data = hdmi;
+ 
+ 	encoder->possible_crtcs = drm_of_find_possible_crtcs(drm, dev->of_node);
+ 	/*
+@@ -238,6 +436,14 @@ static int dw_hdmi_imx_bind(struct device *dev, struct device *master,
+ 	drm_encoder_init(drm, encoder, &dw_hdmi_imx_encoder_funcs,
+ 			 DRM_MODE_ENCODER_TMDS, NULL);
+ 
++	platform_set_drvdata(pdev, hdmi);
++
++	if (of_device_is_compatible(pdev->dev.of_node, "fsl,imx8mp-hdmi")) {
++		ret = imx8mp_hdmimix_setup(hdmi);
++		if (ret < 0)
++			return ret;
++	}
++
+ 	hdmi->hdmi = dw_hdmi_bind(pdev, encoder, plat_data);
+ 
+ 	/*
+@@ -285,11 +491,25 @@ static int dw_hdmi_imx_remove(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++static int __maybe_unused dw_hdmi_imx_resume(struct device *dev)
++{
++	struct imx_hdmi *hdmi = dev_get_drvdata(dev);
++
++	dw_hdmi_resume(hdmi->hdmi);
++
++	return 0;
++}
++
++static const struct dev_pm_ops dw_hdmi_imx_pm = {
++	SET_SYSTEM_SLEEP_PM_OPS(NULL, dw_hdmi_imx_resume)
++};
++
+ static struct platform_driver dw_hdmi_imx_platform_driver = {
+ 	.probe  = dw_hdmi_imx_probe,
+ 	.remove = dw_hdmi_imx_remove,
+ 	.driver = {
+ 		.name = "dwhdmi-imx",
++		.pm = &dw_hdmi_imx_pm,
+ 		.of_match_table = dw_hdmi_imx_dt_ids,
+ 	},
+ };
+diff --git a/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.c b/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.c
+new file mode 100644
+index 000000000..aac6854c6
+--- /dev/null
++++ b/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.c
+@@ -0,0 +1,220 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2020 NXP
++ *
++ * Programe Video/Audio Interface between LCDIF and HDMI Ctrl in HDMIMIX
++ *
++ */
++
++#include <linux/io.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of_device.h>
++#include <linux/of_graph.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <drm/drm_fourcc.h>
++
++#include "imx8mp-hdmi-pavi.h"
++
++#define DRIVER_NAME "imx-hdmi-pavi"
++
++#define HTX_PVI_CTRL         0x0
++#define HTX_PVI_IRQ_MASK     0x04
++#define HTX_TMG_GEN_DISP_LRC 0x10
++#define HTX_TMG_GEN_DE_ULC   0x14
++#define HTX_TMG_GEN_DE_LRC   0x18
++#define HTX_TMG_GEN_HSYNC    0x1c
++#define HTX_TMG_GEN_VSYNC    0x20
++#define HTX_TMG_GEN_IRQ0     0x24
++#define HTX_TMG_GEN_IRQ1     0x28
++#define HTX_TMG_GEN_IRQ2     0x2c
++#define HTX_TMG_GEN_IRQ3     0x30
++#define HTX_TMG_GEN_CFG      0x40
++
++#define HTX_PAI_CTRL        0x800
++#define HTX_PAI_CTRL_EXT    0x804
++#define HTX_PAI_FIELD_CTRL  0x808
++
++#define HTX_PAI_CTRL_ENABLE 1
++
++
++static struct imx8mp_hdmi_pavi *gpavi;
++
++/* PAI APIs  */
++void imx8mp_hdmi_pai_enable(int channel, int width, int rate, int non_pcm)
++{
++	/* PAI set */
++	writel((0x3030000 | ((channel-1) << 8)),
++			gpavi->base + HTX_PAI_CTRL_EXT);
++
++	/* hbr */
++	if (non_pcm && width == 32 && channel == 8 && rate == 192000)
++		writel(0x004e77df, gpavi->base + HTX_PAI_FIELD_CTRL);
++	else if (width == 32)
++		writel(0x1c8c675b, gpavi->base + HTX_PAI_FIELD_CTRL);
++	else
++		writel(0x1c0c675b, gpavi->base + HTX_PAI_FIELD_CTRL);
++
++	/* PAI start running */
++	writel(HTX_PAI_CTRL_ENABLE, gpavi->base + HTX_PAI_CTRL);
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pai_enable);
++
++void imx8mp_hdmi_pai_disable(void)
++{
++	/* stop PAI */
++	writel(0, gpavi->base + HTX_PAI_CTRL);
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pai_disable);
++
++/* PVI APIs  */
++void imx8mp_hdmi_pvi_enable(struct drm_display_mode *mode)
++{
++	writel(0x00000003, gpavi->base + HTX_PVI_IRQ_MASK);
++	writel(0x08970464, gpavi->base + HTX_TMG_GEN_DISP_LRC);
++	writel(0x00bf0029, gpavi->base + HTX_TMG_GEN_DE_ULC);
++	writel(0x083f0460, gpavi->base + HTX_TMG_GEN_DE_LRC);
++	writel(0x0897002b, gpavi->base + HTX_TMG_GEN_HSYNC);
++	writel(0x04640004, gpavi->base + HTX_TMG_GEN_VSYNC);
++	writel(0x000100ff, gpavi->base + HTX_TMG_GEN_IRQ0);
++	writel(0x000100f0, gpavi->base + HTX_TMG_GEN_IRQ1);
++	writel(0x00010315, gpavi->base + HTX_TMG_GEN_IRQ2);
++	writel(0x00010207, gpavi->base + HTX_TMG_GEN_IRQ3);
++	writel(0x84640000, gpavi->base + HTX_TMG_GEN_CFG);
++
++	/* DE/VSYN/HSYNC pol */
++	if ((mode->flags & DRM_MODE_FLAG_PVSYNC) &&
++			(mode->flags & DRM_MODE_FLAG_PHSYNC)) {
++		writel(0x00377004, gpavi->base + HTX_PVI_CTRL);
++		writel(0x00377005, gpavi->base + HTX_PVI_CTRL);
++	} else {
++		writel(0x00311004, gpavi->base + HTX_PVI_CTRL);
++		writel(0x00311005, gpavi->base + HTX_PVI_CTRL);
++	}
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pvi_enable);
++
++void imx8mp_hdmi_pvi_disable(void)
++{
++	/* Stop PVI */
++	writel(0x0, gpavi->base + HTX_PVI_CTRL);
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pvi_disable);
++
++void imx8mp_hdmi_pavi_powerup(void)
++{
++	clk_prepare_enable(gpavi->clk_pvi);
++	clk_prepare_enable(gpavi->clk_pai);
++
++	/* deassert pai reset */
++	if (!gpavi->reset_pai)
++		reset_control_deassert(gpavi->reset_pai);
++
++	/* deassert pvi reset */
++	if (!gpavi->reset_pvi)
++		reset_control_deassert(gpavi->reset_pvi);
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pavi_powerup);
++
++void imx8mp_hdmi_pavi_powerdown(void)
++{
++	/* set pvi reset */
++	if (!gpavi->reset_pvi)
++		reset_control_assert(gpavi->reset_pvi);
++
++	/* set pai reset */
++	if (!gpavi->reset_pai)
++		reset_control_assert(gpavi->reset_pai);
++
++	clk_disable_unprepare(gpavi->clk_pai);
++	clk_disable_unprepare(gpavi->clk_pvi);
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pavi_powerdown);
++
++struct imx8mp_hdmi_pavi *imx8mp_hdmi_pavi_init(void)
++{
++	return gpavi;
++}
++EXPORT_SYMBOL(imx8mp_hdmi_pavi_init);
++
++static int imx8mp_hdmi_pavi_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct imx8mp_hdmi_pavi *pavi;
++	struct resource *res;
++
++	dev_dbg(dev, "%s: probe begin\n", __func__);
++
++	pavi = devm_kzalloc(dev, sizeof(*pavi), GFP_KERNEL);
++	if (!pavi) {
++		dev_err(dev, "Can't allocate 'imx8mp pavi' structure\n");
++		return -ENOMEM;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -ENODEV;
++
++	pavi->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(pavi->base))
++		return PTR_ERR(pavi->base);
++
++	pavi->clk_pvi = devm_clk_get(dev, "pvi_clk");
++	if (IS_ERR(pavi->clk_pvi)) {
++		dev_err(dev, "No pvi clock get\n");
++		return -EPROBE_DEFER;
++	}
++
++	pavi->clk_pai = devm_clk_get(dev, "pai_clk");
++	if (IS_ERR(pavi->clk_pai)) {
++		dev_err(dev, "No pai clock get\n");
++		return -EPROBE_DEFER;
++	}
++
++	pavi->reset_pai = devm_reset_control_get(dev, "pai_rst");
++	if (IS_ERR(pavi->reset_pai)) {
++		dev_err(pavi->dev, "No PAI reset\n");
++		return -EPROBE_DEFER;
++	}
++
++	pavi->reset_pvi = devm_reset_control_get(dev, "pvi_rst");
++	if (IS_ERR(pavi->reset_pvi)) {
++		dev_err(pavi->dev, "No PVI reset\n");
++		return -EPROBE_DEFER;
++	}
++
++	platform_set_drvdata(pdev, pavi);
++
++	gpavi = pavi;
++
++	dev_dbg(dev, "%s: probe success\n", __func__);
++	return 0;
++}
++
++static int imx8mp_hdmi_pavi_remove(struct platform_device *pdev)
++{
++	gpavi = NULL;
++	return 0;
++}
++
++static const struct of_device_id imx8mp_hdmi_pavi_dt_ids[] = {
++	{ .compatible = "fsl,imx8mp-hdmi-pavi", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx8mp_hdmi_pavi_dt_ids);
++
++struct platform_driver imx8mp_hdmi_pavi_driver = {
++	.probe    = imx8mp_hdmi_pavi_probe,
++	.remove   = imx8mp_hdmi_pavi_remove,
++	.driver   = {
++		.name = DRIVER_NAME,
++		.of_match_table = imx8mp_hdmi_pavi_dt_ids,
++	},
++};
++
++module_platform_driver(imx8mp_hdmi_pavi_driver);
++
++MODULE_DESCRIPTION("NXP i.MX8MP HDMI PAI/PVI Mix driver");
++MODULE_AUTHOR("Sandor Yu <Sandor.yu@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.h b/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.h
+new file mode 100644
+index 000000000..d895e4fb8
+--- /dev/null
++++ b/drivers/gpu/drm/imx/imx8mp-hdmi-pavi.h
+@@ -0,0 +1,38 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2020 NXP
++ *
++ * PAI/PVI Head file
++ *
++ */
++#ifndef _IMX8MP_HDMI_AV_CTL_H_
++#define _IMX8MP_HDMI_AV_CTL_H_
++
++#include <linux/clk.h>
++#include <linux/reset.h>
++#include <drm/drm_modes.h>
++
++struct imx8mp_hdmi_pavi {
++	struct device *dev;
++
++	void __iomem *base;
++	atomic_t rpm_suspended;
++
++	struct clk *clk_pai;
++	struct clk *clk_pvi;
++	struct reset_control *reset_pai;
++	struct reset_control *reset_pvi;
++};
++
++void imx8mp_hdmi_pai_enable(int channel, int width, int rate, int non_pcm);
++void imx8mp_hdmi_pai_disable(void);
++
++void imx8mp_hdmi_pvi_enable(struct drm_display_mode *mode);
++void imx8mp_hdmi_pvi_disable(void);
++
++void imx8mp_hdmi_pavi_powerup(void);
++void imx8mp_hdmi_pavi_powerdown(void);
++
++struct imx8mp_hdmi_pavi *imx8mp_hdmi_pavi_init(void);
++
++#endif /* _IMX8MP_HDMI_PAVI_H_ */
+diff --git a/drivers/irqchip/irq-imx-irqsteer.c b/drivers/irqchip/irq-imx-irqsteer.c
+index 290531ec3..029bb0aa8 100644
+--- a/drivers/irqchip/irq-imx-irqsteer.c
++++ b/drivers/irqchip/irq-imx-irqsteer.c
+@@ -10,9 +10,13 @@
+ #include <linux/irqchip/chained_irq.h>
+ #include <linux/irqdomain.h>
+ #include <linux/kernel.h>
++#include <linux/module.h>
+ #include <linux/of_irq.h>
+ #include <linux/of_platform.h>
+ #include <linux/spinlock.h>
++#include <linux/pm_domain.h>
++#include <linux/pm_runtime.h>
++#include <linux/reset.h>
+ 
+ #define CTRL_STRIDE_OFF(_t, _r)	(_t * 4 * _r)
+ #define CHANCTRL		0x0
+@@ -25,6 +29,7 @@
+ #define CHAN_MAX_OUTPUT_INT	0x8
+ 
+ struct irqsteer_data {
++	struct irq_chip		chip;
+ 	void __iomem		*regs;
+ 	struct clk		*ipg_clk;
+ 	int			irq[CHAN_MAX_OUTPUT_INT];
+@@ -34,6 +39,11 @@ struct irqsteer_data {
+ 	int			channel;
+ 	struct irq_domain	*domain;
+ 	u32			*saved_reg;
++	bool			inited;
++
++	struct device		*dev;
++	struct device		*pd_csi;
++	struct device		*pd_isi;
+ };
+ 
+ static int imx_irqsteer_get_reg_index(struct irqsteer_data *data,
+@@ -42,6 +52,44 @@ static int imx_irqsteer_get_reg_index(struct irqsteer_data *data,
+ 	return (data->reg_num - irqnum / 32 - 1);
+ }
+ 
++static int imx_irqsteer_attach_pd(struct irqsteer_data *data)
++{
++	struct device *dev = data->dev;
++	struct device_link *link;
++
++	data->pd_csi = dev_pm_domain_attach_by_name(dev, "pd_csi");
++	if (IS_ERR(data->pd_csi )) {
++		if (PTR_ERR(data->pd_csi) != -EPROBE_DEFER)
++			return PTR_ERR(data->pd_csi);
++		else
++			return PTR_ERR(data->pd_csi);
++	} else if (!data->pd_csi) {
++		return 0;
++	}
++	link = device_link_add(dev, data->pd_csi,
++			DL_FLAG_STATELESS |
++			DL_FLAG_PM_RUNTIME);
++	if (IS_ERR(link))
++		return PTR_ERR(link);
++
++	data->pd_isi = dev_pm_domain_attach_by_name(dev, "pd_isi_ch0");
++	if (IS_ERR(data->pd_isi)) {
++		if (PTR_ERR(data->pd_isi) != -EPROBE_DEFER)
++			return PTR_ERR(data->pd_isi);
++		else
++			return PTR_ERR(data->pd_isi);
++	} else if (!data->pd_isi) {
++		return 0;
++	}
++	link = device_link_add(dev, data->pd_isi,
++			DL_FLAG_STATELESS |
++			DL_FLAG_PM_RUNTIME);
++	if (IS_ERR(link))
++		return PTR_ERR(link);
++
++	return 0;
++}
++
+ static void imx_irqsteer_irq_unmask(struct irq_data *d)
+ {
+ 	struct irqsteer_data *data = d->chip_data;
+@@ -79,9 +127,11 @@ static struct irq_chip imx_irqsteer_irq_chip = {
+ static int imx_irqsteer_irq_map(struct irq_domain *h, unsigned int irq,
+ 				irq_hw_number_t hwirq)
+ {
++	struct irqsteer_data *irqsteer_data = h->host_data;
++
+ 	irq_set_status_flags(irq, IRQ_LEVEL);
+ 	irq_set_chip_data(irq, h->host_data);
+-	irq_set_chip_and_handler(irq, &imx_irqsteer_irq_chip, handle_level_irq);
++	irq_set_chip_and_handler(irq, &irqsteer_data->chip, handle_level_irq);
+ 
+ 	return 0;
+ }
+@@ -140,6 +190,33 @@ static void imx_irqsteer_irq_handler(struct irq_desc *desc)
+ 	chained_irq_exit(irq_desc_get_chip(desc), desc);
+ }
+ 
++#ifdef CONFIG_PM_SLEEP
++static int imx_irqsteer_chans_enable(struct irqsteer_data *data)
++{
++	return 0;
++}
++#else
++static int imx_irqsteer_chans_enable(struct irqsteer_data *data)
++{
++	int ret;
++
++	ret = clk_prepare_enable(irqsteer_data->ipg_clk);
++	if (ret) {
++		dev_err(data->dev, "failed to enable ipg clk: %d\n", ret);
++		return ret;
++	}
++
++	/* steer all IRQs into configured channel */
++	writel_relaxed(BIT(data->channel), data->regs + CHANCTRL);
++
++	/* read back CHANCTRL register cannot reflact on HW register
++	 * real value due to the HW action, so add one flag here.
++	 */
++	data->inited = true;
++	return 0;
++}
++#endif
++
+ static int imx_irqsteer_probe(struct platform_device *pdev)
+ {
+ 	struct device_node *np = pdev->dev.of_node;
+@@ -151,6 +228,10 @@ static int imx_irqsteer_probe(struct platform_device *pdev)
+ 	if (!data)
+ 		return -ENOMEM;
+ 
++	data->chip = imx_irqsteer_irq_chip;
++	data->chip.parent_device = &pdev->dev;
++	data->dev = &pdev->dev;
++	data->inited = false;
+ 	data->regs = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(data->regs)) {
+ 		dev_err(&pdev->dev, "failed to initialize reg\n");
+@@ -165,6 +246,14 @@ static int imx_irqsteer_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
++	ret = imx_irqsteer_attach_pd(data);
++	if (ret < 0 && ret == -EPROBE_DEFER)
++		return ret;
++
++	ret = device_reset(&pdev->dev);
++	if (ret == -EPROBE_DEFER)
++		return ret;
++
+ 	raw_spin_lock_init(&data->lock);
+ 
+ 	ret = of_property_read_u32(np, "fsl,num-irqs", &irqs_num);
+@@ -189,14 +278,9 @@ static int imx_irqsteer_probe(struct platform_device *pdev)
+ 			return -ENOMEM;
+ 	}
+ 
+-	ret = clk_prepare_enable(data->ipg_clk);
+-	if (ret) {
+-		dev_err(&pdev->dev, "failed to enable ipg clk: %d\n", ret);
++	ret = imx_irqsteer_chans_enable(data);
++	if (ret)
+ 		return ret;
+-	}
+-
+-	/* steer all IRQs into configured channel */
+-	writel_relaxed(BIT(data->channel), data->regs + CHANCTRL);
+ 
+ 	data->domain = irq_domain_add_linear(np, data->reg_num * 32,
+ 					     &imx_irqsteer_domain_ops, data);
+@@ -225,6 +309,7 @@ static int imx_irqsteer_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, data);
+ 
++	pm_runtime_enable(&pdev->dev);
+ 	return 0;
+ out:
+ 	clk_disable_unprepare(data->ipg_clk);
+@@ -242,12 +327,21 @@ static int imx_irqsteer_remove(struct platform_device *pdev)
+ 
+ 	irq_domain_remove(irqsteer_data->domain);
+ 
+-	clk_disable_unprepare(irqsteer_data->ipg_clk);
+-
+-	return 0;
++	return pm_runtime_force_suspend(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_PM_SLEEP
++static void imx_irqsteer_init(struct irqsteer_data *data)
++{
++	/* steer all IRQs into configured channel */
++	writel_relaxed(BIT(data->channel), data->regs + CHANCTRL);
++
++	/* read back CHANCTRL register cannot reflact on HW register
++	 * real value due to the HW action, so add one flag here.
++	 */
++	data->inited = true;
++}
++
+ static void imx_irqsteer_save_regs(struct irqsteer_data *data)
+ {
+ 	int i;
+@@ -267,7 +361,7 @@ static void imx_irqsteer_restore_regs(struct irqsteer_data *data)
+ 			       data->regs + CHANMASK(i, data->reg_num));
+ }
+ 
+-static int imx_irqsteer_suspend(struct device *dev)
++static int imx_irqsteer_runtime_suspend(struct device *dev)
+ {
+ 	struct irqsteer_data *irqsteer_data = dev_get_drvdata(dev);
+ 
+@@ -277,7 +371,7 @@ static int imx_irqsteer_suspend(struct device *dev)
+ 	return 0;
+ }
+ 
+-static int imx_irqsteer_resume(struct device *dev)
++static int imx_irqsteer_runtime_resume(struct device *dev)
+ {
+ 	struct irqsteer_data *irqsteer_data = dev_get_drvdata(dev);
+ 	int ret;
+@@ -287,20 +381,29 @@ static int imx_irqsteer_resume(struct device *dev)
+ 		dev_err(dev, "failed to enable ipg clk: %d\n", ret);
+ 		return ret;
+ 	}
+-	imx_irqsteer_restore_regs(irqsteer_data);
++
++	/* don't need restore registers when first sub_irq requested */
++	if (!irqsteer_data->inited)
++		imx_irqsteer_init(irqsteer_data);
++	else
++		imx_irqsteer_restore_regs(irqsteer_data);
+ 
+ 	return 0;
+ }
+ #endif
+ 
+ static const struct dev_pm_ops imx_irqsteer_pm_ops = {
+-	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(imx_irqsteer_suspend, imx_irqsteer_resume)
++	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
++				      pm_runtime_force_resume)
++	SET_RUNTIME_PM_OPS(imx_irqsteer_runtime_suspend,
++			   imx_irqsteer_runtime_resume, NULL)
+ };
+ 
+ static const struct of_device_id imx_irqsteer_dt_ids[] = {
+ 	{ .compatible = "fsl,imx-irqsteer", },
+ 	{},
+ };
++MODULE_DEVICE_TABLE(of, imx_irqsteer_dt_ids);
+ 
+ static struct platform_driver imx_irqsteer_driver = {
+ 	.driver = {
+@@ -311,4 +414,5 @@ static struct platform_driver imx_irqsteer_driver = {
+ 	.probe = imx_irqsteer_probe,
+ 	.remove = imx_irqsteer_remove,
+ };
+-builtin_platform_driver(imx_irqsteer_driver);
++module_platform_driver(imx_irqsteer_driver);
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/mfd/Kconfig b/drivers/mfd/Kconfig
+index 65d1c9d16..988fd9f65 100644
+--- a/drivers/mfd/Kconfig
++++ b/drivers/mfd/Kconfig
+@@ -460,6 +460,12 @@ config MFD_MX25_TSADC
+ 	  i.MX25 processors. They consist of a conversion queue for general
+ 	  purpose ADC and a queue for Touchscreens.
+ 
++config MFD_IMX_AUDIOMIX
++       tristate "NXP i.MX8MP Audiomix Control Driver"
++       depends on OF || COMPILE_TEST
++       help
++         Enable audiomix support
++
+ config MFD_HI6421_PMIC
+ 	tristate "HiSilicon Hi6421 PMU/Codec IC"
+ 	depends on OF
+diff --git a/drivers/mfd/Makefile b/drivers/mfd/Makefile
+index abcdba750..8a9aa3bbb 100644
+--- a/drivers/mfd/Makefile
++++ b/drivers/mfd/Makefile
+@@ -112,6 +112,7 @@ obj-$(CONFIG_MFD_TWL4030_AUDIO)	+= twl4030-audio.o
+ obj-$(CONFIG_TWL6040_CORE)	+= twl6040.o
+ 
+ obj-$(CONFIG_MFD_MX25_TSADC)	+= fsl-imx25-tsadc.o
++obj-$(CONFIG_MFD_IMX_AUDIOMIX) += imx-audiomix.o
+ 
+ obj-$(CONFIG_MFD_MC13XXX)	+= mc13xxx-core.o
+ obj-$(CONFIG_MFD_MC13XXX_SPI)	+= mc13xxx-spi.o
+diff --git a/drivers/mfd/imx-audiomix.c b/drivers/mfd/imx-audiomix.c
+new file mode 100644
+index 000000000..5b56ef510
+--- /dev/null
++++ b/drivers/mfd/imx-audiomix.c
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2019 NXP.
++ */
++
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++#include <linux/platform_device.h>
++#include <linux/of_platform.h>
++
++#include <linux/mfd/core.h>
++
++static int imx_audiomix_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct resource *res;
++	void __iomem *base;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	dev_set_drvdata(dev, base);
++
++	return devm_of_platform_populate(dev);
++}
++
++static const struct of_device_id imx_audiomix_of_match[] = {
++	{ .compatible = "fsl,imx8mp-audiomix" },
++	{ /* Sentinel */ },
++};
++MODULE_DEVICE_TABLE(of, imx_audiomix_of_match);
++
++static struct platform_driver imx_audiomix_driver = {
++	.probe = imx_audiomix_probe,
++	.driver = {
++		.name = "imx-audiomix",
++		.of_match_table = of_match_ptr(imx_audiomix_of_match),
++	},
++};
++module_platform_driver(imx_audiomix_driver);
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/phy/freescale/Kconfig b/drivers/phy/freescale/Kconfig
+index 754b35ae6..73a6cb61c 100644
+--- a/drivers/phy/freescale/Kconfig
++++ b/drivers/phy/freescale/Kconfig
+@@ -15,6 +15,13 @@ config PHY_MIXEL_MIPI_DPHY
+ 	  Enable this to add support for the Mixel DSI PHY as found
+ 	  on NXP's i.MX8 family of SOCs.
+ 
++config PHY_SAMSUNG_HDMI_PHY
++	tristate "Samsung HDMI PHY support"
++	depends on OF && HAS_IOMEM
++	select GENERIC_PHY
++	help
++	  Enable this to add support for the Samsung HDMI PHY in iMX8MP.
++
+ config PHY_FSL_IMX_PCIE
+ 	tristate "Freescale i.MX PCIE PHY"
+ 	depends on OF && HAS_IOMEM
+diff --git a/drivers/phy/freescale/Makefile b/drivers/phy/freescale/Makefile
+index 1d02e3869..4403226e6 100644
+--- a/drivers/phy/freescale/Makefile
++++ b/drivers/phy/freescale/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ obj-$(CONFIG_PHY_FSL_IMX8MQ_USB)	+= phy-fsl-imx8mq-usb.o
+ obj-$(CONFIG_PHY_MIXEL_MIPI_DPHY)	+= phy-fsl-imx8-mipi-dphy.o
++obj-$(CONFIG_PHY_SAMSUNG_HDMI_PHY)     += phy-fsl-samsung-hdmi.o
+diff --git a/drivers/phy/freescale/phy-fsl-samsung-hdmi.c b/drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+new file mode 100644
+index 000000000..5947cba73
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+@@ -0,0 +1,1110 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2020 NXP
++ *
++ */
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/phy/phy.h>
++#include <linux/reset.h>
++
++#define PHY_REGS_84 0x84
++
++#define FIX_DA 0x2
++#define MODE_SET_DONE 0x80
++
++#define PHY_PLL_REGS_NUM 48
++
++struct phy_config {
++	u32	clk_rate;
++	u8 regs[PHY_PLL_REGS_NUM];
++};
++
++const struct phy_config samsung_phy_pll_cfg[] = {
++	{	22250000, {
++			0x00, 0xD1, 0x4B, 0xF1, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x15, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		23750000, {
++			0x00, 0xD1, 0x50, 0xF1, 0x86, 0x85, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x03, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	},{
++		24000000, {
++			0x00, 0xD1, 0x50, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x01, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	},{
++		24024000, {
++			0x00, 0xD1, 0x50, 0xF1, 0x99, 0x02, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x00, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		25175000, {
++			0x00, 0xD1, 0x54, 0xFC, 0xCC, 0x91, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		25200000, {
++			0x00, 0xD1, 0x54, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		26750000, {
++			0x00, 0xD1, 0x5A, 0xF2, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		27000000, {
++			0x00, 0xD1, 0x5A, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		27027000, {
++			0x00, 0xD1, 0x5A, 0xF2, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		29500000, {
++			0x00, 0xD1, 0x62, 0xF4, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		30750000, {
++			0x00, 0xD1, 0x66, 0xF4, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		30888000, {
++			0x00, 0xD1, 0x66, 0xF4, 0x99, 0x18, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xC7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		33750000, {
++			0x00, 0xD1, 0x70, 0xF4, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		35000000, {
++			0x00, 0xD1, 0x58, 0xB8, 0x8B, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		36000000, {
++			0x00, 0xD1, 0x5A, 0xB0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		36036000, {
++			0x00, 0xD1, 0x5A, 0xB2, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		40000000, {
++			0x00, 0xD1, 0x64, 0xB0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		43200000, {
++			0x00, 0xD1, 0x5A, 0x90, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8F, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		43243200, {
++			0x00, 0xD1, 0x5A, 0x92, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8F, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		44500000, {
++			0x00, 0xD1, 0x5C, 0x92, 0x98, 0x11, 0x84, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8B, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		47000000, {
++			0x00, 0xD1, 0x62, 0x94, 0x95, 0x82, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		47500000, {
++			0x00, 0xD1, 0x63, 0x96, 0xA1, 0x82, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x82, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		50349650, {
++			0x00, 0xD1, 0x54, 0x7C, 0xC3, 0x8F, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		50400000, {
++			0x00, 0xD1, 0x54, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		53250000, {
++			0x00, 0xD1, 0x58, 0x72, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		53500000, {
++			0x00, 0xD1, 0x5A, 0x72, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		54000000, {
++			0x00, 0xD1, 0x5A, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		54054000, {
++			0x00, 0xD1, 0x5A, 0x72, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59000000, {
++			0x00, 0xD1, 0x62, 0x74, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59340659, {
++			0x00, 0xD1, 0x62, 0x74, 0xDB, 0x52, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xD0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59400000, {
++			0x00, 0xD1, 0x63, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		61500000, {
++			0x00, 0xD1, 0x66, 0x74, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		63500000, {
++			0x00, 0xD1, 0x69, 0x74, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		67500000, {
++			0x00, 0xD1, 0x54, 0x52, 0x87, 0x03, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		70000000, {
++			0x00, 0xD1, 0x58, 0x58, 0x8B, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		72000000, {
++			0x00, 0xD1, 0x5A, 0x50, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		72072000, {
++			0x00, 0xD1, 0x5A, 0x52, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		74176000, {
++			0x00, 0xD1, 0x5D, 0x58, 0xDB, 0xA2, 0x88, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		74250000, {
++			0x00, 0xD1, 0x5C, 0x52, 0x90, 0x0D, 0x84, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		78500000, {
++			0x00, 0xD1, 0x62, 0x54, 0x87, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x9D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		80000000, {
++			0x00, 0xD1, 0x64, 0x50, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		82000000, {
++			0x00, 0xD1, 0x66, 0x54, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x96, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		82500000, {
++			0x00, 0xD1, 0x67, 0x54, 0x88, 0x01, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		89000000, {
++			0x00, 0xD1, 0x70, 0x54, 0x84, 0x83, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x8B, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		90000000, {
++			0x00, 0xD1, 0x70, 0x54, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		94000000, {
++			0x00, 0xD1, 0x4E, 0x32, 0xA7, 0x10, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		95000000, {
++			0x00, 0xD1, 0x50, 0x31, 0x86, 0x85, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x82, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		98901099, {
++			0x00, 0xD1, 0x52, 0x3A, 0xDB, 0x4C, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		99000000, {
++			0x00, 0xD1, 0x52, 0x32, 0x82, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		100699300, {
++			0x00, 0xD1, 0x54, 0x3C, 0xC3, 0x8F, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		100800000, {
++			0x00, 0xD1, 0x54, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		102500000, {
++			0x00, 0xD1, 0x55, 0x32, 0x8C, 0x05, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		104750000, {
++			0x00, 0xD1, 0x57, 0x32, 0x98, 0x07, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xEB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		106500000, {
++			0x00, 0xD1, 0x58, 0x32, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		107000000, {
++			0x00, 0xD1, 0x5A, 0x32, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		108000000, {
++			0x00, 0xD1, 0x5A, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		108108000, {
++			0x00, 0xD1, 0x5A, 0x32, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		118000000, {
++			0x00, 0xD1, 0x62, 0x34, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		118800000, {
++			0x00, 0xD1, 0x63, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		123000000, {
++			0x00, 0xD1, 0x66, 0x34, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		127000000, {
++			0x00, 0xD1, 0x69, 0x34, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		135000000, {
++			0x00, 0xD1, 0x70, 0x34, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		135580000, {
++			0x00, 0xD1, 0x71, 0x39, 0xE9, 0x82, 0x9C, 0x5B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		137520000, {
++			0x00, 0xD1, 0x72, 0x38, 0x99, 0x10, 0x85, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB3, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		138750000, {
++			0x00, 0xD1, 0x73, 0x35, 0x88, 0x05, 0x90, 0x4D,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		140000000, {
++			0x00, 0xD1, 0x75, 0x36, 0xA7, 0x90, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		144000000, {
++			0x00, 0xD1, 0x78, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		148352000, {
++			0x00, 0xD1, 0x7B, 0x35, 0xDB, 0x39, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		148500000, {
++			0x00, 0xD1, 0x7B, 0x35, 0x84, 0x03, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		154000000, {
++			0x00, 0xD1, 0x40, 0x18, 0x83, 0x01, 0x00, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		157000000, {
++			0x00, 0xD1, 0x41, 0x11, 0xA7, 0x14, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x9D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		160000000, {
++			0x00, 0xD1, 0x42, 0x12, 0xA1, 0x20, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		162000000, {
++			0x00, 0xD1, 0x43, 0x18, 0x8B, 0x08, 0x96, 0x55,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x98, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		164000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x83, 0x82, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x96, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		165000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x84, 0x81, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		180000000, {
++			0x00, 0xD1, 0x4B, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		185625000, {
++			0x00, 0xD1, 0x4E, 0x12, 0x9A, 0x95, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x85, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		188000000, {
++			0x00, 0xD1, 0x4E, 0x12, 0xA7, 0x10, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		198000000, {
++			0x00, 0xD1, 0x52, 0x12, 0x82, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		205000000, {
++			0x00, 0xD1, 0x55, 0x12, 0x8C, 0x05, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xF0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		209500000, {
++			0x00, 0xD1, 0x57, 0x12, 0x98, 0x07, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xEB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		213000000, {
++			0x00, 0xD1, 0x58, 0x12, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		216000000, {
++			0x00, 0xD1, 0x5A, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		216216000, {
++			0x00, 0xD1, 0x5A, 0x12, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		237600000, {
++			0x00, 0xD1, 0x63, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		254000000, {
++			0x00, 0xD1, 0x69, 0x14, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		277500000, {
++			0x00, 0xD1, 0x73, 0x15, 0x88, 0x05, 0x90, 0x4D,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xB2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		288000000, {
++			0x00, 0xD1, 0x78, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		297000000, {
++			0x00, 0xD1, 0x7B, 0x15, 0x84, 0x03, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		165000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x84, 0x81, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		185625000, {
++			0x00, 0xD1, 0x4E, 0x12, 0xB4, 0x95, 0x88, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x85, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		198000000, {
++			0x00, 0xD1, 0x52, 0x12, 0x84, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		90000000, {
++			0x00, 0xD1, 0x4B, 0x32, 0x84, 0x00, 0x88, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		99000000, {
++			0x00, 0xD1, 0x52, 0x32, 0x84, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, { /* sentinel */ },
++};
++
++
++struct samsung_hdmi_phy {
++	struct device *dev;
++	void __iomem *regs;
++
++	struct phy *phy;
++	struct clk *apbclk;
++	struct clk *refclk;
++
++	/* clk provider */
++	struct clk_hw hw;
++	struct clk *phyclk;
++};
++
++static inline struct samsung_hdmi_phy *to_samsung_hdmi_phy(struct clk_hw *hw)
++{
++	return container_of(hw, struct samsung_hdmi_phy, hw);
++}
++
++static int samsung_hdmi_phy_clk_prepare(struct clk_hw *hw)
++{
++	return 0;
++}
++
++static
++unsigned long samsung_hdmi_phy_clk_recalc_rate(struct clk_hw *hw,
++						   unsigned long parent_rate)
++{
++	return 0;
++}
++
++static long samsung_hdmi_phy_clk_round_rate(struct clk_hw *hw,
++						unsigned long rate,
++						unsigned long *parent_rate)
++{
++	const struct phy_config *phy_cfg = samsung_phy_pll_cfg;
++
++	for (; phy_cfg->clk_rate != 0; phy_cfg++)
++		if (phy_cfg->clk_rate == rate)
++			break;
++
++	if (phy_cfg->clk_rate == 0)
++		return -EINVAL;
++
++	return phy_cfg->clk_rate;
++}
++
++static int samsung_hdmi_phy_clk_set_rate(struct clk_hw *hw,
++					     unsigned long rate,
++					     unsigned long parent_rate)
++{
++	struct samsung_hdmi_phy *samsung = to_samsung_hdmi_phy(hw);
++	const struct phy_config *phy_cfg = samsung_phy_pll_cfg;
++	int i;
++
++	dev_dbg(samsung->dev, "%s\n", __func__);
++
++	for (; phy_cfg->clk_rate != 0; phy_cfg++)
++		if (phy_cfg->clk_rate == rate)
++			break;
++
++	if (phy_cfg->clk_rate == 0)
++		return -EINVAL;
++
++	/* HDMI PHY init */
++	writeb(FIX_DA, samsung->regs + PHY_REGS_84);
++
++	for (i = 0; i < PHY_PLL_REGS_NUM; i++)
++		writeb(phy_cfg->regs[i], samsung->regs + i * 4);
++
++	writeb(FIX_DA | MODE_SET_DONE , samsung->regs + PHY_REGS_84);
++
++	/* Wait for PHY PLL lock */
++	msleep(20);
++
++	return 0;
++}
++
++static const struct clk_ops phy_clk_ops = {
++	.prepare = samsung_hdmi_phy_clk_prepare,
++	.recalc_rate = samsung_hdmi_phy_clk_recalc_rate,
++	.round_rate = samsung_hdmi_phy_clk_round_rate,
++	.set_rate = samsung_hdmi_phy_clk_set_rate,
++};
++
++static int samsung_hdmi_phy_clk_register(struct samsung_hdmi_phy *samsung)
++{
++	struct device *dev = samsung->dev;
++	struct device_node *np = dev->of_node;
++	struct clk_init_data init;
++	const char *parent_name;
++	int ret;
++
++	parent_name = __clk_get_name(samsung->refclk);
++
++	init.parent_names = &parent_name;
++	init.num_parents = 1;
++	init.flags = 0;
++	init.name = "hdmi_pclk";
++	init.ops = &phy_clk_ops;
++
++	/* optional override of the clock name */
++	of_property_read_string(np, "clock-output-names", &init.name);
++
++	samsung->hw.init = &init;
++
++	samsung->phyclk = devm_clk_register(dev, &samsung->hw);
++	if (IS_ERR(samsung->phyclk)) {
++		ret = PTR_ERR(samsung->phyclk);
++		dev_err(dev, "failed to register clock: %d\n", ret);
++		return ret;
++	}
++
++	ret = of_clk_add_provider(np, of_clk_src_simple_get, samsung->phyclk);
++	if (ret) {
++		dev_err(dev, "failed to register clock provider: %d\n", ret);
++		return ret;
++	}
++
++	ret = device_reset(dev);
++	if (ret) {
++		dev_warn(dev, "failed to reset hdmi phy %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct phy_ops samsung_hdmi_phy_ops = {
++	.owner = THIS_MODULE,
++};
++
++static int samsung_hdmi_phy_probe(struct platform_device *pdev)
++{
++	struct samsung_hdmi_phy *samsung;
++	struct phy_provider *phy_provider;
++	struct resource *res;
++	void __iomem *regs;
++	int ret;
++
++	dev_dbg(&pdev->dev, "%s\n", __func__);
++
++	samsung = devm_kzalloc(&pdev->dev, sizeof(*samsung), GFP_KERNEL);
++	if (!samsung)
++		return -ENOMEM;
++
++	samsung->dev = &pdev->dev;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	regs = devm_ioremap_resource(samsung->dev, res);
++	if (IS_ERR(regs))
++		return PTR_ERR(regs);
++	samsung->regs = regs;
++
++	samsung->apbclk = devm_clk_get(samsung->dev, "apb");
++	if (IS_ERR(samsung->apbclk)) {
++		ret = PTR_ERR(samsung->apbclk);
++		dev_err(samsung->dev, "failed to get phy apb clk: %d\n", ret);
++		return ret;
++	}
++
++	samsung->refclk = devm_clk_get(samsung->dev, "ref");
++	if (IS_ERR(samsung->refclk)) {
++		ret =  PTR_ERR(samsung->refclk);
++		dev_err(samsung->dev, "failed to get phy refclk: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(samsung->apbclk);
++	if (ret) {
++		dev_err(samsung->dev, "failed to enable apbclk\n");
++		return ret;
++	}
++
++	samsung->phy = devm_phy_create(samsung->dev, NULL, &samsung_hdmi_phy_ops);
++	if (IS_ERR(samsung->phy)) {
++		ret =  PTR_ERR(samsung->phy);
++		dev_err(samsung->dev, "failed to create HDMI PHY: %d\n", ret);
++		goto phy_failed;
++	}
++
++	phy_set_drvdata(samsung->phy, samsung);
++	phy_set_bus_width(samsung->phy, 8);
++
++	ret = samsung_hdmi_phy_clk_register(samsung);
++	if (ret) {
++		dev_err(&pdev->dev, "register clk failed\n");
++		goto phy_failed;
++	}
++
++	phy_provider = devm_of_phy_provider_register(samsung->dev,
++						     of_phy_simple_xlate);
++	if (IS_ERR(phy_provider)) {
++		ret =  PTR_ERR(phy_provider);
++		dev_err(&pdev->dev, "failed to register PHY provider: %d\n", ret);
++		goto phy_failed;
++	}
++
++	return 0;
++
++phy_failed:
++	clk_disable_unprepare(samsung->apbclk);
++	return ret;
++}
++
++static int samsung_hdmi_phy_remove(struct platform_device *pdev)
++{
++	of_clk_del_provider(pdev->dev.of_node);
++
++	return 0;
++}
++
++static const struct of_device_id samsung_hdmi_phy_of_match[] = {
++	{
++		.compatible = "fsl,samsung-hdmi-phy",
++	}, { /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, samsung_hdmi_phy_of_match);
++
++static struct platform_driver samsung_hdmi_phy_driver = {
++	.probe  = samsung_hdmi_phy_probe,
++	.remove = samsung_hdmi_phy_remove,
++	.driver = {
++		.name = "samsung-hdmi-phy",
++		.of_match_table = samsung_hdmi_phy_of_match,
++	},
++};
++module_platform_driver(samsung_hdmi_phy_driver);
++
++MODULE_AUTHOR("Sandor Yu <Sandor.yu@nxp.com>");
++MODULE_DESCRIPTION("SAMSUNG HDMI 2.0 Transmitter PHY Driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/reset/Kconfig b/drivers/reset/Kconfig
+index 7b07281aa..b4f47021c 100644
+--- a/drivers/reset/Kconfig
++++ b/drivers/reset/Kconfig
+@@ -64,6 +64,13 @@ config RESET_IMX7
+ 	help
+ 	  This enables the reset controller driver for i.MX7 SoCs.
+ 
++config RESET_IMX_HDMIMIX
++       bool "i.MX HDMIMIX Reset Driver" if COMPILE_TEST
++       depends on HAS_IOMEM
++       default ARCH_MXC
++       help
++         This enables the hdmimix reset controller driver for i.MX8MP.
++
+ config RESET_LANTIQ
+ 	bool "Lantiq XWAY Reset Driver" if COMPILE_TEST
+ 	default SOC_TYPE_XWAY
+diff --git a/drivers/reset/Makefile b/drivers/reset/Makefile
+index cf60ce526..d880da481 100644
+--- a/drivers/reset/Makefile
++++ b/drivers/reset/Makefile
+@@ -10,6 +10,7 @@ obj-$(CONFIG_RESET_BERLIN) += reset-berlin.o
+ obj-$(CONFIG_RESET_BRCMSTB) += reset-brcmstb.o
+ obj-$(CONFIG_RESET_HSDK) += reset-hsdk.o
+ obj-$(CONFIG_RESET_IMX7) += reset-imx7.o
++obj-$(CONFIG_RESET_IMX_HDMIMIX) += reset-imx-hdmimix.o
+ obj-$(CONFIG_RESET_LANTIQ) += reset-lantiq.o
+ obj-$(CONFIG_RESET_LPC18XX) += reset-lpc18xx.o
+ obj-$(CONFIG_RESET_MESON) += reset-meson.o
+diff --git a/drivers/reset/reset-imx-hdmimix.c b/drivers/reset/reset-imx-hdmimix.c
+new file mode 100644
+index 000000000..79043b6e0
+--- /dev/null
++++ b/drivers/reset/reset-imx-hdmimix.c
+@@ -0,0 +1,164 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2020 NXP
++ *
++ */
++
++#include <dt-bindings/reset/imx-hdmimix-reset.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/reset-controller.h>
++
++#define IMX_HDMIMIX_RESET_CTL0_REG	0x20
++
++#define IMX_HDMIMIX_RESET_CTL0_TX_TRNG_RESETN							(1 << 20)
++#define IMX_HDMIMIX_RESET_CTL0_VID_LINK_SLV_RESETN						(1 << 22)
++#define IMX_HDMIMIX_RESET_CTL0_PAI_RESETN								(1 << 18)
++#define IMX_HDMIMIX_RESET_CTL0_IRQ_STEER_RESETN							(1 << 16)
++#define IMX_HDMIMIX_RESET_CTL0_TX_KSV_MEM_RESETN						(1 << 13)
++#define IMX_HDMIMIX_RESET_CTL0_TX_PHY_PRESETN							(1 << 12)
++#define IMX_HDMIMIX_RESET_CTL0_TX_APBRSTZ								(1 << 11)
++#define IMX_HDMIMIX_RESET_CTL0_TX_RSTZ									(1 << 10)
++#define IMX_HDMIMIX_RESET_CTL0_FDCC_HDMI_RESETN							(1 << 7)
++#define IMX_HDMIMIX_RESET_CTL0_FDCC_RESETN								(1 << 6)
++#define IMX_HDMIMIX_RESET_CTL0_LCDIF_APB_RESETN							(1 << 5)
++#define IMX_HDMIMIX_RESET_CTL0_LCDIF_ASYNC_RESETN						(1 << 4)
++#define IMX_HDMIMIX_RESET_CTL0_NOC_RESETN								(1 << 0)
++
++struct imx_hdmimix_reset_data {
++	void __iomem *base;
++	struct reset_controller_dev rcdev;
++	spinlock_t lock;
++};
++
++static int imx_hdmimix_reset_set(struct reset_controller_dev *rcdev,
++			  unsigned long id, bool assert)
++{
++	struct imx_hdmimix_reset_data *drvdata = container_of(rcdev,
++			struct imx_hdmimix_reset_data, rcdev);
++	void __iomem *reg_addr = drvdata->base + IMX_HDMIMIX_RESET_CTL0_REG;
++	unsigned long flags;
++	unsigned int val;
++	u32 reg;
++
++	switch (id) {
++	case IMX_HDMIMIX_HDMI_TX_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_TX_APBRSTZ |
++				IMX_HDMIMIX_RESET_CTL0_TX_RSTZ |
++				IMX_HDMIMIX_RESET_CTL0_FDCC_HDMI_RESETN |
++				IMX_HDMIMIX_RESET_CTL0_FDCC_RESETN;
++		break;
++	case IMX_HDMIMIX_HDMI_PHY_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_TX_PHY_PRESETN;
++		break;
++	case IMX_HDMIMIX_HDMI_PAI_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_PAI_RESETN;
++		break;
++	case IMX_HDMIMIX_HDMI_PVI_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_VID_LINK_SLV_RESETN;
++		break;
++	case IMX_HDMIMIX_HDMI_TRNG_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_TX_TRNG_RESETN;
++		break;
++	case IMX_HDMIMIX_IRQ_STEER_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_IRQ_STEER_RESETN;
++		break;
++	case IMX_HDMIMIX_HDMI_HDCP_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_TX_KSV_MEM_RESETN;
++		break;
++	case IMX_HDMIMIX_LCDIF_RESET:
++		val = IMX_HDMIMIX_RESET_CTL0_LCDIF_APB_RESETN |
++				IMX_HDMIMIX_RESET_CTL0_LCDIF_ASYNC_RESETN;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (assert) {
++		pm_runtime_get_sync(rcdev->dev);
++		spin_lock_irqsave(&drvdata->lock, flags);
++		reg = readl(reg_addr);
++		writel(reg & ~val, reg_addr);
++		spin_unlock_irqrestore(&drvdata->lock, flags);
++	} else {
++		spin_lock_irqsave(&drvdata->lock, flags);
++		reg = readl(reg_addr);
++		writel(reg | val, reg_addr);
++		spin_unlock_irqrestore(&drvdata->lock, flags);
++		pm_runtime_put(rcdev->dev);
++	}
++		reg = readl(reg_addr);
++
++	return 0;
++}
++
++static int imx_hdmimix_reset_assert(struct reset_controller_dev *rcdev,
++			     unsigned long id)
++{
++	return imx_hdmimix_reset_set(rcdev, id, true);
++}
++
++static int imx_hdmimix_reset_deassert(struct reset_controller_dev *rcdev,
++			       unsigned long id)
++{
++	return imx_hdmimix_reset_set(rcdev, id, false);
++}
++
++static int imx_hdmimix_reset(struct reset_controller_dev *rcdev,
++			     unsigned long id)
++{
++	imx_hdmimix_reset_set(rcdev, id, true);
++	return imx_hdmimix_reset_set(rcdev, id, false);
++}
++
++static const struct reset_control_ops imx_hdmimix_reset_ops = {
++	.reset		= imx_hdmimix_reset,
++	.assert		= imx_hdmimix_reset_assert,
++	.deassert	= imx_hdmimix_reset_deassert,
++};
++
++static int imx_hdmimix_reset_probe(struct platform_device *pdev)
++{
++	struct imx_hdmimix_reset_data *drvdata;
++	struct device *dev = &pdev->dev;
++
++	drvdata = devm_kzalloc(&pdev->dev, sizeof(*drvdata), GFP_KERNEL);
++	if (drvdata == NULL)
++		return -ENOMEM;
++
++	drvdata->base = dev_get_drvdata(dev->parent);
++
++	platform_set_drvdata(pdev, drvdata);
++
++	pm_runtime_enable(dev);
++
++	spin_lock_init(&drvdata->lock);
++
++	drvdata->rcdev.owner     = THIS_MODULE;
++	drvdata->rcdev.nr_resets = IMX_HDMIMIX_RESET_NUM;
++	drvdata->rcdev.ops       = &imx_hdmimix_reset_ops;
++	drvdata->rcdev.of_node   = dev->of_node;
++	drvdata->rcdev.dev	 = dev;
++
++	return devm_reset_controller_register(dev, &drvdata->rcdev);
++}
++
++static const struct of_device_id imx_hdmimix_reset_dt_ids[] = {
++	{ .compatible = "fsl,imx8mp-hdmimix-reset", },
++	{ /* sentinel */ },
++};
++
++static struct platform_driver imx_hdmimix_reset_driver = {
++	.probe	= imx_hdmimix_reset_probe,
++	.driver = {
++		.name		= KBUILD_MODNAME,
++		.of_match_table	= imx_hdmimix_reset_dt_ids,
++	},
++};
++module_platform_driver(imx_hdmimix_reset_driver);
++MODULE_LICENSE("GPL v2");
+diff --git a/include/drm/bridge/dw_hdmi.h b/include/drm/bridge/dw_hdmi.h
+index cf528c289..b3d67ca1d 100644
+--- a/include/drm/bridge/dw_hdmi.h
++++ b/include/drm/bridge/dw_hdmi.h
+@@ -6,6 +6,8 @@
+ #ifndef __DW_HDMI__
+ #define __DW_HDMI__
+ 
++#include <sound/hdmi-codec.h>
++
+ struct drm_connector;
+ struct drm_display_mode;
+ struct drm_encoder;
+@@ -118,6 +120,9 @@ struct dw_hdmi_phy_ops {
+ 	void (*update_hpd)(struct dw_hdmi *hdmi, void *data,
+ 			   bool force, bool disabled, bool rxsense);
+ 	void (*setup_hpd)(struct dw_hdmi *hdmi, void *data);
++	void (*enable_audio)(struct dw_hdmi *hdmi, void *data, int channel,
++			     int width, int rate, int non_pcm);
++	void (*disable_audio)(struct dw_hdmi *hdmi, void *data);
+ };
+ 
+ struct dw_hdmi_plat_data {
+@@ -154,6 +159,10 @@ void dw_hdmi_resume(struct dw_hdmi *hdmi);
+ 
+ void dw_hdmi_setup_rx_sense(struct dw_hdmi *hdmi, bool hpd, bool rx_sense);
+ 
++int dw_hdmi_set_plugged_cb(struct dw_hdmi *hdmi, hdmi_codec_plugged_cb fn,
++			   struct device *codec_dev);
++void dw_hdmi_set_sample_non_pcm(struct dw_hdmi *hdmi, unsigned int non_pcm);
++void dw_hdmi_set_sample_width(struct dw_hdmi *hdmi, unsigned int width);
+ void dw_hdmi_set_sample_rate(struct dw_hdmi *hdmi, unsigned int rate);
+ void dw_hdmi_set_channel_count(struct dw_hdmi *hdmi, unsigned int cnt);
+ void dw_hdmi_set_channel_allocation(struct dw_hdmi *hdmi, unsigned int ca);
+@@ -166,9 +175,11 @@ void dw_hdmi_phy_i2c_set_addr(struct dw_hdmi *hdmi, u8 address);
+ void dw_hdmi_phy_i2c_write(struct dw_hdmi *hdmi, unsigned short data,
+ 			   unsigned char addr);
+ 
++void dw_hdmi_phy_reset(struct dw_hdmi *hdmi);
++
+ void dw_hdmi_phy_gen2_pddq(struct dw_hdmi *hdmi, u8 enable);
+ void dw_hdmi_phy_gen2_txpwron(struct dw_hdmi *hdmi, u8 enable);
+-void dw_hdmi_phy_reset(struct dw_hdmi *hdmi);
++void dw_hdmi_phy_gen2_reset(struct dw_hdmi *hdmi);
+ 
+ enum drm_connector_status dw_hdmi_phy_read_hpd(struct dw_hdmi *hdmi,
+ 					       void *data);
+-- 
+2.17.1
+

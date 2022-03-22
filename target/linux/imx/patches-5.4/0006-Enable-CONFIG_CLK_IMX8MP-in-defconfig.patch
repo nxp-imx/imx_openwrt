@@ -1,0 +1,25 @@
+From 4f5f7fd525dc941659abf936c8a476a4d1c8c5a4 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Thu, 13 Jan 2022 16:20:14 +0800
+Subject: [PATCH 06/15] Enable CONFIG_CLK_IMX8MP in defconfig
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index f438ffa73..dc210b3e5 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -696,6 +696,7 @@ CONFIG_CLK_RASPBERRYPI=m
+ CONFIG_CLK_IMX8MM=y
+ CONFIG_CLK_IMX8MN=y
+ CONFIG_CLK_IMX8MQ=y
++CONFIG_CLK_IMX8MP=y
+ CONFIG_CLK_IMX8QXP=y
+ CONFIG_TI_SCI_CLK=y
+ CONFIG_COMMON_CLK_QCOM=y
+-- 
+2.17.1
+

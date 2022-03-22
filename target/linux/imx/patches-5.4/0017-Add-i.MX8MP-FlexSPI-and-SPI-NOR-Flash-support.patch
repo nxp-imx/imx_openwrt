@@ -1,0 +1,832 @@
+From 7ac394e68dbb30ed24eca6e49ae108fabcd9fd16 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Fri, 11 Feb 2022 14:02:14 +0800
+Subject: [PATCH 17/18] Add i.MX8MP FlexSPI and SPI NOR Flash support
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/defconfig  |   2 +-
+ drivers/mtd/spi-nor/spi-nor.c |  22 ++--
+ drivers/spi/spi-imx.c         | 193 +++++++++++++++++++++-------------
+ drivers/spi/spi-nxp-fspi.c    | 174 +++++++++++++++++++++++++-----
+ 4 files changed, 277 insertions(+), 114 deletions(-)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index dff3ee5c6..e329bc6ad 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -384,7 +384,7 @@ CONFIG_SPI_ARMADA_3700=y
+ CONFIG_SPI_BCM2835=m
+ CONFIG_SPI_BCM2835AUX=m
+ CONFIG_SPI_NXP_FLEXSPI=y
+-CONFIG_SPI_IMX=m
++CONFIG_SPI_IMX=y
+ CONFIG_SPI_MESON_SPICC=m
+ CONFIG_SPI_MESON_SPIFC=m
+ CONFIG_SPI_ORION=y
+diff --git a/drivers/mtd/spi-nor/spi-nor.c b/drivers/mtd/spi-nor/spi-nor.c
+index dd6963e4a..12094f249 100644
+--- a/drivers/mtd/spi-nor/spi-nor.c
++++ b/drivers/mtd/spi-nor/spi-nor.c
+@@ -1011,15 +1011,14 @@ spi_nor_find_best_erase_type(const struct spi_nor_erase_map *map,
+ 
+ 		erase = &map->erase_type[i];
+ 
+-		/* Alignment is not mandatory for overlaid regions */
+-		if (region->offset & SNOR_OVERLAID_REGION &&
+-		    region->size <= len)
+-			return erase;
+-
+ 		/* Don't erase more than what the user has asked for. */
+ 		if (erase->size > len)
+ 			continue;
+ 
++		/* Alignment is not mandatory for overlaid regions */
++		if (region->offset & SNOR_OVERLAID_REGION)
++			return erase;
++
+ 		spi_nor_div_by_erase_size(erase, addr, &rem);
+ 		if (rem)
+ 			continue;
+@@ -1153,7 +1152,6 @@ static int spi_nor_init_erase_cmd_list(struct spi_nor *nor,
+ 			goto destroy_erase_cmd_list;
+ 
+ 		if (prev_erase != erase ||
+-		    erase->size != cmd->size ||
+ 		    region->offset & SNOR_OVERLAID_REGION) {
+ 			cmd = spi_nor_init_erase_cmd(region, erase);
+ 			if (IS_ERR(cmd)) {
+@@ -2353,7 +2351,7 @@ static const struct flash_info spi_nor_ids[] = {
+ 	{ "s25fl512s",  INFO6(0x010220, 0x4d0080, 256 * 1024, 256,
+ 			SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ |
+ 			SPI_NOR_HAS_LOCK | USE_CLSR) },
+-	{ "s25fs512s",  INFO6(0x010220, 0x4d0081, 256 * 1024, 256, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | USE_CLSR) },
++	{ "s25fs512s",  INFO6(0x010220, 0x4d0081, 256 * 1024, 256, SPI_NOR_4B_OPCODES | USE_CLSR) },
+ 	{ "s70fl01gs",  INFO(0x010221, 0x4d00, 256 * 1024, 256, 0) },
+ 	{ "s25sl12800", INFO(0x012018, 0x0300, 256 * 1024,  64, 0) },
+ 	{ "s25sl12801", INFO(0x012018, 0x0301,  64 * 1024, 256, 0) },
+@@ -3702,7 +3700,7 @@ spi_nor_region_check_overlay(struct spi_nor_erase_region *region,
+ 	int i;
+ 
+ 	for (i = 0; i < SNOR_ERASE_TYPE_MAX; i++) {
+-		if (!(erase[i].size && erase_type & BIT(erase[i].idx)))
++		if (!(erase_type & BIT(i)))
+ 			continue;
+ 		if (region->size & erase[i].size_mask) {
+ 			spi_nor_region_mark_overlay(region);
+@@ -3772,7 +3770,6 @@ spi_nor_init_non_uniform_erase_map(struct spi_nor *nor,
+ 		offset = (region[i].offset & ~SNOR_ERASE_FLAGS_MASK) +
+ 			 region[i].size;
+ 	}
+-	spi_nor_region_mark_end(&region[i - 1]);
+ 
+ 	save_uniform_erase_type = map->uniform_erase_type;
+ 	map->uniform_erase_type = spi_nor_sort_erase_mask(map,
+@@ -3796,6 +3793,8 @@ spi_nor_init_non_uniform_erase_map(struct spi_nor *nor,
+ 		if (!(regions_erase_type & BIT(erase[i].idx)))
+ 			spi_nor_set_erase_type(&erase[i], 0, 0xFF);
+ 
++	spi_nor_region_mark_end(&region[i - 1]);
++
+ 	return 0;
+ }
+ 
+@@ -4445,10 +4444,11 @@ static void spi_nor_sfdp_init_params(struct spi_nor *nor)
+ 
+ 	memcpy(&sfdp_params, &nor->params, sizeof(sfdp_params));
+ 
+-	if (spi_nor_parse_sfdp(nor, &nor->params)) {
+-		memcpy(&nor->params, &sfdp_params, sizeof(nor->params));
++	if (spi_nor_parse_sfdp(nor, &sfdp_params)) {
+ 		nor->addr_width = 0;
+ 		nor->flags &= ~SNOR_F_4B_OPCODES;
++	} else {
++		memcpy(&nor->params, &sfdp_params, sizeof(nor->params));
+ 	}
+ }
+ 
+diff --git a/drivers/spi/spi-imx.c b/drivers/spi/spi-imx.c
+index 474d5a7fa..0128e33eb 100644
+--- a/drivers/spi/spi-imx.c
++++ b/drivers/spi/spi-imx.c
+@@ -57,6 +57,7 @@ enum spi_imx_devtype {
+ 	IMX35_CSPI,	/* CSPI on all i.mx except above */
+ 	IMX51_ECSPI,	/* ECSPI on i.mx51 */
+ 	IMX53_ECSPI,	/* ECSPI on i.mx53 and later */
++	IMX6UL_ECSPI,	/* ERR009165 fix from i.mx6ul */
+ };
+ 
+ struct spi_imx_data;
+@@ -64,7 +65,8 @@ struct spi_imx_data;
+ struct spi_imx_devtype_data {
+ 	void (*intctrl)(struct spi_imx_data *, int);
+ 	int (*prepare_message)(struct spi_imx_data *, struct spi_message *);
+-	int (*prepare_transfer)(struct spi_imx_data *, struct spi_device *);
++	int (*prepare_transfer)(struct spi_imx_data *, struct spi_device *,
++				struct spi_transfer *);
+ 	void (*trigger)(struct spi_imx_data *);
+ 	int (*rx_available)(struct spi_imx_data *);
+ 	void (*reset)(struct spi_imx_data *);
+@@ -127,7 +129,8 @@ static inline int is_imx35_cspi(struct spi_imx_data *d)
+ 
+ static inline int is_imx51_ecspi(struct spi_imx_data *d)
+ {
+-	return d->devtype_data->devtype == IMX51_ECSPI;
++	return d->devtype_data->devtype == IMX51_ECSPI ||
++	       d->devtype_data->devtype == IMX6UL_ECSPI;
+ }
+ 
+ static inline int is_imx53_ecspi(struct spi_imx_data *d)
+@@ -477,10 +480,17 @@ static void mx51_ecspi_intctrl(struct spi_imx_data *spi_imx, int enable)
+ 
+ static void mx51_ecspi_trigger(struct spi_imx_data *spi_imx)
+ {
+-	u32 reg;
+-
+-	reg = readl(spi_imx->base + MX51_ECSPI_CTRL);
+-	reg |= MX51_ECSPI_CTRL_XCH;
++	u32 reg = readl(spi_imx->base + MX51_ECSPI_CTRL);
++	/*
++	 * To workaround ERR008517, SDMA script need use XCH instead of SMC
++	 * just like PIO mode and it fix on i.mx6ul
++	 */
++	if (!spi_imx->usedma)
++		reg |= MX51_ECSPI_CTRL_XCH;
++	else if (spi_imx->devtype_data->devtype == IMX6UL_ECSPI)
++		reg |= MX51_ECSPI_CTRL_SMC;
++	else
++		reg &= ~MX51_ECSPI_CTRL_SMC;
+ 	writel(reg, spi_imx->base + MX51_ECSPI_CTRL);
+ }
+ 
+@@ -497,10 +507,8 @@ static int mx51_ecspi_prepare_message(struct spi_imx_data *spi_imx,
+ 				      struct spi_message *msg)
+ {
+ 	struct spi_device *spi = msg->spi;
+-	struct spi_transfer *xfer;
+ 	u32 ctrl = MX51_ECSPI_CTRL_ENABLE;
+-	u32 min_speed_hz = ~0U;
+-	u32 testreg, delay;
++	u32 testreg;
+ 	u32 cfg = readl(spi_imx->base + MX51_ECSPI_CONFIG);
+ 
+ 	/* set Master or Slave mode */
+@@ -561,43 +569,15 @@ static int mx51_ecspi_prepare_message(struct spi_imx_data *spi_imx,
+ 
+ 	writel(cfg, spi_imx->base + MX51_ECSPI_CONFIG);
+ 
+-	/*
+-	 * Wait until the changes in the configuration register CONFIGREG
+-	 * propagate into the hardware. It takes exactly one tick of the
+-	 * SCLK clock, but we will wait two SCLK clock just to be sure. The
+-	 * effect of the delay it takes for the hardware to apply changes
+-	 * is noticable if the SCLK clock run very slow. In such a case, if
+-	 * the polarity of SCLK should be inverted, the GPIO ChipSelect might
+-	 * be asserted before the SCLK polarity changes, which would disrupt
+-	 * the SPI communication as the device on the other end would consider
+-	 * the change of SCLK polarity as a clock tick already.
+-	 *
+-	 * Because spi_imx->spi_bus_clk is only set in bitbang prepare_message
+-	 * callback, iterate over all the transfers in spi_message, find the
+-	 * one with lowest bus frequency, and use that bus frequency for the
+-	 * delay calculation. In case all transfers have speed_hz == 0, then
+-	 * min_speed_hz is ~0 and the resulting delay is zero.
+-	 */
+-	list_for_each_entry(xfer, &msg->transfers, transfer_list) {
+-		if (!xfer->speed_hz)
+-			continue;
+-		min_speed_hz = min(xfer->speed_hz, min_speed_hz);
+-	}
+-
+-	delay = (2 * 1000000) / min_speed_hz;
+-	if (likely(delay < 10))	/* SCLK is faster than 100 kHz */
+-		udelay(delay);
+-	else			/* SCLK is _very_ slow */
+-		usleep_range(delay, delay + 10);
+-
+ 	return 0;
+ }
+ 
+ static int mx51_ecspi_prepare_transfer(struct spi_imx_data *spi_imx,
+-				       struct spi_device *spi)
++				       struct spi_device *spi,
++				       struct spi_transfer *t)
+ {
+ 	u32 ctrl = readl(spi_imx->base + MX51_ECSPI_CTRL);
+-	u32 clk;
++	u32 clk = t->speed_hz, delay;
+ 
+ 	/* Clear BL field and set the right value */
+ 	ctrl &= ~MX51_ECSPI_CTRL_BL_MASK;
+@@ -611,25 +591,54 @@ static int mx51_ecspi_prepare_transfer(struct spi_imx_data *spi_imx,
+ 	/* set clock speed */
+ 	ctrl &= ~(0xf << MX51_ECSPI_CTRL_POSTDIV_OFFSET |
+ 		  0xf << MX51_ECSPI_CTRL_PREDIV_OFFSET);
+-	ctrl |= mx51_ecspi_clkdiv(spi_imx, spi_imx->spi_bus_clk, &clk);
++	ctrl |= mx51_ecspi_clkdiv(spi_imx, t->speed_hz, &clk);
+ 	spi_imx->spi_bus_clk = clk;
+ 
+-	if (spi_imx->usedma)
+-		ctrl |= MX51_ECSPI_CTRL_SMC;
++	/*
++	 * ERR009165: work in XHC mode instead of SMC as PIO on the chips
++	 * before i.mx6ul.
++	 */
++	if (spi_imx->usedma) {
++		if (spi_imx->devtype_data->devtype == IMX6UL_ECSPI)
++			ctrl |= MX51_ECSPI_CTRL_SMC;
++		else
++			ctrl &= ~MX51_ECSPI_CTRL_SMC;
++	}
+ 
+ 	writel(ctrl, spi_imx->base + MX51_ECSPI_CTRL);
+ 
++	/*
++	 * Wait until the changes in the configuration register CONFIGREG
++	 * propagate into the hardware. It takes exactly one tick of the
++	 * SCLK clock, but we will wait two SCLK clock just to be sure. The
++	 * effect of the delay it takes for the hardware to apply changes
++	 * is noticable if the SCLK clock run very slow. In such a case, if
++	 * the polarity of SCLK should be inverted, the GPIO ChipSelect might
++	 * be asserted before the SCLK polarity changes, which would disrupt
++	 * the SPI communication as the device on the other end would consider
++	 * the change of SCLK polarity as a clock tick already.
++	 */
++	delay = (2 * 1000000) / clk;
++	if (likely(delay < 10))	/* SCLK is faster than 100 kHz */
++		udelay(delay);
++	else			/* SCLK is _very_ slow */
++		usleep_range(delay, delay + 10);
++
+ 	return 0;
+ }
+ 
+ static void mx51_setup_wml(struct spi_imx_data *spi_imx)
+ {
++	u32 tx_wml = 0;
++
++	if (spi_imx->devtype_data->devtype == IMX6UL_ECSPI)
++		tx_wml = spi_imx->wml;
+ 	/*
+ 	 * Configure the DMA register: setup the watermark
+ 	 * and enable DMA request.
+ 	 */
+ 	writel(MX51_ECSPI_DMA_RX_WML(spi_imx->wml - 1) |
+-		MX51_ECSPI_DMA_TX_WML(spi_imx->wml) |
++		MX51_ECSPI_DMA_TX_WML(tx_wml) |
+ 		MX51_ECSPI_DMA_RXT_WML(spi_imx->wml) |
+ 		MX51_ECSPI_DMA_TEDEN | MX51_ECSPI_DMA_RXDEN |
+ 		MX51_ECSPI_DMA_RXTDEN, spi_imx->base + MX51_ECSPI_DMA);
+@@ -706,12 +715,13 @@ static int mx31_prepare_message(struct spi_imx_data *spi_imx,
+ }
+ 
+ static int mx31_prepare_transfer(struct spi_imx_data *spi_imx,
+-				 struct spi_device *spi)
++				 struct spi_device *spi,
++				 struct spi_transfer *t)
+ {
+ 	unsigned int reg = MX31_CSPICTRL_ENABLE | MX31_CSPICTRL_MASTER;
+ 	unsigned int clk;
+ 
+-	reg |= spi_imx_clkdiv_2(spi_imx->spi_clk, spi_imx->spi_bus_clk, &clk) <<
++	reg |= spi_imx_clkdiv_2(spi_imx->spi_clk, t->speed_hz, &clk) <<
+ 		MX31_CSPICTRL_DR_SHIFT;
+ 	spi_imx->spi_bus_clk = clk;
+ 
+@@ -810,13 +820,14 @@ static int mx21_prepare_message(struct spi_imx_data *spi_imx,
+ }
+ 
+ static int mx21_prepare_transfer(struct spi_imx_data *spi_imx,
+-				 struct spi_device *spi)
++				 struct spi_device *spi,
++				 struct spi_transfer *t)
+ {
+ 	unsigned int reg = MX21_CSPICTRL_ENABLE | MX21_CSPICTRL_MASTER;
+ 	unsigned int max = is_imx27_cspi(spi_imx) ? 16 : 18;
+ 	unsigned int clk;
+ 
+-	reg |= spi_imx_clkdiv_1(spi_imx->spi_clk, spi_imx->spi_bus_clk, max, &clk)
++	reg |= spi_imx_clkdiv_1(spi_imx->spi_clk, t->speed_hz, max, &clk)
+ 		<< MX21_CSPICTRL_DR_SHIFT;
+ 	spi_imx->spi_bus_clk = clk;
+ 
+@@ -885,12 +896,13 @@ static int mx1_prepare_message(struct spi_imx_data *spi_imx,
+ }
+ 
+ static int mx1_prepare_transfer(struct spi_imx_data *spi_imx,
+-				struct spi_device *spi)
++				struct spi_device *spi,
++				struct spi_transfer *t)
+ {
+ 	unsigned int reg = MX1_CSPICTRL_ENABLE | MX1_CSPICTRL_MASTER;
+ 	unsigned int clk;
+ 
+-	reg |= spi_imx_clkdiv_2(spi_imx->spi_clk, spi_imx->spi_bus_clk, &clk) <<
++	reg |= spi_imx_clkdiv_2(spi_imx->spi_clk, t->speed_hz, &clk) <<
+ 		MX1_CSPICTRL_DR_SHIFT;
+ 	spi_imx->spi_bus_clk = clk;
+ 
+@@ -1018,6 +1030,22 @@ static struct spi_imx_devtype_data imx53_ecspi_devtype_data = {
+ 	.devtype = IMX53_ECSPI,
+ };
+ 
++static struct spi_imx_devtype_data imx6ul_ecspi_devtype_data = {
++	.intctrl = mx51_ecspi_intctrl,
++	.prepare_message = mx51_ecspi_prepare_message,
++	.prepare_transfer = mx51_ecspi_prepare_transfer,
++	.trigger = mx51_ecspi_trigger,
++	.rx_available = mx51_ecspi_rx_available,
++	.reset = mx51_ecspi_reset,
++	.setup_wml = mx51_setup_wml,
++	.fifo_size = 64,
++	.has_dmamode = true,
++	.dynamic_burst = true,
++	.has_slavemode = true,
++	.disable = mx51_ecspi_disable,
++	.devtype = IMX6UL_ECSPI,
++};
++
+ static const struct platform_device_id spi_imx_devtype[] = {
+ 	{
+ 		.name = "imx1-cspi",
+@@ -1040,6 +1068,9 @@ static const struct platform_device_id spi_imx_devtype[] = {
+ 	}, {
+ 		.name = "imx53-ecspi",
+ 		.driver_data = (kernel_ulong_t) &imx53_ecspi_devtype_data,
++	}, {
++		.name = "imx6ul-ecspi",
++		.driver_data = (kernel_ulong_t) &imx6ul_ecspi_devtype_data,
+ 	}, {
+ 		/* sentinel */
+ 	}
+@@ -1053,6 +1084,7 @@ static const struct of_device_id spi_imx_dt_ids[] = {
+ 	{ .compatible = "fsl,imx35-cspi", .data = &imx35_cspi_devtype_data, },
+ 	{ .compatible = "fsl,imx51-ecspi", .data = &imx51_ecspi_devtype_data, },
+ 	{ .compatible = "fsl,imx53-ecspi", .data = &imx53_ecspi_devtype_data, },
++	{ .compatible = "fsl,imx6ul-ecspi", .data = &imx6ul_ecspi_devtype_data, },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, spi_imx_dt_ids);
+@@ -1208,16 +1240,6 @@ static int spi_imx_setupxfer(struct spi_device *spi,
+ 	if (!t)
+ 		return 0;
+ 
+-	if (!t->speed_hz) {
+-		if (!spi->max_speed_hz) {
+-			dev_err(&spi->dev, "no speed_hz provided!\n");
+-			return -EINVAL;
+-		}
+-		dev_dbg(&spi->dev, "using spi->max_speed_hz!\n");
+-		spi_imx->spi_bus_clk = spi->max_speed_hz;
+-	} else
+-		spi_imx->spi_bus_clk = t->speed_hz;
+-
+ 	spi_imx->bits_per_word = t->bits_per_word;
+ 
+ 	/*
+@@ -1259,7 +1281,7 @@ static int spi_imx_setupxfer(struct spi_device *spi,
+ 		spi_imx->slave_burst = t->len;
+ 	}
+ 
+-	spi_imx->devtype_data->prepare_transfer(spi_imx, spi);
++	spi_imx->devtype_data->prepare_transfer(spi_imx, spi, t);
+ 
+ 	return 0;
+ }
+@@ -1284,10 +1306,6 @@ static int spi_imx_sdma_init(struct device *dev, struct spi_imx_data *spi_imx,
+ {
+ 	int ret;
+ 
+-	/* use pio mode for i.mx6dl chip TKT238285 */
+-	if (of_machine_is_compatible("fsl,imx6dl"))
+-		return 0;
+-
+ 	spi_imx->wml = spi_imx->devtype_data->fifo_size / 2;
+ 
+ 	/* Prepare for TX DMA: */
+@@ -1415,6 +1433,8 @@ static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
+ 
+ 	transfer_timeout = spi_imx_calculate_timeout(spi_imx, transfer->len);
+ 
++	spi_imx->devtype_data->trigger(spi_imx);
++
+ 	/* Wait SDMA to finish the data transfer.*/
+ 	timeout = wait_for_completion_timeout(&spi_imx->dma_tx_completion,
+ 						transfer_timeout);
+@@ -1558,13 +1578,13 @@ spi_imx_prepare_message(struct spi_master *master, struct spi_message *msg)
+ 	struct spi_imx_data *spi_imx = spi_master_get_devdata(master);
+ 	int ret;
+ 
+-	ret = clk_enable(spi_imx->clk_per);
++	ret = clk_prepare_enable(spi_imx->clk_per);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = clk_enable(spi_imx->clk_ipg);
++	ret = clk_prepare_enable(spi_imx->clk_ipg);
+ 	if (ret) {
+-		clk_disable(spi_imx->clk_per);
++		clk_disable_unprepare(spi_imx->clk_per);
+ 		return ret;
+ 	}
+ 
+@@ -1582,8 +1602,8 @@ spi_imx_unprepare_message(struct spi_master *master, struct spi_message *msg)
+ {
+ 	struct spi_imx_data *spi_imx = spi_master_get_devdata(master);
+ 
+-	clk_disable(spi_imx->clk_ipg);
+-	clk_disable(spi_imx->clk_per);
++	clk_disable_unprepare(spi_imx->clk_ipg);
++	clk_disable_unprepare(spi_imx->clk_per);
+ 	return 0;
+ }
+ 
+@@ -1755,8 +1775,13 @@ static int spi_imx_probe(struct platform_device *pdev)
+ 	/* Request GPIO CS lines, if any */
+ 	if (!spi_imx->slave_mode && master->cs_gpios) {
+ 		for (i = 0; i < master->num_chipselect; i++) {
+-			if (!gpio_is_valid(master->cs_gpios[i]))
++			if (!gpio_is_valid(master->cs_gpios[i])) {
++				if (master->cs_gpios[i] == -EPROBE_DEFER) {
++					ret = -EPROBE_DEFER;
++					goto out_spi_bitbang;
++				}
+ 				continue;
++			}
+ 
+ 			ret = devm_gpio_request(&pdev->dev,
+ 						master->cs_gpios[i],
+@@ -1771,8 +1796,8 @@ static int spi_imx_probe(struct platform_device *pdev)
+ 
+ 	dev_info(&pdev->dev, "probed\n");
+ 
+-	clk_disable(spi_imx->clk_ipg);
+-	clk_disable(spi_imx->clk_per);
++	clk_disable_unprepare(spi_imx->clk_ipg);
++	clk_disable_unprepare(spi_imx->clk_per);
+ 	return ret;
+ 
+ out_spi_bitbang:
+@@ -1814,11 +1839,31 @@ static int spi_imx_remove(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_PM_SLEEP
++static int spi_imx_suspend(struct device *dev)
++{
++	pinctrl_pm_select_sleep_state(dev);
++	return 0;
++}
++
++static int spi_imx_resume(struct device *dev)
++{
++	pinctrl_pm_select_default_state(dev);
++	return 0;
++}
++
++static SIMPLE_DEV_PM_OPS(imx_spi_pm, spi_imx_suspend, spi_imx_resume);
++#define IMX_SPI_PM       (&imx_spi_pm)
++#else
++#define IMX_SPI_PM       NULL
++#endif
++
+ static struct platform_driver spi_imx_driver = {
+ 	.driver = {
+ 		   .name = DRIVER_NAME,
+ 		   .of_match_table = spi_imx_dt_ids,
+-		   },
++		   .pm = IMX_SPI_PM,
++	},
+ 	.id_table = spi_imx_devtype,
+ 	.probe = spi_imx_probe,
+ 	.remove = spi_imx_remove,
+diff --git a/drivers/spi/spi-nxp-fspi.c b/drivers/spi/spi-nxp-fspi.c
+index 36a44a837..7dc8afed6 100644
+--- a/drivers/spi/spi-nxp-fspi.c
++++ b/drivers/spi/spi-nxp-fspi.c
+@@ -52,6 +52,11 @@
+ #include <linux/spi/spi.h>
+ #include <linux/spi/spi-mem.h>
+ 
++#include <linux/pm_runtime.h>
++
++/* runtime pm timeout */
++#define FSPI_RPM_TIMEOUT 50 /* 50ms */
++
+ /*
+  * The driver only uses one single LUT entry, that is updated on
+  * each call of exec_op(). Index 0 is preset at boot with a basic
+@@ -307,6 +312,10 @@
+ 
+ #define POLL_TOUT		5000
+ #define NXP_FSPI_MAX_CHIPSELECT		4
++#define NXP_FSPI_MIN_IOMAP	SZ_4M
++
++/* access memory via IPS only due to this errata */
++#define NXP_FSPI_QUIRK_ERR050601	BIT(0)
+ 
+ struct nxp_fspi_devtype_data {
+ 	unsigned int rxfifo;
+@@ -324,11 +333,37 @@ static const struct nxp_fspi_devtype_data lx2160a_data = {
+ 	.little_endian = true,  /* little-endian    */
+ };
+ 
++static const struct nxp_fspi_devtype_data imx8mm_data = {
++	.rxfifo = SZ_512,       /* (64  * 64 bits)  */
++	.txfifo = SZ_1K,        /* (128 * 64 bits)  */
++	.ahb_buf_size = SZ_2K,  /* (256 * 64 bits)  */
++	.quirks = 0,
++	.little_endian = true,  /* little-endian    */
++};
++
++static const struct nxp_fspi_devtype_data imx8qxp_data = {
++	.rxfifo = SZ_512,       /* (64  * 64 bits)  */
++	.txfifo = SZ_1K,        /* (128 * 64 bits)  */
++	.ahb_buf_size = SZ_2K,  /* (256 * 64 bits)  */
++	.quirks = 0,
++	.little_endian = true,  /* little-endian    */
++};
++
++static const struct nxp_fspi_devtype_data imx8dxl_data = {
++	.rxfifo = SZ_512,       /* (64  * 64 bits)  */
++	.txfifo = SZ_1K,        /* (128 * 64 bits)  */
++	.ahb_buf_size = SZ_2K,  /* (256 * 64 bits)  */
++	.quirks = NXP_FSPI_QUIRK_ERR050601,
++	.little_endian = true,  /* little-endian    */
++};
++
+ struct nxp_fspi {
+ 	void __iomem *iobase;
+ 	void __iomem *ahb_addr;
+ 	u32 memmap_phy;
+ 	u32 memmap_phy_size;
++	u32 memmap_start;
++	u32 memmap_len;
+ 	struct clk *clk, *clk_en;
+ 	struct device *dev;
+ 	struct completion c;
+@@ -336,8 +371,15 @@ struct nxp_fspi {
+ 	struct mutex lock;
+ 	struct pm_qos_request pm_qos_req;
+ 	int selected;
++#define FSPI_INITILIZED	(1 << 0)
++	int flags;
+ };
+ 
++static inline int nxp_fspi_ips_access_only(struct nxp_fspi *f)
++{
++	return f->devtype_data->quirks & NXP_FSPI_QUIRK_ERR050601;
++}
++
+ /*
+  * R/W functions for big- or little-endian registers:
+  * The FSPI controller's endianness is independent of
+@@ -641,12 +683,35 @@ static void nxp_fspi_select_mem(struct nxp_fspi *f, struct spi_device *spi)
+ 	f->selected = spi->chip_select;
+ }
+ 
+-static void nxp_fspi_read_ahb(struct nxp_fspi *f, const struct spi_mem_op *op)
++static int nxp_fspi_read_ahb(struct nxp_fspi *f, const struct spi_mem_op *op)
+ {
++	u32 start = op->addr.val;
+ 	u32 len = op->data.nbytes;
+ 
++	/* if necessary, ioremap before AHB read */
++	if ((!f->ahb_addr) || start < f->memmap_start ||
++	     start + len > f->memmap_start + f->memmap_len) {
++		if (f->ahb_addr)
++			iounmap(f->ahb_addr);
++
++		f->memmap_start = start;
++		f->memmap_len = len > NXP_FSPI_MIN_IOMAP ?
++				len : NXP_FSPI_MIN_IOMAP;
++
++		f->ahb_addr = ioremap_wc(f->memmap_phy + f->memmap_start,
++					 f->memmap_len);
++
++		if (!f->ahb_addr) {
++			dev_err(f->dev, "failed to alloc memory\n");
++			return -ENOMEM;
++		}
++	}
++
+ 	/* Read out the data directly from the AHB buffer. */
+-	memcpy_fromio(op->data.buf.in, (f->ahb_addr + op->addr.val), len);
++	memcpy_fromio(op->data.buf.in,
++		      f->ahb_addr + start - f->memmap_start, len);
++
++	return 0;
+ }
+ 
+ static void nxp_fspi_fill_txfifo(struct nxp_fspi *f,
+@@ -791,6 +856,12 @@ static int nxp_fspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
+ 
+ 	mutex_lock(&f->lock);
+ 
++	err = pm_runtime_get_sync(f->dev);
++	if (err < 0) {
++		dev_err(f->dev, "Failed to enable clock %d\n", __LINE__);
++		goto err_mutex;
++	}
++
+ 	/* Wait for controller being ready. */
+ 	err = fspi_readl_poll_tout(f, f->iobase + FSPI_STS0,
+ 				   FSPI_STS0_ARB_IDLE, 1, POLL_TOUT, true);
+@@ -802,11 +873,13 @@ static int nxp_fspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
+ 	/*
+ 	 * If we have large chunks of data, we read them through the AHB bus
+ 	 * by accessing the mapped memory. In all other cases we use
+-	 * IP commands to access the flash.
++	 * IP commands to access the flash, but ahb read won't be used for dxl
++	 * since IC errta.
+ 	 */
+-	if (op->data.nbytes > (f->devtype_data->rxfifo - 4) &&
++	if (!nxp_fspi_ips_access_only(f) &&
++	    op->data.nbytes > (f->devtype_data->rxfifo - 4) &&
+ 	    op->data.dir == SPI_MEM_DATA_IN) {
+-		nxp_fspi_read_ahb(f, op);
++		err = nxp_fspi_read_ahb(f, op);
+ 	} else {
+ 		if (op->data.nbytes && op->data.dir == SPI_MEM_DATA_OUT)
+ 			nxp_fspi_fill_txfifo(f, op);
+@@ -817,8 +890,13 @@ static int nxp_fspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
+ 	/* Invalidate the data in the AHB buffer. */
+ 	nxp_fspi_invalid(f);
+ 
++	pm_runtime_mark_last_busy(f->dev);
++	pm_runtime_put_autosuspend(f->dev);
++
+ 	mutex_unlock(&f->lock);
+ 
++err_mutex:
++	mutex_unlock(&f->lock);
+ 	return err;
+ }
+ 
+@@ -834,6 +912,10 @@ static int nxp_fspi_adjust_op_size(struct spi_mem *mem, struct spi_mem_op *op)
+ 			op->data.nbytes = f->devtype_data->ahb_buf_size;
+ 		else if (op->data.nbytes > (f->devtype_data->rxfifo - 4))
+ 			op->data.nbytes = ALIGN_DOWN(op->data.nbytes, 8);
++		/* dxl won't use ahb to access data, limit to rxfifo size */
++		if (nxp_fspi_ips_access_only(f) &&
++		    op->data.nbytes > f->devtype_data->rxfifo)
++			op->data.nbytes = f->devtype_data->rxfifo;
+ 	}
+ 
+ 	return 0;
+@@ -871,8 +953,9 @@ static int nxp_fspi_default_setup(struct nxp_fspi *f)
+ 	fspi_writel(f, FSPI_DLLBCR_OVRDEN, base + FSPI_DLLBCR);
+ 
+ 	/* enable module */
+-	fspi_writel(f, FSPI_MCR0_AHB_TIMEOUT(0xFF) | FSPI_MCR0_IP_TIMEOUT(0xFF),
+-		 base + FSPI_MCR0);
++	fspi_writel(f, FSPI_MCR0_AHB_TIMEOUT(0xFF) |
++		    FSPI_MCR0_IP_TIMEOUT(0xFF) | (u32) FSPI_MCR0_OCTCOMB_EN,
++		    base + FSPI_MCR0);
+ 
+ 	/*
+ 	 * Disable same device enable bit and configure all slave devices
+@@ -948,7 +1031,6 @@ static int nxp_fspi_probe(struct platform_device *pdev)
+ 	struct resource *res;
+ 	struct nxp_fspi *f;
+ 	int ret;
+-	u32 reg;
+ 
+ 	ctlr = spi_alloc_master(&pdev->dev, sizeof(*f));
+ 	if (!ctlr)
+@@ -977,9 +1059,8 @@ static int nxp_fspi_probe(struct platform_device *pdev)
+ 
+ 	/* find the resources - controller memory mapped space */
+ 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "fspi_mmap");
+-	f->ahb_addr = devm_ioremap_resource(dev, res);
+-	if (IS_ERR(f->ahb_addr)) {
+-		ret = PTR_ERR(f->ahb_addr);
++	if (IS_ERR(res)) {
++		ret = PTR_ERR(res);
+ 		goto err_put_ctrl;
+ 	}
+ 
+@@ -1000,17 +1081,17 @@ static int nxp_fspi_probe(struct platform_device *pdev)
+ 		goto err_put_ctrl;
+ 	}
+ 
+-	ret = nxp_fspi_clk_prep_enable(f);
+-	if (ret) {
+-		dev_err(dev, "can not enable the clock\n");
++	pm_runtime_enable(dev);
++	pm_runtime_set_autosuspend_delay(dev, FSPI_RPM_TIMEOUT);
++	pm_runtime_use_autosuspend(dev);
++
++	/* enable clock */
++	ret = pm_runtime_get_sync(f->dev);
++	if (ret < 0) {
++		dev_err(f->dev, "Failed to enable clock %d\n", __LINE__);
+ 		goto err_put_ctrl;
+ 	}
+ 
+-	/* Clear potential interrupts */
+-	reg = fspi_readl(f, f->iobase + FSPI_INTR);
+-	if (reg)
+-		fspi_writel(f, reg, f->iobase + FSPI_INTR);
+-
+ 	/* find the irq */
+ 	ret = platform_get_irq(pdev, 0);
+ 	if (ret < 0)
+@@ -1037,13 +1118,19 @@ static int nxp_fspi_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		goto err_destroy_mutex;
+ 
++	pm_runtime_mark_last_busy(f->dev);
++	pm_runtime_put_autosuspend(f->dev);
++
++	/* indicate the controller has been initialized */
++	f->flags |= FSPI_INITILIZED;
++
+ 	return 0;
+ 
+ err_destroy_mutex:
+ 	mutex_destroy(&f->lock);
+ 
+ err_disable_clk:
+-	nxp_fspi_clk_disable_unprep(f);
++	pm_runtime_disable(dev);
+ 
+ err_put_ctrl:
+ 	spi_controller_put(ctlr);
+@@ -1063,34 +1150,65 @@ static int nxp_fspi_remove(struct platform_device *pdev)
+ 
+ 	mutex_destroy(&f->lock);
+ 
++	if (f->ahb_addr)
++		iounmap(f->ahb_addr);
++
+ 	return 0;
+ }
+ 
+-static int nxp_fspi_suspend(struct device *dev)
++#ifdef CONFIG_PM
++static int nxp_fspi_initialized(struct nxp_fspi *f)
++{
++	return f->flags & FSPI_INITILIZED;
++}
++
++static int nxp_fspi_need_reinit(struct nxp_fspi *f)
++{
++	/* we always use the controller in combination mode, so we check this */
++	/* register bit to determine if the controller once lost power, such as */
++	/* suspend/resume, and need to be re-init */
++
++	return !(readl(f->iobase + FSPI_MCR0) & FSPI_MCR0_OCTCOMB_EN);
++}
++
++
++int nxp_fspi_runtime_suspend(struct device *dev)
+ {
++	struct nxp_fspi *f = dev_get_drvdata(dev);
++
++	nxp_fspi_clk_disable_unprep(f);
++
+ 	return 0;
+ }
+ 
+-static int nxp_fspi_resume(struct device *dev)
++int nxp_fspi_runtime_resume(struct device *dev)
+ {
+ 	struct nxp_fspi *f = dev_get_drvdata(dev);
+ 
+-	nxp_fspi_default_setup(f);
++	nxp_fspi_clk_prep_enable(f);
++
++	if (nxp_fspi_initialized(f) && nxp_fspi_need_reinit(f))
++		nxp_fspi_default_setup(f);
+ 
+ 	return 0;
+ }
+ 
++static const struct dev_pm_ops nxp_fspi_pm_ops = {
++	SET_RUNTIME_PM_OPS(nxp_fspi_runtime_suspend, nxp_fspi_runtime_resume, NULL)
++	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
++};
++
++#endif /* CONFIG_PM */
++
+ static const struct of_device_id nxp_fspi_dt_ids[] = {
+ 	{ .compatible = "nxp,lx2160a-fspi", .data = (void *)&lx2160a_data, },
++	{ .compatible = "nxp,imx8mm-fspi", .data = (void *)&imx8mm_data, },
++	{ .compatible = "nxp,imx8qxp-fspi", .data = (void *)&imx8qxp_data, },
++	{ .compatible = "nxp,imx8dxl-fspi", .data = (void *)&imx8dxl_data, },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, nxp_fspi_dt_ids);
+ 
+-static const struct dev_pm_ops nxp_fspi_pm_ops = {
+-	.suspend	= nxp_fspi_suspend,
+-	.resume		= nxp_fspi_resume,
+-};
+-
+ static struct platform_driver nxp_fspi_driver = {
+ 	.driver = {
+ 		.name	= "nxp-fspi",
+-- 
+2.17.1
+

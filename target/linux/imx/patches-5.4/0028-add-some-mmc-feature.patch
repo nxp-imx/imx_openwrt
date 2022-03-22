@@ -1,0 +1,92 @@
+From bc52bd4f8e6c18518d0815a93e1e0d6b7faea6b9 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Mon, 14 Mar 2022 22:13:29 +0800
+Subject: [PATCH 28/28] add some mmc feature
+
+mmc: add delay after CMD6 before sending CMD13 for sandisk
+mmc: core: add delay for SD3.0 UHS mode switch
+mmc: sdio: fix clock rate setting for SDR12/SDR25 mode
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/mmc/core/mmc_ops.c |  6 ++++++
+ drivers/mmc/core/sd.c      |  6 ++++++
+ drivers/mmc/core/sdio.c    | 15 ++++++++-------
+ 3 files changed, 20 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/mmc/core/mmc_ops.c b/drivers/mmc/core/mmc_ops.c
+index 09311c2bd..da6855289 100644
+--- a/drivers/mmc/core/mmc_ops.c
++++ b/drivers/mmc/core/mmc_ops.c
+@@ -589,6 +589,12 @@ int __mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
+ 	if (timing)
+ 		mmc_set_timing(host, timing);
+ 
++       /*
++        * WORKAROUND: for Sandisk eMMC cards, it might need certain delay
++        * before sending CMD13 after CMD6
++        */
++       mdelay(1);
++
+ 	if (send_status) {
+ 		err = mmc_switch_status(card);
+ 		if (err && timing)
+diff --git a/drivers/mmc/core/sd.c b/drivers/mmc/core/sd.c
+index c6d7a0add..28e387ece 100644
+--- a/drivers/mmc/core/sd.c
++++ b/drivers/mmc/core/sd.c
+@@ -504,6 +504,12 @@ static int sd_set_bus_speed_mode(struct mmc_card *card, u8 *status)
+ 	else {
+ 		mmc_set_timing(card->host, timing);
+ 		mmc_set_clock(card->host, card->sw_caps.uhs_max_dtr);
++               /*
++                * FIXME: Sandisk SD3.0 cards DDR50 mode requires such
++                * delay to get stable, without this delay we may encounter
++                * CRC errors after switch to DDR50 mode
++                */
++               mmc_delay(100);
+ 	}
+ 
+ 	return 0;
+diff --git a/drivers/mmc/core/sdio.c b/drivers/mmc/core/sdio.c
+index 0bf33786f..3f008934b 100644
+--- a/drivers/mmc/core/sdio.c
++++ b/drivers/mmc/core/sdio.c
+@@ -158,15 +158,18 @@ static int sdio_read_cccr(struct mmc_card *card, u32 ocr)
+ 			if (mmc_host_uhs(card->host)) {
+ 				if (data & SDIO_UHS_DDR50)
+ 					card->sw_caps.sd3_bus_mode
+-						|= SD_MODE_UHS_DDR50;
++						|= SD_MODE_UHS_DDR50 | SD_MODE_UHS_SDR50
++								| SD_MODE_UHS_SDR25 | SD_MODE_UHS_SDR12;
+ 
+ 				if (data & SDIO_UHS_SDR50)
+ 					card->sw_caps.sd3_bus_mode
+-						|= SD_MODE_UHS_SDR50;
++						|= SD_MODE_UHS_SDR50 | SD_MODE_UHS_SDR25
++								| SD_MODE_UHS_SDR12;
+ 
+ 				if (data & SDIO_UHS_SDR104)
+ 					card->sw_caps.sd3_bus_mode
+-						|= SD_MODE_UHS_SDR104;
++						|= SD_MODE_UHS_SDR104 | SD_MODE_UHS_SDR50
++								| SD_MODE_UHS_SDR25 | SD_MODE_UHS_SDR12;
+ 			}
+ 
+ 			ret = mmc_io_rw_direct(card, 0, 0,
+@@ -500,10 +503,8 @@ static int sdio_set_bus_speed_mode(struct mmc_card *card)
+ 	max_rate = min_not_zero(card->quirk_max_rate,
+ 				card->sw_caps.uhs_max_dtr);
+ 
+-	if (bus_speed) {
+-		mmc_set_timing(card->host, timing);
+-		mmc_set_clock(card->host, max_rate);
+-	}
++	mmc_set_timing(card->host, timing);
++	mmc_set_clock(card->host, max_rate);
+ 
+ 	return 0;
+ }
+-- 
+2.17.1
+

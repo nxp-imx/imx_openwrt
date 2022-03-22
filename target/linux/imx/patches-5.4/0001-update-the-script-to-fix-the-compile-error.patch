@@ -1,0 +1,26 @@
+From 9f881769906d958ad83b64b37f3438db2a5bebe1 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 26 Jan 2022 17:08:18 +0800
+Subject: [PATCH] update the script to fix the compile error
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ scripts/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/Makefile b/scripts/Makefile
+index b4b7d8b58..936e70e04 100644
+--- a/scripts/Makefile
++++ b/scripts/Makefile
+@@ -29,7 +29,7 @@ HOSTCFLAGS_asn1_compiler.o = -I$(srctree)/include
+ HOSTCFLAGS_sign-file.o = $(CRYPTO_CFLAGS)
+ HOSTLDLIBS_sign-file = $(CRYPTO_LIBS)
+ HOSTCFLAGS_extract-cert.o = $(CRYPTO_CFLAGS)
+-HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS)
++HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS) -lpthread
+ 
+ always		:= $(hostprogs-y) $(hostprogs-m)
+ 
+-- 
+2.25.1
+

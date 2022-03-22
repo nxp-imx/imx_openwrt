@@ -1,0 +1,197 @@
+From 7315c16a1280a3fa58cbf9fe1effeef5bdf35d69 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Mon, 14 Mar 2022 17:59:36 +0800
+Subject: [PATCH 27/28] mmc: add feature of setting slot index via devicetree
+ alias
+
+This feature aims at hard code the mmc/sd root device,
+to fix mount root file system problem.
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/mmc/core/core.c | 38 ++++++++++++++++++++++++++++++++++++++
+ drivers/mmc/core/core.h |  2 ++
+ drivers/mmc/core/host.c | 12 ++++++++++--
+ drivers/of/base.c       | 30 ++++++++++++++++++++++++++++++
+ include/linux/of.h      |  6 ++++++
+ 5 files changed, 86 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mmc/core/core.c b/drivers/mmc/core/core.c
+index 8f94c2539..0697e7432 100644
+--- a/drivers/mmc/core/core.c
++++ b/drivers/mmc/core/core.c
+@@ -52,6 +52,8 @@
+ 
+ static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
+ 
++static int __mmc_max_reserved_idx = -1;
++
+ /*
+  * Enabling software CRCs on the data blocks can be a significant (30%)
+  * performance cost, and for other reasons may not always be desired.
+@@ -2395,10 +2397,46 @@ void mmc_stop_host(struct mmc_host *host)
+ 	mmc_release_host(host);
+ }
+ 
++/*
++ * mmc_first_nonreserved_index() - get the first index that
++ * is not reserved
++ */
++int mmc_first_nonreserved_index(void)
++{
++       return __mmc_max_reserved_idx + 1;
++}
++EXPORT_SYMBOL(mmc_first_nonreserved_index);
++
++/*
++ * mmc_get_reserved_index() - get the index reserved for this host
++ * Return: The index reserved for this host or negative error value
++ *        if no index is reserved for this host
++ */
++int mmc_get_reserved_index(struct mmc_host *host)
++{
++       return of_alias_get_id(host->parent->of_node, "mmc");
++}
++EXPORT_SYMBOL(mmc_get_reserved_index);
++
++static void mmc_of_reserve_idx(void)
++{
++       int max;
++
++       max = of_alias_max_index("mmc");
++       if (max < 0)
++               return;
++
++       __mmc_max_reserved_idx = max;
++       pr_debug("MMC: reserving %d slots for of aliases\n",
++                       __mmc_max_reserved_idx + 1);
++}
++
+ static int __init mmc_init(void)
+ {
+ 	int ret;
+ 
++	mmc_of_reserve_idx();
++
+ 	ret = mmc_register_bus();
+ 	if (ret)
+ 		return ret;
+diff --git a/drivers/mmc/core/core.h b/drivers/mmc/core/core.h
+index db3c9c688..e0f2ca8d3 100644
+--- a/drivers/mmc/core/core.h
++++ b/drivers/mmc/core/core.h
+@@ -79,6 +79,8 @@ int mmc_detect_card_removed(struct mmc_host *host);
+ int mmc_attach_mmc(struct mmc_host *host);
+ int mmc_attach_sd(struct mmc_host *host);
+ int mmc_attach_sdio(struct mmc_host *host);
++int mmc_first_nonreserved_index(void);
++int mmc_get_reserved_index(struct mmc_host *host);
+ 
+ /* Module parameters */
+ extern bool use_spi_crc;
+diff --git a/drivers/mmc/core/host.c b/drivers/mmc/core/host.c
+index f7339590a..9c7dc85c3 100644
+--- a/drivers/mmc/core/host.c
++++ b/drivers/mmc/core/host.c
+@@ -433,6 +433,7 @@ EXPORT_SYMBOL(mmc_of_parse_voltage);
+ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
+ {
+ 	int err;
++	int alias_id;
+ 	struct mmc_host *host;
+ 
+ 	host = kzalloc(sizeof(struct mmc_host) + extra, GFP_KERNEL);
+@@ -441,8 +442,16 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
+ 
+ 	/* scanning will be enabled when we're ready */
+ 	host->rescan_disable = 1;
++	host->parent = dev;
+ 
+-	err = ida_simple_get(&mmc_host_ida, 0, 0, GFP_KERNEL);
++       alias_id = mmc_get_reserved_index(host);
++       if (alias_id >= 0)
++               err = ida_simple_get(&mmc_host_ida, alias_id,
++                               alias_id + 1, GFP_KERNEL);
++       else
++               err = ida_simple_get(&mmc_host_ida,
++                                       mmc_first_nonreserved_index(),
++                                       0, GFP_KERNEL);
+ 	if (err < 0) {
+ 		kfree(host);
+ 		return NULL;
+@@ -452,7 +461,6 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
+ 
+ 	dev_set_name(&host->class_dev, "mmc%d", host->index);
+ 
+-	host->parent = dev;
+ 	host->class_dev.parent = dev;
+ 	host->class_dev.class = &mmc_host_class;
+ 	device_initialize(&host->class_dev);
+diff --git a/drivers/of/base.c b/drivers/of/base.c
+index 1d667eb73..468d6a29c 100644
+--- a/drivers/of/base.c
++++ b/drivers/of/base.c
+@@ -1981,6 +1981,36 @@ static void of_alias_add(struct alias_prop *ap, struct device_node *np,
+ 		 ap->alias, ap->stem, ap->id, np);
+ }
+ 
++/*
++ * of_alias_max_index() - get the maximum index for a given alias stem
++ * @stem:   The alias stem for which the maximum index is searched for
++ *
++ * Given an alias stem (the alias without the number) this function
++ * returns the maximum number for which an alias exists.
++ *
++ * Return: The maximum existing alias index or -ENODEV if no alias
++ *         exists for this stem.
++ */
++int of_alias_max_index(const char *stem)
++{
++       struct alias_prop *app;
++       int max = -ENODEV;
++
++       mutex_lock(&of_mutex);
++
++       list_for_each_entry(app, &aliases_lookup, link) {
++               if (strcmp(app->stem, stem))
++                       continue;
++               if (app->id > max)
++                       max = app->id;
++       }
++
++       mutex_unlock(&of_mutex);
++
++       return max;
++}
++EXPORT_SYMBOL_GPL(of_alias_max_index);
++
+ /**
+  * of_alias_scan - Scan all properties of the 'aliases' node
+  *
+diff --git a/include/linux/of.h b/include/linux/of.h
+index a7621e2b4..9ffb43ad5 100644
+--- a/include/linux/of.h
++++ b/include/linux/of.h
+@@ -391,6 +391,7 @@ extern int of_phandle_iterator_args(struct of_phandle_iterator *it,
+ extern void of_alias_scan(void * (*dt_alloc)(u64 size, u64 align));
+ extern int of_alias_get_id(struct device_node *np, const char *stem);
+ extern int of_alias_get_highest_id(const char *stem);
++extern int of_alias_max_index(const char *stem);
+ extern int of_alias_get_alias_list(const struct of_device_id *matches,
+ 				   const char *stem, unsigned long *bitmap,
+ 				   unsigned int nbits);
+@@ -911,6 +912,11 @@ static inline int of_alias_get_alias_list(const struct of_device_id *matches,
+ 	return -ENOSYS;
+ }
+ 
++static inline int of_alias_max_index(const char *stem)
++{
++       return -ENODEV;
++}
++
+ static inline int of_machine_is_compatible(const char *compat)
+ {
+ 	return 0;
+-- 
+2.17.1
+

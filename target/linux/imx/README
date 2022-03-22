@@ -1,0 +1,83 @@
+
+I.MX OpenWRT Quick Start
+
+This is a quick start guide for imx specific usage, like introducing
+how to configure, build, and deploy OpenWrt to imx boards, so that
+users can bring up the board without difficulty.
+
+
+1. Target support
+----------------------------
+* ARMv8 64-bit
+  IMX8MPlus_DDR4	(SD boot)
+
+* cortexa7 and cortexa9
+  imx6				(not included in this doc)
+
+
+2. Build
+--------
+Before configuration and build, update and install package feeds.
+
+$ ./scripts/feeds update -a
+$ ./scripts/feeds install -a
+
+* make menuconfig
+  Target System:   "NXP imx"
+  Subtarget:       (Select subtarget)
+  Target Profile:  (Select device, or "Multiple devices")
+  Target Devices:  (Select devices. Available when Target Profile is "Multiple devices")
+  Target Images:   (Disable "GZip images" if you don't want to unzip manually to use the images.)
+
+  Note: The first time make menuconfig would create a .config file which
+  would include all dependencies for selected target. After that, make
+  menuconfig still could be used to modify packages. If want to change
+  other target, please remove .config and make menuconfig to select again.
+  Otherwise the packages selected in .config would be a mess.
+
+* make kernel_menuconfig (optional)
+  Enable/Disable kernel options
+
+* make download (or make download -j<n>)
+
+* make (or make -j<n>)
+
+* Final firmware/image
+  Path:               bin/targets/imx/<subtarget>/
+  Image for SD card:  openwrt-imx-<subtarget>-<device>-<rootfs>-sdcard.img.gz
+  Sysupgrade images:  openwrt-imx-<subtarget>-<device>-<rootfs>-sysupgrade.bin
+  Take imx8mplus_ddr4_evk board for example:
+  Will genterate: bin/targets/imx/imx8/openwrt-imx-imx8-imx8mplus-squashfs-sdcard.img
+
+3. Deploy
+---------
+The *-sdcard.img is an all-in-one image including all things for OpenWrt staring up.
+
+3.1 Program sdcard.img to SD card
+---------------------------------
+*-sdcard.img could be programmed to SD card in either u-boot environment
+or linux environment. After programming, configure the board to boot
+from SD card.
+
+* u-boot environment
+
+  => tftp a0000000 <image_name>-sdcard.img
+  => mmc write a0000000 0 a0000
+
+  Note: The default sdcard.img size is about 200MB. a0000 is the block number
+  for 320MB. blk_num = filesize / 512.
+
+* linux environment
+
+  $ sudo dd if=./<image_name>-sdcard.img of=/dev/mmcblkx
+
+  Note: Need to check the SD card device name to replace "mmcblkx".
+
+4. Known issues and limitation
+------------------------------
+
+5. Other references
+-------------------
+- NXP imx site: https://www.nxp.com/design/documentation:DOCUMENTATION#/
+
+- OpenWrt documentation: https://openwrt.org/docs/start
