@@ -9,7 +9,7 @@ users can bring up the board without difficulty.
 1. Target support
 ----------------------------
 * ARMv8 64-bit
-  IMX8MPlus_DDR4	(SD boot)
+  IMX8MPlus_LPDDR4	(SD boot)
 
 * cortexa7 and cortexa9
   imx6				(not included in this doc)
@@ -19,6 +19,12 @@ users can bring up the board without difficulty.
 --------
 Before configuration and build, update and install package feeds.
 
+$ sudo apt update
+$ sudo apt install build-essential ccache ecj fastjar file g++ gawk \
+  gettext git java-propose-classpath libelf-dev libncurses5-dev \
+  libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
+  python3-distutils python3-setuptools python3-dev rsync subversion \
+  swig time xsltproc zlib1g-dev
 $ ./scripts/feeds update -a
 $ ./scripts/feeds install -a
 
