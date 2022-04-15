@@ -70,6 +70,7 @@ For a list of supported devices see the [OpenWrt Hardware Database](https://open
 * [User Guide](https://openwrt.org/docs/guide-user/start)
 * [Developer Documentation](https://openwrt.org/docs/guide-developer/start)
 * [Technical Reference](https://openwrt.org/docs/techref/start)
+* [IMX8MPlus Guide](https://github.com/NXP/imx_openwrt/blob/imx-openwrt-21.02.01/target/linux/imx/README)
 
 ### Support Community
 
