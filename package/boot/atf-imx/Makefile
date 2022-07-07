@@ -26,26 +26,38 @@ endef
 define Host/Install
 endef
 
-define Package/atf-imx8mp
+define Package/atf-imx8m/Default
   SECTION:=boot
   CATEGORY:=Boot Loaders
-  TITLE:=NXP i.MX8Mplus SD Boot Trusted Firmware
-  PLAT:=imx8mp
+  TITLE:=NXP i.MX8M SD Boot Trusted Firmware
   MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
   BUILD_TARGET:=imx
   BUILD_SUBTARGET:=imx8
   DEPENDS:=@TARGET_imx_imx8
 endef
 
-define Build/Compile
-	$(MAKE) -C $(PKG_BUILD_DIR) CROSS_COMPILE=$(TARGET_CROSS) \
-		PLAT=$(PLAT) bl31
+define Package/atf-imx8mp
+  $(call Package/atf-imx8m/Default)
+  VARIANT:=imx8mp
 endef
+
+define Package/atf-imx8mm
+  $(call Package/atf-imx8m/Default)
+  VARIANT:=imx8mm
+endef
+
+MAKE_VARS = \
+	CROSS_COMPILE="$(TARGET_CROSS)"
+
+MAKE_FLAGS += \
+	PLAT=$(BUILD_VARIANT) \
+	bl31
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
-	$(CP) $(PKG_BUILD_DIR)/build/$(PLAT)/release/bl31.bin \
+	$(CP) $(PKG_BUILD_DIR)/build/$(BUILD_VARIANT)/release/bl31.bin \
 		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 endef
 
 $(eval $(call BuildPackage,atf-imx8mp))
+$(eval $(call BuildPackage,atf-imx8mm))

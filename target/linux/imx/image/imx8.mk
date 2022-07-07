@@ -16,12 +16,12 @@ endef
 
 define Build/imx-compile-dtb
 	# Compile dts file to dtb
-	$(call Image/BuildDTB,$(DTS_DIR)/$(DEVICE_DTS).dts,$(DTS_DIR)/$(DEVICE_DTS).dtb)
+	$(call Image/BuildDTB,$(DTS_DIR)/$(1).dts,$(DTS_DIR)/$(1).dtb)
 endef
 
 define Build/imx-create-flash
 	# Combile firmware + bl31 + uboot to flash.bin
-	cd $(STAGING_DIR_IMAGE)/$(MKIMG_DIR) && $(MAKE) SOC=$(PLAT) $(DEVICE_TYPE)
+	cd $(STAGING_DIR_IMAGE)/$(MKIMG_DIR) && $(MAKE) SOC=$(1) $(2)
 endef
 
 define Build/imx-append
@@ -31,7 +31,7 @@ endef
 
 define Build/imx-append-boot
 	# Append the uboot, firmware etc.
-	dd if=$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)/$(SOC_TYPE)/flash.bin >> $@
+	dd if=$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)/$(1)/flash.bin >> $@
 endef
 
 define Build/imx-append-dtb
@@ -43,7 +43,7 @@ define Build/imx-append-kernel
 	# append the kernel
 	mkdir -p $@.tmp && \
 	cp $(IMAGE_KERNEL) $@.tmp && \
-	cp $(DTS_DIR)/$(DEVICE_DTS).dtb $@.tmp && \
+	cp $(DTS_DIR)/$(1).dtb $@.tmp && \
 	make_ext4fs -J -L kernel -l "$(IMX_SD_KERNELPART_SIZE)M" "$@.kernel.part" "$@.tmp" && \
 	dd if=$@.kernel.part >> $@ && \
 	rm -rf $@.tmp && \
@@ -86,13 +86,40 @@ define Device/imx8mplus
 	u-boot-imx8mp
   DEVICE_DTS := freescale/imx8mp-evk
   IMAGE/sdcard.img := \
-	imx-compile-dtb | \
-	imx-create-flash | \
+	imx-compile-dtb $$(DEVICE_DTS) | \
+	imx-create-flash $$(PLAT) $$(DEVICE_TYPE) | \
 	imx-clean | \
 	imx-append-sdhead $(1) | pad-to 32K | \
-	imx-append-boot | pad-to 4M | \
+	imx-append-boot $$(SOC_TYPE) | pad-to 4M | \
 	imx-append $$(ENV_NAME)-uboot-env.bin | pad-to $(IMX_SD_KERNELPART_OFFSET)M | \
-	imx-append-kernel | pad-to $(IMX_SD_ROOTFSPART_OFFSET)M | \
+	imx-append-kernel $$(DEVICE_DTS) | pad-to $(IMX_SD_ROOTFSPART_OFFSET)M | \
 	append-rootfs | pad-to $(IMX_SD_IMAGE_SIZE)M
 endef
 TARGET_DEVICES += imx8mplus
+
+define Device/imx8mmini
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := IMX8MMINI
+  DEVICE_VARIANT := SD Card Boot
+  PLAT := iMX8MM
+  SOC_TYPE := iMX8M
+  DEVICE_TYPE := flash_evk
+  ENV_NAME:=imx8mm-sdboot
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  DEVICE_PACKAGES += \
+	atf-imx8mm \
+	firmware-imx \
+	imx-mkimage \
+	u-boot-imx8mm
+  DEVICE_DTS := freescale/imx8mm-evk
+  IMAGE/sdcard.img := \
+	imx-compile-dtb $$(DEVICE_DTS) | \
+	imx-create-flash $$(PLAT) $$(DEVICE_TYPE) | \
+	imx-clean | \
+	imx-append-sdhead $(1) | pad-to 33K | \
+	imx-append-boot $$(SOC_TYPE) | pad-to 4M | \
+	imx-append $$(ENV_NAME)-uboot-env.bin | pad-to $(IMX_SD_KERNELPART_OFFSET)M | \
+	imx-append-kernel $$(DEVICE_DTS) | pad-to $(IMX_SD_ROOTFSPART_OFFSET)M | \
+	append-rootfs | pad-to $(IMX_SD_IMAGE_SIZE)M
+endef
+TARGET_DEVICES += imx8mmini

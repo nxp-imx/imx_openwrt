@@ -1,0 +1,12 @@
+fdt_addr=0x43000000
+loadaddr=0x40480000
+fdt_high=0x8fffffff
+kernel_img=imx8mmini-kernel.bin
+fdt_img=imx8mm-evk.dtb
+initrd_high=0xffffffffffffffff
+load_img=ext4load mmc 1:1 $loadaddr $kernel_img
+load_fdt=ext4load mmc 1:1 $fdt_addr $fdt_img
+sd_boot=run load_img && run load_fdt && booti $loadaddr - $fdt_addr
+bootargs=root=/dev/mmcblk1p2 rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttymxc1,115200
+bootcmd=echo starting openwrt ...;run sd_boot
+bootdelay=3
