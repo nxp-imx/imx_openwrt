@@ -85,13 +85,26 @@ define U-Boot/imx8mn
   ENV_SIZE:=0x4000
 endef
 
+define U-Boot/imx8mq
+  NAME:=imx8mquad lpddr4 board
+  BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=imx8
+  UBOOT_CONFIG:=imx8mq_evk
+  ENV_NAME:=imx8mq-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DTB_NAME:=imx8mq-evk.dtb
+  DEPENDS:=+imx-mkimage
+  ENV_SIZE:=0x4000
+endef
+
 UBOOT_TARGETS := \
 	apalis_imx6 \
 	mx6cuboxi \
 	wandboard \
 	imx8mp \
 	imx8mm \
-	imx8mn
+	imx8mn \
+	imx8mq
 
 ifeq ($(SUBTARGET),imx8)
 define Build/InstallDev

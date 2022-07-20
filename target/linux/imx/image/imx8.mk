@@ -150,3 +150,30 @@ define Device/imx8mnano
 	append-rootfs | pad-to $(IMX_SD_IMAGE_SIZE)M
 endef
 TARGET_DEVICES += imx8mnano
+
+define Device/imx8mquad
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := IMX8MQUAD
+  DEVICE_VARIANT := SD Card Boot
+  PLAT := iMX8MQ
+  SOC_TYPE := iMX8M
+  DEVICE_TYPE := flash_evk
+  ENV_NAME:=imx8mq-sdboot
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  DEVICE_PACKAGES += \
+	atf-imx8mq \
+	firmware-imx \
+	imx-mkimage \
+	u-boot-imx8mq
+  DEVICE_DTS := freescale/imx8mq-evk
+  IMAGE/sdcard.img := \
+	imx-compile-dtb $$(DEVICE_DTS) | \
+	imx-create-flash $$(PLAT) $$(DEVICE_TYPE) | \
+	imx-clean | \
+	imx-append-sdhead $(1) | pad-to 33K | \
+	imx-append-boot $$(SOC_TYPE) | pad-to 4M | \
+	imx-append $$(ENV_NAME)-uboot-env.bin | pad-to $(IMX_SD_KERNELPART_OFFSET)M | \
+	imx-append-kernel $$(DEVICE_DTS) | pad-to $(IMX_SD_ROOTFSPART_OFFSET)M | \
+	append-rootfs | pad-to $(IMX_SD_IMAGE_SIZE)M
+endef
+TARGET_DEVICES += imx8mquad

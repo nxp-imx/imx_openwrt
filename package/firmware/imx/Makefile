@@ -42,6 +42,8 @@ define Build/InstallDev
 	cd $(PKG_BUILD_DIR) && ./$(PKG_SOURCE) --auto-accept
 	$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/ddr/synopsys/* \
 		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/hdmi/cadence/* \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 endef
 
 $(eval $(call BuildPackage,firmware-imx))

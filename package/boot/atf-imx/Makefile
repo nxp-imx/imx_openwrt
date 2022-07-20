@@ -51,6 +51,11 @@ define Package/atf-imx8mn
   VARIANT:=imx8mn
 endef
 
+define Package/atf-imx8mq
+  $(call Package/atf-imx8m/Default)
+  VARIANT:=imx8mq
+endef
+
 MAKE_VARS = \
 	CROSS_COMPILE="$(TARGET_CROSS)"
 
@@ -67,3 +72,4 @@ endef
 $(eval $(call BuildPackage,atf-imx8mp))
 $(eval $(call BuildPackage,atf-imx8mm))
 $(eval $(call BuildPackage,atf-imx8mn))
+$(eval $(call BuildPackage,atf-imx8mq))
