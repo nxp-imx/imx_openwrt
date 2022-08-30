@@ -1,0 +1,69 @@
+From b671acdd69098b12ff7f567b1b6211ab4f38bf20 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 28 Jun 2022 14:26:12 +0800
+Subject: [PATCH] fix the compiling error
+
+The following erro occur when compiling openwrt kernel.
+This patch is to fix this.
+
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-eng_all.o): in function `ENGINE_load_builtin_engines':
+eng_all.c:(.text+0x34): undefined reference to `pthread_once'
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-err.o): in function `ERR_load_ERR_strings':
+err.c:(.text+0xad2): undefined reference to `pthread_once'
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-err_all.o): in function `ERR_load_crypto_strings':
+err_all.c:(.text+0xb3): undefined reference to `pthread_once'
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-c_all.o): in function `OpenSSL_add_all_ciphers':
+c_all.c:(.text+0x9e3): undefined reference to `pthread_once'
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-c_all.o): in function `OpenSSL_add_all_digests':
+c_all.c:(.text+0xa03): undefined reference to `pthread_once'
+/usr/bin/ld: /mnt/openwrt/staging_dir/host/lib/libcrypto.a(libcrypto_la-crypto_init.o):crypto_init.c:(.text+0x55): more undefined references to `pthread_once' follow
+collect2: error: ld returned 1 exit status
+make[6]: *** [scripts/Makefile.host:95: scripts/extract-cert] Error 1
+make[5]: *** [Makefile:1206: scripts] Error 2
+make[5]: Leaving directory '/mnt/openwrt/build_dir/target-aarch64_generic_musl/linux-imx_cortexa53/linux-5.15.50'
+make[4]: *** [Makefile:19: /mnt/openwrt/build_dir/target-aarch64_generic_musl/linux-imx_cortexa53/linux-5.15.50/.modules] Error 2
+make[4]: Leaving directory '/mnt/openwrt/target/linux/imx'
+make[3]: *** [Makefile:11: compile] Error 2
+make[3]: Leaving directory '/mnt/openwrt/target/linux'
+time: target/linux/compile#0.77#0.15#0.95
+    ERROR: target/linux failed to build.
+make[2]: *** [target/Makefile:30: target/linux/compile] Error 1
+make[2]: Leaving directory '/mnt/openwrt'
+make[1]: *** [target/Makefile:23: /mnt/openwrt/staging_dir/target-aarch64_generic_musl/stamp/.target_compile] Error 2
+make[1]: Leaving directory '/mnt/openwrt'
+make: *** [/mnt/openwrt/include/toplevel.mk:230: world] Error 2
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ arch/arm64/kvm/hyp/nvhe/gen-hyprel.c | 1 +
+ scripts/Makefile                     | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c b/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
+index 6bc88a756cb7..99506facd30e 100644
+--- a/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
++++ b/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
+@@ -36,6 +36,7 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
++#include <uapi/linux/elf-em.h>
+ 
+ #include <generated/autoconf.h>
+ 
+diff --git a/scripts/Makefile b/scripts/Makefile
+index 9adb6d247818..7013da949282 100644
+--- a/scripts/Makefile
++++ b/scripts/Makefile
+@@ -21,7 +21,7 @@ HOSTCFLAGS_asn1_compiler.o = -I$(srctree)/include
+ HOSTCFLAGS_sign-file.o = $(CRYPTO_CFLAGS)
+ HOSTLDLIBS_sign-file = $(CRYPTO_LIBS)
+ HOSTCFLAGS_extract-cert.o = $(CRYPTO_CFLAGS)
+-HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS)
++HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS) -lpthread
+ 
+ ifdef CONFIG_UNWINDER_ORC
+ ifeq ($(ARCH),x86_64)
+-- 
+2.25.1
+
