@@ -18,16 +18,22 @@ define Trusted-Firmware-A/Default
   BUILD_SUBTARGET:=cortexa53
   TFA_IMAGE:=bl31.bin
   MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
-  DEPENDS:=@TARGET_imx_cortexa53
-  UBOOT:=
+endef
+
+define Trusted-Firmware-A/atf-imx8mp
+  NAME:=NXP IMX8M mini evk board
+  BUILD_DEVICES:=imx8mplus
+  VARIANT:=imx8mp
 endef
 
 define Trusted-Firmware-A/atf-imx8mm
   NAME:=NXP IMX8M mini evk board
+  BUILD_DEVICES:=imx8mmini
   VARIANT:=imx8mm
 endef
 
 TFA_TARGETS:= \
+	atf-imx8mp \
 	atf-imx8mm
 
 TFA_MAKE_FLAGS += \

@@ -68,6 +68,7 @@ define Device/Default
   KERNEL = kernel-bin
   IMAGES := sdcard.img sysupgrade.bin
   IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+  HIDDEN:=1
 endef
 
 define Device/imx8mplus

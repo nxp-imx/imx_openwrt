@@ -38,6 +38,17 @@ define U-Boot/mx6cuboxi
   UBOOT_MAKE_FLAGS += u-boot.imx
 endef
 
+define U-Boot/imx6ull
+  NAME:=imx6ultra lite board
+  BUILD_SUBTARGET:=cortexa7
+  BUILD_DEVICES:=imx6ull
+  UBOOT_CONFIG:=mx6ull_14x14_evk
+  ENV_SIZE:=0x2000
+  ENV_NAME:=imx6ull-sdboot
+  DTB_NAME:=imx6ull-14x14-evk
+  UBOOT_IMAGE:=u-boot-dtb.imx
+endef
+
 define U-Boot/wandboard
   NAME:=Wandboard Dual Lite/Quad/Solo
   BUILD_SUBTARGET:=cortexa9
@@ -46,33 +57,33 @@ define U-Boot/wandboard
 endef
 
 define U-Boot/imx8mp
-  NAME:=imx8mplus lpddr4 board
-  BUILD_TARGET:=imx
   BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mplus
+  NAME:=imx8mplus lpddr4 board
   UBOOT_CONFIG:=imx8mp_evk
   ENV_NAME:=imx8mp-sdboot
   MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
   DTB_NAME:=imx8mp-evk.dtb
-  DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
+  DEPENDS:=@TARGET_imx_cortexa53
 endef
 
 define U-Boot/imx8mm
-  NAME:=imx8mmini lpddr4 board
-  BUILD_TARGET:=imx
   BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mmini
+  NAME:=imx8mmini lpddr4 board
   UBOOT_CONFIG:=imx8mm_evk
   ENV_NAME:=imx8mm-sdboot
   MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
   DTB_NAME:=imx8mm-evk.dtb
-  DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x1000
-  DEPENDS:=+trusted-firmware-a-atf-imx8mm
+  DEPENDS:=@TARGET_imx_cortexa53
 endef
 
 UBOOT_TARGETS := \
 	apalis_imx6 \
 	mx6cuboxi \
+	imx6ull \
 	wandboard \
 	imx8mp \
 	imx8mm
@@ -98,6 +109,11 @@ define Build/InstallDev
 	$(foreach img,$(UBOOT_IMAGE), \
 		$(CP) $(PKG_BUILD_DIR)/$(img) $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-$(img); \
 	)
+    ifneq ($(ENV_NAME),)
+		$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
+			-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
+			files/$(ENV_NAME)-uEnv.txt
+    endif
 endef
 endif
 

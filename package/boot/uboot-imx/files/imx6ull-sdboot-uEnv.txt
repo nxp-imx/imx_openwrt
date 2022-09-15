@@ -1,0 +1,12 @@
+fdt_addr=0x83000000
+loadaddr=0x80800000
+fdt_high=0xffffffff
+kernel_img=imx6ull-zImage
+fdt_img=image-imx6ull-14x14-evk.dtb
+initrd_high=0xffffffffffffffff
+load_img=ext4load mmc 1:1 $loadaddr $kernel_img
+load_fdt=ext4load mmc 1:1 $fdt_addr $fdt_img
+sd_boot=run load_img && run load_fdt && bootz $loadaddr - $fdt_addr
+bootargs=root=/dev/mmcblk1p2 rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttymxc0,115200
+bootcmd=echo starting openwrt ...;run sd_boot
+bootdelay=3
