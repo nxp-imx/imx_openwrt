@@ -1,0 +1,4481 @@
+From 2f0a7910ce9219c32b96a86e89d4f80061a661f1 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 4 Jan 2023 15:22:15 +0800
+Subject: [PATCH 11/12] Add imx8mp USB support
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/phy/freescale/phy-fsl-imx8mq-usb.c | 642 ++++++++++++++++++++-
+ drivers/phy/phy-core.c                     |   5 +
+ drivers/usb/cdns3/cdns3-gadget.c           |   7 +-
+ drivers/usb/cdns3/cdnsp-debug.h            | 305 +++++-----
+ drivers/usb/cdns3/cdnsp-ring.c             |  19 +-
+ drivers/usb/chipidea/bits.h                |   4 +
+ drivers/usb/chipidea/ci.h                  |  43 +-
+ drivers/usb/chipidea/ci_hdrc_imx.c         |  68 +--
+ drivers/usb/chipidea/ci_hdrc_imx.h         |   4 +-
+ drivers/usb/chipidea/core.c                | 133 ++++-
+ drivers/usb/chipidea/host.c                | 165 +++++-
+ drivers/usb/chipidea/otg.c                 |   7 +-
+ drivers/usb/chipidea/otg.h                 |   1 +
+ drivers/usb/chipidea/udc.c                 |  50 ++
+ drivers/usb/chipidea/usbmisc_imx.c         | 198 ++++++-
+ drivers/usb/core/hcd.c                     |  29 +-
+ drivers/usb/dwc3/core.c                    | 228 +++++++-
+ drivers/usb/dwc3/core.h                    |  35 ++
+ drivers/usb/dwc3/drd.c                     |  35 +-
+ drivers/usb/dwc3/dwc3-imx8mp.c             |  52 +-
+ drivers/usb/dwc3/dwc3-omap.c               |   2 +-
+ drivers/usb/dwc3/dwc3-pci.c                |  21 +-
+ drivers/usb/dwc3/gadget.c                  |  61 +-
+ drivers/usb/dwc3/host.c                    |  57 ++
+ drivers/usb/host/ehci-hcd.c                |   2 +-
+ drivers/usb/host/xhci-hub.c                |  20 +-
+ drivers/usb/host/xhci-mem.c                |   2 +-
+ drivers/usb/host/xhci-pci.c                |   6 +-
+ drivers/usb/host/xhci-plat.c               |   7 +-
+ drivers/usb/host/xhci-ring.c               | 131 ++++-
+ drivers/usb/host/xhci.c                    |  36 +-
+ drivers/usb/host/xhci.h                    |  26 +-
+ drivers/usb/typec/tcpm/tcpci.c             |  90 ++-
+ drivers/usb/typec/tcpm/tcpci.h             |   2 +
+ drivers/usb/typec/tcpm/tcpm.c              |  34 +-
+ include/linux/phy/phy.h                    |   2 +
+ include/linux/usb/chipidea.h               |   3 +
+ include/linux/usb/hcd.h                    |   2 -
+ include/linux/usb/phy.h                    |  43 ++
+ 39 files changed, 2104 insertions(+), 473 deletions(-)
+
+diff --git a/drivers/phy/freescale/phy-fsl-imx8mq-usb.c b/drivers/phy/freescale/phy-fsl-imx8mq-usb.c
+index a29b4a6f7..2f905616f 100644
+--- a/drivers/phy/freescale/phy-fsl-imx8mq-usb.c
++++ b/drivers/phy/freescale/phy-fsl-imx8mq-usb.c
+@@ -3,23 +3,30 @@
+ 
+ #include <linux/bitfield.h>
+ #include <linux/clk.h>
++#include <linux/debugfs.h>
+ #include <linux/delay.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
+ #include <linux/of_platform.h>
+ #include <linux/phy/phy.h>
+ #include <linux/platform_device.h>
++#include <linux/power_supply.h>
+ #include <linux/regulator/consumer.h>
+ 
+ #define PHY_CTRL0			0x0
+ #define PHY_CTRL0_REF_SSP_EN		BIT(2)
+ #define PHY_CTRL0_FSEL_MASK		GENMASK(10, 5)
+ #define PHY_CTRL0_FSEL_24M		0x2a
++#define PHY_CTRL0_FSEL_100M		0x27
++#define PHY_CTRL0_SSC_RANGE_MASK	GENMASK(23, 21)
++#define PHY_CTRL0_SSC_RANGE_4003PPM	(0x2 << 21)
+ 
+ #define PHY_CTRL1			0x4
+ #define PHY_CTRL1_RESET			BIT(0)
+ #define PHY_CTRL1_COMMONONN		BIT(1)
+ #define PHY_CTRL1_ATERESET		BIT(3)
++#define PHY_CTRL1_DCDENB		BIT(17)
++#define PHY_CTRL1_CHRGSEL		BIT(18)
+ #define PHY_CTRL1_VDATSRCENB0		BIT(19)
+ #define PHY_CTRL1_VDATDETENB0		BIT(20)
+ 
+@@ -27,17 +34,371 @@
+ #define PHY_CTRL2_TXENABLEN0		BIT(8)
+ #define PHY_CTRL2_OTG_DISABLE		BIT(9)
+ 
++#define PHY_CTRL3			0xc
++#define PHY_CTRL3_COMPDISTUNE_MASK	GENMASK(2, 0)
++#define PHY_CTRL3_TXPREEMP_TUNE_MASK	GENMASK(16, 15)
++#define PHY_CTRL3_TXPREEMP_TUNE_SHIFT	15
++#define PHY_CTRL3_TXRISE_TUNE_MASK	GENMASK(21, 20)
++#define PHY_CTRL3_TXRISE_TUNE_SHIFT	20
++/* 1111: +24% ... 0000: -6% step: 2% */
++#define PHY_CTRL3_TXVREF_TUNE_MASK	GENMASK(25, 22)
++#define PHY_CTRL3_TXVREF_TUNE_SHIFT	22
++#define PHY_CTRL3_TX_VBOOST_LEVEL_MASK	GENMASK(31, 29)
++#define PHY_CTRL3_TX_VBOOST_LEVEL_SHIFT	29
++
++#define PHY_CTRL4			0x10
++#define PHY_CTRL4_PCS_TX_DEEMPH_3P5DB_MASK	GENMASK(20, 15)
++#define PHY_CTRL4_PCS_TX_DEEMPH_3P5DB_SHIFT	15
++
++#define PHY_CTRL5			0x14
++#define PHY_CTRL5_DMPWD_OVERRIDE_SEL	BIT(23)
++#define PHY_CTRL5_DMPWD_OVERRIDE	BIT(22)
++#define PHY_CTRL5_DPPWD_OVERRIDE_SEL	BIT(21)
++#define PHY_CTRL5_DPPWD_OVERRIDE	BIT(20)
++#define PHY_CTRL5_PCS_TX_SWING_FULL_MASK	GENMASK(6, 0)
++
+ #define PHY_CTRL6			0x18
++#define PHY_CTRL6_RXTERM_OVERRIDE_SEL	BIT(29)
+ #define PHY_CTRL6_ALT_CLK_EN		BIT(1)
+ #define PHY_CTRL6_ALT_CLK_SEL		BIT(0)
+ 
++/* PHY control register access */
++#define PHY_CTRL_REG_COUNT_MAX		0x42
++#define PHY_CTRL_REG_OFFSET_MAX		0x201f
++
++#define PHY_CRCTL                      0x30
++#define PHY_CRCTL_DATA_IN_MASK         GENMASK(15, 0)
++#define PHY_CRCTL_CAP_ADDR             BIT(16)
++#define PHY_CRCTL_CAP_DATA             BIT(17)
++#define PHY_CRCTL_CR_WRITE             BIT(18)
++#define PHY_CRCTL_CR_READ              BIT(19)
++
++#define PHY_CRSR			0x34
++#define PHY_CRSR_DATA_OUT_MASK		GENMASK(15, 0)
++#define PHY_CRSR_CR_ACK			BIT(16)
++
++#define PHY_STS0			0x40
++#define PHY_STS0_OTGSESSVLD		BIT(7)
++#define PHY_STS0_CHGDET			BIT(4)
++#define PHY_STS0_FSVPLUS		BIT(3)
++#define PHY_STS0_FSVMINUS		BIT(2)
++
++#define PHY_TUNE_DEFAULT		0xffffffff
++
+ struct imx8mq_usb_phy {
+ 	struct phy *phy;
+ 	struct clk *clk;
+ 	void __iomem *base;
+ 	struct regulator *vbus;
++	struct notifier_block chg_det_nb;
++	struct power_supply *vbus_power_supply;
++	enum power_supply_usb_type chg_type;
++	struct dentry *debugfs;
++	u16	cr_access_base;
++	u16	cr_read_count;
++	u32	pcs_tx_swing_full;
++	u32	pcs_tx_deemph_3p5db;
++	u32	tx_vref_tune;
++	u32	tx_rise_tune;
++	u32	tx_preemp_amp_tune;
++	u32	tx_vboost_level;
++	u32	comp_dis_tune;
++};
++
++#define IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT 500000
++static int imx8mq_phy_ctrl_reg_addr(struct imx8mq_usb_phy *imx_phy, u16 offset)
++{
++	void __iomem	*cr_ctrl = imx_phy->base + PHY_CRCTL;
++	void __iomem	*cr_sr = imx_phy->base + PHY_CRSR;
++	struct device	*dev = &imx_phy->phy->dev;
++	int i;
++
++	/* Address Phrase */
++	writel(offset, cr_ctrl);
++	writel(readl(cr_ctrl) | PHY_CRCTL_CAP_ADDR, cr_ctrl);
++
++	/* Wait CRSR[16] == 1 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while (!(readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_addr_err;
++
++	writel(readl(cr_ctrl) & (~PHY_CRCTL_CAP_ADDR), cr_ctrl);
++
++	/* Wait CRSR[16] == 0 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while ((readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_addr_err;
++
++	return 0;
++
++cr_addr_err:
++	dev_err(dev, "Failed to address reg 0x%x.\n", offset);
++	return -EIO;
++}
++
++static int imx8mq_phy_ctrl_reg_read(struct imx8mq_usb_phy *imx_phy, u16 offset)
++{
++	void __iomem	*cr_ctrl = imx_phy->base + PHY_CRCTL;
++	void __iomem	*cr_sr = imx_phy->base + PHY_CRSR;
++	struct device	*dev = &imx_phy->phy->dev;
++	int val, i;
++
++	/* Address Phrase */
++	val = imx8mq_phy_ctrl_reg_addr(imx_phy, offset);
++	if (val)
++		return val;
++
++	/* Read Phrase */
++	writel(readl(cr_ctrl) | PHY_CRCTL_CR_READ, cr_ctrl);
++
++	/* Wait CRSR[16] == 1 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while (!(readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_read_err;
++
++	val = readl(cr_sr);
++	writel(val & ~PHY_CRCTL_CR_READ, cr_ctrl);
++
++	/* Wait CRSR[16] == 0 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while (!(readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_read_err;
++
++	return val;
++
++cr_read_err:
++	dev_err(dev, "Failed to read reg 0x%x.\n", offset);
++	return -EIO;
++}
++
++static int imx8mq_phy_ctrl_reg_write(struct imx8mq_usb_phy *imx_phy,
++				u16 offset, u16 val)
++{
++	void __iomem	*cr_ctrl = imx_phy->base + PHY_CRCTL;
++	void __iomem	*cr_sr = imx_phy->base + PHY_CRSR;
++	struct device	*dev = &imx_phy->phy->dev;
++	int i, ret;
++
++	/* Address Phrase */
++	ret = imx8mq_phy_ctrl_reg_addr(imx_phy, offset);
++	if (ret)
++		return ret;
++
++	writel(val, cr_ctrl);
++
++	/* Set cr_cap_data to be 1'b1 */
++	writel(readl(cr_ctrl) | PHY_CRCTL_CAP_DATA, cr_ctrl);
++	/* Wait CRSR[16] == 1 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while (!(readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_write_err;
++
++	/* Clear cr_cap_data to be 1'br0 */
++	writel(readl(cr_ctrl) & ~PHY_CRCTL_CAP_DATA, cr_ctrl);
++	/* Wait CRSR[16] == 0 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while ((readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_write_err;
++
++	/* Set cr_write to be 1'b1 */
++	writel(readl(cr_ctrl) | PHY_CRCTL_CR_WRITE, cr_ctrl);
++	/* Wait CRSR[16] == 1 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while (!(readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_write_err;
++
++	/* Clear cr_write to be 1'br0 */
++	writel(readl(cr_ctrl) & ~PHY_CRCTL_CR_WRITE, cr_ctrl);
++	/* Wait CRSR[16] == 0 */
++	i = IMX8M_PHY_DEBUG_PORT_LOOP_TIMEOUT;
++	while ((readl(cr_sr) & PHY_CRSR_CR_ACK) && i > 0)
++		i--;
++	if (i == 0)
++		goto cr_write_err;
++
++	return 0;
++
++cr_write_err:
++	dev_err(dev, "Failed to write reg 0x%x.\n", offset);
++
++	return -EIO;
++
++}
++
++static int ctrl_reg_value_show(struct seq_file *s, void *unused)
++{
++	struct imx8mq_usb_phy	*imx_phy = s->private;
++	u16			i, val, base = imx_phy->cr_access_base;
++
++	for (i = 0; i < imx_phy->cr_read_count; i++) {
++		val = imx8mq_phy_ctrl_reg_read(imx_phy, base + i);
++		seq_printf(s, "Control Register 0x%x value is 0x%4x\n",
++			   base + i, val);
++	}
++
++	return 0;
++}
++
++static int ctrl_reg_value_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, ctrl_reg_value_show, inode->i_private);
++}
++
++static ssize_t ctrl_reg_value_write(struct file *file, const char __user *ubuf,
++			       size_t count, loff_t *ppos)
++{
++	struct seq_file		*s = file->private_data;
++	struct imx8mq_usb_phy	*imx_phy = s->private;
++	u16			cr_value;
++	int			ret;
++
++	ret = kstrtou16_from_user(ubuf, count, 16, &cr_value);
++	if (ret)
++		return ret;
++
++	imx8mq_phy_ctrl_reg_write(imx_phy, imx_phy->cr_access_base, cr_value);
++
++	return count;
++}
++
++static const struct file_operations ctrl_reg_value_fops = {
++	.open		= ctrl_reg_value_open,
++	.write		= ctrl_reg_value_write,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
+ };
+ 
++static void debug_create_files(struct imx8mq_usb_phy *imx_phy)
++{
++	struct device *dev = &imx_phy->phy->dev;
++
++	imx_phy->debugfs = debugfs_create_dir(dev_name(dev),
++					      phy_debugfs_root);
++
++	debugfs_create_x16("ctrl_reg_base", 0600, imx_phy->debugfs,
++			   &imx_phy->cr_access_base);
++	debugfs_create_x16("ctrl_reg_count", 0600, imx_phy->debugfs,
++			   &imx_phy->cr_read_count);
++	debugfs_create_file("ctrl_reg_value", 0600, imx_phy->debugfs,
++			    imx_phy, &ctrl_reg_value_fops);
++
++	imx_phy->cr_access_base = 0;
++	imx_phy->cr_read_count = 1;
++}
++
++static void debug_remove_files(struct imx8mq_usb_phy *imx_phy)
++{
++	debugfs_remove_recursive(imx_phy->debugfs);
++}
++
++static void imx8m_get_phy_tuning_data(struct imx8mq_usb_phy *imx_phy)
++{
++	struct device *dev = imx_phy->phy->dev.parent;
++
++	if (device_property_read_u32(dev, "fsl,phy-tx-vref-tune",
++				     &imx_phy->tx_vref_tune))
++		imx_phy->tx_vref_tune = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,phy-tx-rise-tune",
++				     &imx_phy->tx_rise_tune))
++		imx_phy->tx_rise_tune = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,phy-tx-preemp-amp-tune",
++				     &imx_phy->tx_preemp_amp_tune))
++		imx_phy->tx_preemp_amp_tune = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,phy-tx-vboost-level",
++				     &imx_phy->tx_vboost_level))
++		imx_phy->tx_vboost_level = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,phy-comp-dis-tune",
++				     &imx_phy->comp_dis_tune))
++		imx_phy->comp_dis_tune = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,pcs-tx-deemph-3p5db",
++				     &imx_phy->pcs_tx_deemph_3p5db))
++		imx_phy->pcs_tx_deemph_3p5db = PHY_TUNE_DEFAULT;
++
++	if (device_property_read_u32(dev, "fsl,phy-pcs-tx-swing-full",
++				     &imx_phy->pcs_tx_swing_full))
++		imx_phy->pcs_tx_swing_full = PHY_TUNE_DEFAULT;
++}
++
++static void imx8m_phy_tune(struct imx8mq_usb_phy *imx_phy)
++{
++	u32 value;
++
++	/* PHY tuning */
++	if (imx_phy->pcs_tx_deemph_3p5db != PHY_TUNE_DEFAULT) {
++		value = readl(imx_phy->base + PHY_CTRL4);
++		value &= ~PHY_CTRL4_PCS_TX_DEEMPH_3P5DB_MASK;
++		value |= imx_phy->pcs_tx_deemph_3p5db <<
++			 PHY_CTRL4_PCS_TX_DEEMPH_3P5DB_SHIFT;
++		writel(value, imx_phy->base + PHY_CTRL4);
++	}
++
++	if (imx_phy->pcs_tx_swing_full != PHY_TUNE_DEFAULT) {
++		value = readl(imx_phy->base + PHY_CTRL5);
++		value &= ~PHY_CTRL5_PCS_TX_SWING_FULL_MASK;
++		value |= imx_phy->pcs_tx_swing_full;
++		writel(value, imx_phy->base + PHY_CTRL5);
++	}
++
++	if ((imx_phy->tx_vref_tune & imx_phy->tx_rise_tune &
++	     imx_phy->tx_preemp_amp_tune & imx_phy->comp_dis_tune &
++	     imx_phy->tx_vboost_level) == PHY_TUNE_DEFAULT)
++		/* If all are the default values, no need update. */
++		return;
++
++	value = readl(imx_phy->base + PHY_CTRL3);
++	if (imx_phy->tx_vref_tune == PHY_TUNE_DEFAULT)
++		imx_phy->tx_vref_tune = (value & PHY_CTRL3_TXVREF_TUNE_MASK) >>
++					PHY_CTRL3_TXVREF_TUNE_SHIFT;
++
++	if (imx_phy->tx_rise_tune == PHY_TUNE_DEFAULT)
++		imx_phy->tx_rise_tune = (value & PHY_CTRL3_TXRISE_TUNE_MASK) >>
++					PHY_CTRL3_TXRISE_TUNE_SHIFT;
++
++	if (imx_phy->tx_preemp_amp_tune == PHY_TUNE_DEFAULT)
++		imx_phy->tx_preemp_amp_tune = (value & PHY_CTRL3_TXPREEMP_TUNE_MASK) >>
++					      PHY_CTRL3_TXPREEMP_TUNE_SHIFT;
++
++	if (imx_phy->comp_dis_tune == PHY_TUNE_DEFAULT)
++		imx_phy->comp_dis_tune = value & PHY_CTRL3_COMPDISTUNE_MASK;
++
++	if (imx_phy->tx_vboost_level == PHY_TUNE_DEFAULT)
++		imx_phy->tx_vboost_level = (value & PHY_CTRL3_TX_VBOOST_LEVEL_MASK) >>
++					   PHY_CTRL3_TX_VBOOST_LEVEL_SHIFT;
++
++	value &= ~(PHY_CTRL3_TXVREF_TUNE_MASK |
++		   PHY_CTRL3_TXRISE_TUNE_MASK |
++		   PHY_CTRL3_TXPREEMP_TUNE_MASK |
++		   PHY_CTRL3_COMPDISTUNE_MASK |
++		   PHY_CTRL3_TX_VBOOST_LEVEL_MASK);
++	value |= imx_phy->tx_vref_tune << PHY_CTRL3_TXVREF_TUNE_SHIFT |
++		 imx_phy->tx_rise_tune << PHY_CTRL3_TXRISE_TUNE_SHIFT |
++		 imx_phy->tx_preemp_amp_tune << PHY_CTRL3_TXPREEMP_TUNE_SHIFT |
++		 imx_phy->tx_vboost_level << PHY_CTRL3_TX_VBOOST_LEVEL_SHIFT |
++		 imx_phy->comp_dis_tune;
++
++	writel(value, imx_phy->base + PHY_CTRL3);
++}
++
+ static int imx8mq_usb_phy_init(struct phy *phy)
+ {
+ 	struct imx8mq_usb_phy *imx_phy = phy_get_drvdata(phy);
+@@ -51,6 +412,8 @@ static int imx8mq_usb_phy_init(struct phy *phy)
+ 
+ 	value = readl(imx_phy->base + PHY_CTRL0);
+ 	value |= PHY_CTRL0_REF_SSP_EN;
++	value &= ~PHY_CTRL0_SSC_RANGE_MASK;
++	value |= PHY_CTRL0_SSC_RANGE_4003PPM;
+ 	writel(value, imx_phy->base + PHY_CTRL0);
+ 
+ 	value = readl(imx_phy->base + PHY_CTRL2);
+@@ -99,24 +462,42 @@ static int imx8mp_usb_phy_init(struct phy *phy)
+ 	value &= ~(PHY_CTRL1_RESET | PHY_CTRL1_ATERESET);
+ 	writel(value, imx_phy->base + PHY_CTRL1);
+ 
++	imx8m_phy_tune(imx_phy);
++
+ 	return 0;
+ }
+ 
+ static int imx8mq_phy_power_on(struct phy *phy)
+ {
+ 	struct imx8mq_usb_phy *imx_phy = phy_get_drvdata(phy);
++	u32 value;
+ 	int ret;
+ 
+ 	ret = regulator_enable(imx_phy->vbus);
+ 	if (ret)
+ 		return ret;
+ 
+-	return clk_prepare_enable(imx_phy->clk);
++	ret = clk_prepare_enable(imx_phy->clk);
++	if (ret)
++		return ret;
++
++	/* Disable rx term override */
++	value = readl(imx_phy->base + PHY_CTRL6);
++	value &= ~PHY_CTRL6_RXTERM_OVERRIDE_SEL;
++	writel(value, imx_phy->base + PHY_CTRL6);
++
++	return 0;
+ }
+ 
+ static int imx8mq_phy_power_off(struct phy *phy)
+ {
+ 	struct imx8mq_usb_phy *imx_phy = phy_get_drvdata(phy);
++	u32 value;
++
++	/* Override rx term to be 0 */
++	value = readl(imx_phy->base + PHY_CTRL6);
++	value |= PHY_CTRL6_RXTERM_OVERRIDE_SEL;
++	writel(value, imx_phy->base + PHY_CTRL6);
+ 
+ 	clk_disable_unprepare(imx_phy->clk);
+ 	regulator_disable(imx_phy->vbus);
+@@ -124,10 +505,245 @@ static int imx8mq_phy_power_off(struct phy *phy)
+ 	return 0;
+ }
+ 
++static int imx8mq_chg_data_contact_det(struct imx8mq_usb_phy *imx_phy)
++{
++	int i, data_pin_contact_count = 0;
++	u32 val;
++
++	/* Set DMPULLDOWN<#> = 1'b1 (to enable RDM_DWN) */
++	val = readl(imx_phy->base + PHY_CTRL5);
++	val |= PHY_CTRL5_DMPWD_OVERRIDE_SEL | PHY_CTRL5_DMPWD_OVERRIDE;
++	writel(val, imx_phy->base + PHY_CTRL5);
++
++	/* Set DPPULLDOWN<#> = 1'b0 */
++	val = readl(imx_phy->base + PHY_CTRL5);
++	val |= PHY_CTRL5_DMPWD_OVERRIDE_SEL | PHY_CTRL5_DMPWD_OVERRIDE;
++	writel(val, imx_phy->base + PHY_CTRL5);
++
++	/* Enable Data Contact Detect (DCD) per the USB BC 1.2 */
++	val = readl(imx_phy->base + PHY_CTRL1);
++	writel(val | PHY_CTRL1_DCDENB, imx_phy->base + PHY_CTRL1);
++
++	for (i = 0; i < 100; i = i + 1) {
++		val = readl(imx_phy->base + PHY_STS0);
++		/* DP is low */
++		if (!(val & PHY_STS0_FSVPLUS)) {
++			if (data_pin_contact_count++ > 5)
++				/* Data pin makes contact */
++				break;
++			usleep_range(5000, 10000);
++		} else {
++			data_pin_contact_count = 0;
++			usleep_range(5000, 6000);
++		}
++	}
++
++	/* Disable DCD after finished data contact check */
++	val = readl(imx_phy->base + PHY_CTRL1);
++	val &= ~PHY_CTRL1_DCDENB;
++	writel(val, imx_phy->base + PHY_CTRL1);
++
++	if (i == 100) {
++		dev_err(&imx_phy->phy->dev,
++			"VBUS is coming from a dedicated power supply.\n");
++
++		/* disable override before finish */
++		val = readl(imx_phy->base + PHY_CTRL5);
++		val &= ~(PHY_CTRL5_DMPWD_OVERRIDE | PHY_CTRL5_DPPWD_OVERRIDE);
++		writel(val, imx_phy->base + PHY_CTRL5);
++
++		return -ENXIO;
++	}
++
++	/* Set DMPULLDOWN<#> to 1'b0 when DCD is completed */
++	val = readl(imx_phy->base + PHY_CTRL5);
++	val &= ~PHY_CTRL5_DMPWD_OVERRIDE_SEL;
++	val |= PHY_CTRL5_DMPWD_OVERRIDE;
++	writel(val, imx_phy->base + PHY_CTRL5);
++
++	return 0;
++}
++
++static int imx8mq_chg_primary_detect(struct imx8mq_usb_phy *imx_phy)
++{
++	u32 val;
++
++	/* VDP_SRC is connected to D+ and IDM_SINK is connected to D- */
++	val = readl(imx_phy->base + PHY_CTRL1);
++	val &= ~PHY_CTRL1_CHRGSEL;
++	val |= PHY_CTRL1_VDATSRCENB0 | PHY_CTRL1_VDATDETENB0;
++	writel(val, imx_phy->base + PHY_CTRL1);
++
++	msleep(40);
++
++	/* Check if D- is less than VDAT_REF to determine an SDP per BC 1.2 */
++	val = readl(imx_phy->base + PHY_STS0);
++	if (!(val & PHY_STS0_CHGDET)) {
++		dev_dbg(&imx_phy->phy->dev, "It is a SDP.\n");
++		imx_phy->chg_type = POWER_SUPPLY_USB_TYPE_SDP;
++	}
++
++	return 0;
++}
++
++static int imx8mq_phy_chg_secondary_det(struct imx8mq_usb_phy *imx_phy)
++{
++	u32 val;
++
++	/* VDM_SRC is connected to D- and IDP_SINK is connected to D+ */
++	val = readl(imx_phy->base + PHY_CTRL1);
++	writel(val | PHY_CTRL1_VDATSRCENB0 | PHY_CTRL1_VDATDETENB0 |
++		PHY_CTRL1_CHRGSEL, imx_phy->base + PHY_CTRL1);
++
++	msleep(40);
++
++	/*
++	 * Per BC 1.2, check voltage of D+:
++	 * DCP: if greater than VDAT_REF;
++	 * CDP: if less than VDAT0_REF.
++	 */
++	val = readl(imx_phy->base + PHY_STS0);
++	if (val & PHY_STS0_CHGDET) {
++		dev_dbg(&imx_phy->phy->dev, "It is a DCP.\n");
++		imx_phy->chg_type = POWER_SUPPLY_USB_TYPE_DCP;
++	} else {
++		dev_dbg(&imx_phy->phy->dev, "It is a CDP.\n");
++		imx_phy->chg_type = POWER_SUPPLY_USB_TYPE_CDP;
++	}
++
++	return 0;
++}
++
++static void imx8mq_phy_disable_chg_det(struct imx8mq_usb_phy *imx_phy)
++{
++	u32 val;
++
++	val = readl(imx_phy->base + PHY_CTRL5);
++	val &= ~(PHY_CTRL5_DMPWD_OVERRIDE | PHY_CTRL5_DPPWD_OVERRIDE);
++	writel(val, imx_phy->base + PHY_CTRL5);
++
++	val = readl(imx_phy->base + PHY_CTRL1);
++	val &= ~(PHY_CTRL1_DCDENB | PHY_CTRL1_VDATSRCENB0 |
++		 PHY_CTRL1_VDATDETENB0 | PHY_CTRL1_CHRGSEL);
++	writel(val, imx_phy->base + PHY_CTRL1);
++}
++
++static int imx8mq_phy_charger_detect(struct imx8mq_usb_phy *imx_phy)
++{
++	struct device *dev = &imx_phy->phy->dev;
++	struct device_node *np = dev->parent->of_node;
++	union power_supply_propval propval;
++	u32 value;
++	int ret = 0;
++
++	if (!np)
++		return 0;
++
++	imx_phy->vbus_power_supply = power_supply_get_by_phandle(np,
++						"vbus-power-supply");
++	if (IS_ERR_OR_NULL(imx_phy->vbus_power_supply))
++		return 0;
++
++	if (imx_phy->chg_type != POWER_SUPPLY_USB_TYPE_UNKNOWN)
++		goto put_psy;
++
++	ret = power_supply_get_property(imx_phy->vbus_power_supply,
++					POWER_SUPPLY_PROP_ONLINE,
++					&propval);
++	if (ret || propval.intval == 0) {
++		dev_err(dev, "failed to get psy online infor\n");
++		ret = -EINVAL;
++		goto put_psy;
++	}
++
++	/* Check if vbus is valid */
++	value = readl(imx_phy->base + PHY_STS0);
++	if (!(value & PHY_STS0_OTGSESSVLD)) {
++		dev_err(&imx_phy->phy->dev, "vbus is error\n");
++		ret = -EINVAL;
++		goto put_psy;
++	}
++
++	imx_phy->chg_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
++
++	ret = imx8mq_chg_data_contact_det(imx_phy);
++	if (ret)
++		goto put_psy;
++
++	ret = imx8mq_chg_primary_detect(imx_phy);
++	if (!ret && imx_phy->chg_type != POWER_SUPPLY_USB_TYPE_SDP)
++		ret = imx8mq_phy_chg_secondary_det(imx_phy);
++
++	imx8mq_phy_disable_chg_det(imx_phy);
++
++	if (!ret) {
++		propval.intval = imx_phy->chg_type;
++		power_supply_set_property(imx_phy->vbus_power_supply,
++					  POWER_SUPPLY_PROP_USB_TYPE,
++					  &propval);
++	}
++
++put_psy:
++	power_supply_put(imx_phy->vbus_power_supply);
++
++	return ret;
++}
++
++static int imx8mq_phy_usb_vbus_notify(struct notifier_block *nb,
++				      unsigned long val, void *v)
++{
++	struct imx8mq_usb_phy *imx_phy = container_of(nb, struct imx8mq_usb_phy,
++						      chg_det_nb);
++	struct device *dev = &imx_phy->phy->dev;
++	struct device_node *np = dev->parent->of_node;
++	union power_supply_propval propval;
++	struct power_supply *psy = v;
++	int ret;
++
++	if (!np)
++		return NOTIFY_DONE;
++
++	imx_phy->vbus_power_supply = power_supply_get_by_phandle(np,
++						"vbus-power-supply");
++	if (IS_ERR_OR_NULL(imx_phy->vbus_power_supply)) {
++		dev_err(dev, "failed to get power supply\n");
++		return NOTIFY_DONE;
++	}
++
++	if (val == PSY_EVENT_PROP_CHANGED && psy == imx_phy->vbus_power_supply) {
++		ret = power_supply_get_property(imx_phy->vbus_power_supply,
++						POWER_SUPPLY_PROP_ONLINE,
++						&propval);
++		if (ret) {
++			power_supply_put(imx_phy->vbus_power_supply);
++			dev_err(dev, "failed to get psy online info\n");
++			return NOTIFY_DONE;
++		}
++
++		if (propval.intval == 0)
++			imx_phy->chg_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
++	}
++	power_supply_put(imx_phy->vbus_power_supply);
++
++	return NOTIFY_OK;
++}
++
++static int imx8mq_phy_set_mode(struct phy *phy, enum phy_mode mode,
++			       int submode)
++{
++	struct imx8mq_usb_phy *imx_phy = phy_get_drvdata(phy);
++
++	if (mode == PHY_MODE_USB_DEVICE)
++		return imx8mq_phy_charger_detect(imx_phy);
++
++	return 0;
++}
++
+ static const struct phy_ops imx8mq_usb_phy_ops = {
+ 	.init		= imx8mq_usb_phy_init,
+ 	.power_on	= imx8mq_phy_power_on,
+ 	.power_off	= imx8mq_phy_power_off,
++	.set_mode	= imx8mq_phy_set_mode,
+ 	.owner		= THIS_MODULE,
+ };
+ 
+@@ -135,6 +751,7 @@ static const struct phy_ops imx8mp_usb_phy_ops = {
+ 	.init		= imx8mp_usb_phy_init,
+ 	.power_on	= imx8mq_phy_power_on,
+ 	.power_off	= imx8mq_phy_power_off,
++	.set_mode	= imx8mq_phy_set_mode,
+ 	.owner		= THIS_MODULE,
+ };
+ 
+@@ -181,14 +798,37 @@ static int imx8mq_usb_phy_probe(struct platform_device *pdev)
+ 		return PTR_ERR(imx_phy->vbus);
+ 
+ 	phy_set_drvdata(imx_phy->phy, imx_phy);
++	platform_set_drvdata(pdev, imx_phy);
++
++	if (device_property_present(dev, "vbus-power-supply")) {
++		imx_phy->chg_det_nb.notifier_call = imx8mq_phy_usb_vbus_notify;
++		power_supply_reg_notifier(&imx_phy->chg_det_nb);
++	}
++
++	imx8m_get_phy_tuning_data(imx_phy);
++
++	debug_create_files(imx_phy);
+ 
+ 	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
+ 
+ 	return PTR_ERR_OR_ZERO(phy_provider);
+ }
+ 
++static int imx8mq_usb_phy_remove(struct platform_device *pdev)
++{
++	struct imx8mq_usb_phy *imx_phy = platform_get_drvdata(pdev);
++
++	if (device_property_present(&pdev->dev, "vbus-power-supply"))
++		power_supply_unreg_notifier(&imx_phy->chg_det_nb);
++
++	debug_remove_files(imx_phy);
++
++	return 0;
++}
++
+ static struct platform_driver imx8mq_usb_phy_driver = {
+ 	.probe	= imx8mq_usb_phy_probe,
++	.remove = imx8mq_usb_phy_remove,
+ 	.driver = {
+ 		.name	= "imx8mq-usb-phy",
+ 		.of_match_table	= imx8mq_usb_phy_of_match,
+diff --git a/drivers/phy/phy-core.c b/drivers/phy/phy-core.c
+index 91e28d6ce..688b204fc 100644
+--- a/drivers/phy/phy-core.c
++++ b/drivers/phy/phy-core.c
+@@ -11,6 +11,7 @@
+ #include <linux/export.h>
+ #include <linux/module.h>
+ #include <linux/err.h>
++#include <linux/debugfs.h>
+ #include <linux/device.h>
+ #include <linux/slab.h>
+ #include <linux/of.h>
+@@ -24,6 +25,8 @@ static DEFINE_MUTEX(phy_provider_mutex);
+ static LIST_HEAD(phy_provider_list);
+ static LIST_HEAD(phys);
+ static DEFINE_IDA(phy_ida);
++struct dentry *phy_debugfs_root;
++EXPORT_SYMBOL_GPL(phy_debugfs_root);
+ 
+ static void devm_phy_release(struct device *dev, void *res)
+ {
+@@ -1195,6 +1198,8 @@ static int __init phy_core_init(void)
+ 
+ 	phy_class->dev_release = phy_release;
+ 
++	phy_debugfs_root = debugfs_create_dir("phy", NULL);
++
+ 	return 0;
+ }
+ device_initcall(phy_core_init);
+diff --git a/drivers/usb/cdns3/cdns3-gadget.c b/drivers/usb/cdns3/cdns3-gadget.c
+index d6d515d59..f9af7ebe0 100644
+--- a/drivers/usb/cdns3/cdns3-gadget.c
++++ b/drivers/usb/cdns3/cdns3-gadget.c
+@@ -2684,7 +2684,6 @@ int __cdns3_gadget_ep_clear_halt(struct cdns3_endpoint *priv_ep)
+ 	struct usb_request *request;
+ 	struct cdns3_request *priv_req;
+ 	struct cdns3_trb *trb = NULL;
+-	struct cdns3_trb trb_tmp;
+ 	int ret;
+ 	int val;
+ 
+@@ -2694,10 +2693,8 @@ int __cdns3_gadget_ep_clear_halt(struct cdns3_endpoint *priv_ep)
+ 	if (request) {
+ 		priv_req = to_cdns3_request(request);
+ 		trb = priv_req->trb;
+-		if (trb) {
+-			trb_tmp = *trb;
++		if (trb)
+ 			trb->control = trb->control ^ cpu_to_le32(TRB_CYCLE);
+-		}
+ 	}
+ 
+ 	writel(EP_CMD_CSTALL | EP_CMD_EPRST, &priv_dev->regs->ep_cmd);
+@@ -2712,7 +2709,7 @@ int __cdns3_gadget_ep_clear_halt(struct cdns3_endpoint *priv_ep)
+ 
+ 	if (request) {
+ 		if (trb)
+-			*trb = trb_tmp;
++			trb->control = trb->control ^ cpu_to_le32(TRB_CYCLE);
+ 
+ 		cdns3_rearm_transfer(priv_ep, 1);
+ 	}
+diff --git a/drivers/usb/cdns3/cdnsp-debug.h b/drivers/usb/cdns3/cdnsp-debug.h
+index f0ca865cc..a8776df2d 100644
+--- a/drivers/usb/cdns3/cdnsp-debug.h
++++ b/drivers/usb/cdns3/cdnsp-debug.h
+@@ -182,211 +182,208 @@ static inline const char *cdnsp_decode_trb(char *str, size_t size, u32 field0,
+ 	int ep_id = TRB_TO_EP_INDEX(field3) - 1;
+ 	int type = TRB_FIELD_TO_TYPE(field3);
+ 	unsigned int ep_num;
+-	int ret;
++	int ret = 0;
+ 	u32 temp;
+ 
+ 	ep_num = DIV_ROUND_UP(ep_id, 2);
+ 
+ 	switch (type) {
+ 	case TRB_LINK:
+-		ret = snprintf(str, size,
+-			       "LINK %08x%08x intr %ld type '%s' flags %c:%c:%c:%c",
+-			       field1, field0, GET_INTR_TARGET(field2),
+-			       cdnsp_trb_type_string(type),
+-			       field3 & TRB_IOC ? 'I' : 'i',
+-			       field3 & TRB_CHAIN ? 'C' : 'c',
+-			       field3 & TRB_TC ? 'T' : 't',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"LINK %08x%08x intr %ld type '%s' flags %c:%c:%c:%c",
++				field1, field0, GET_INTR_TARGET(field2),
++				cdnsp_trb_type_string(type),
++				field3 & TRB_IOC ? 'I' : 'i',
++				field3 & TRB_CHAIN ? 'C' : 'c',
++				field3 & TRB_TC ? 'T' : 't',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_TRANSFER:
+ 	case TRB_COMPLETION:
+ 	case TRB_PORT_STATUS:
+ 	case TRB_HC_EVENT:
+-		ret = snprintf(str, size,
+-			       "ep%d%s(%d) type '%s' TRB %08x%08x status '%s'"
+-			       " len %ld slot %ld flags %c:%c",
+-			       ep_num, ep_id % 2 ? "out" : "in",
+-			       TRB_TO_EP_INDEX(field3),
+-			       cdnsp_trb_type_string(type), field1, field0,
+-			       cdnsp_trb_comp_code_string(GET_COMP_CODE(field2)),
+-			       EVENT_TRB_LEN(field2), TRB_TO_SLOT_ID(field3),
+-			       field3 & EVENT_DATA ? 'E' : 'e',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"ep%d%s(%d) type '%s' TRB %08x%08x status '%s'"
++				" len %ld slot %ld flags %c:%c",
++				ep_num, ep_id % 2 ? "out" : "in",
++				TRB_TO_EP_INDEX(field3),
++				cdnsp_trb_type_string(type), field1, field0,
++				cdnsp_trb_comp_code_string(GET_COMP_CODE(field2)),
++				EVENT_TRB_LEN(field2), TRB_TO_SLOT_ID(field3),
++				field3 & EVENT_DATA ? 'E' : 'e',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_MFINDEX_WRAP:
+-		ret = snprintf(str, size, "%s: flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size, "%s: flags %c",
++				cdnsp_trb_type_string(type),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_SETUP:
+-		ret = snprintf(str, size,
+-			       "type '%s' bRequestType %02x bRequest %02x "
+-			       "wValue %02x%02x wIndex %02x%02x wLength %d "
+-			       "length %ld TD size %ld intr %ld Setup ID %ld "
+-			       "flags %c:%c:%c",
+-			       cdnsp_trb_type_string(type),
+-			       field0 & 0xff,
+-			       (field0 & 0xff00) >> 8,
+-			       (field0 & 0xff000000) >> 24,
+-			       (field0 & 0xff0000) >> 16,
+-			       (field1 & 0xff00) >> 8,
+-			       field1 & 0xff,
+-			       (field1 & 0xff000000) >> 16 |
+-			       (field1 & 0xff0000) >> 16,
+-			       TRB_LEN(field2), GET_TD_SIZE(field2),
+-			       GET_INTR_TARGET(field2),
+-			       TRB_SETUPID_TO_TYPE(field3),
+-			       field3 & TRB_IDT ? 'D' : 'd',
+-			       field3 & TRB_IOC ? 'I' : 'i',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"type '%s' bRequestType %02x bRequest %02x "
++				"wValue %02x%02x wIndex %02x%02x wLength %d "
++				"length %ld TD size %ld intr %ld Setup ID %ld "
++				"flags %c:%c:%c",
++				cdnsp_trb_type_string(type),
++				field0 & 0xff,
++				(field0 & 0xff00) >> 8,
++				(field0 & 0xff000000) >> 24,
++				(field0 & 0xff0000) >> 16,
++				(field1 & 0xff00) >> 8,
++				field1 & 0xff,
++				(field1 & 0xff000000) >> 16 |
++				(field1 & 0xff0000) >> 16,
++				TRB_LEN(field2), GET_TD_SIZE(field2),
++				GET_INTR_TARGET(field2),
++				TRB_SETUPID_TO_TYPE(field3),
++				field3 & TRB_IDT ? 'D' : 'd',
++				field3 & TRB_IOC ? 'I' : 'i',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_DATA:
+-		ret = snprintf(str, size,
+-			       "type '%s' Buffer %08x%08x length %ld TD size %ld "
+-			       "intr %ld flags %c:%c:%c:%c:%c:%c:%c",
+-			       cdnsp_trb_type_string(type),
+-			       field1, field0, TRB_LEN(field2),
+-			       GET_TD_SIZE(field2),
+-			       GET_INTR_TARGET(field2),
+-			       field3 & TRB_IDT ? 'D' : 'i',
+-			       field3 & TRB_IOC ? 'I' : 'i',
+-			       field3 & TRB_CHAIN ? 'C' : 'c',
+-			       field3 & TRB_NO_SNOOP ? 'S' : 's',
+-			       field3 & TRB_ISP ? 'I' : 'i',
+-			       field3 & TRB_ENT ? 'E' : 'e',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"type '%s' Buffer %08x%08x length %ld TD size %ld "
++				"intr %ld flags %c:%c:%c:%c:%c:%c:%c",
++				cdnsp_trb_type_string(type),
++				field1, field0, TRB_LEN(field2),
++				GET_TD_SIZE(field2),
++				GET_INTR_TARGET(field2),
++				field3 & TRB_IDT ? 'D' : 'i',
++				field3 & TRB_IOC ? 'I' : 'i',
++				field3 & TRB_CHAIN ? 'C' : 'c',
++				field3 & TRB_NO_SNOOP ? 'S' : 's',
++				field3 & TRB_ISP ? 'I' : 'i',
++				field3 & TRB_ENT ? 'E' : 'e',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_STATUS:
+-		ret = snprintf(str, size,
+-			       "Buffer %08x%08x length %ld TD size %ld intr"
+-			       "%ld type '%s' flags %c:%c:%c:%c",
+-			       field1, field0, TRB_LEN(field2),
+-			       GET_TD_SIZE(field2),
+-			       GET_INTR_TARGET(field2),
+-			       cdnsp_trb_type_string(type),
+-			       field3 & TRB_IOC ? 'I' : 'i',
+-			       field3 & TRB_CHAIN ? 'C' : 'c',
+-			       field3 & TRB_ENT ? 'E' : 'e',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"Buffer %08x%08x length %ld TD size %ld intr"
++				"%ld type '%s' flags %c:%c:%c:%c",
++				field1, field0, TRB_LEN(field2),
++				GET_TD_SIZE(field2),
++				GET_INTR_TARGET(field2),
++				cdnsp_trb_type_string(type),
++				field3 & TRB_IOC ? 'I' : 'i',
++				field3 & TRB_CHAIN ? 'C' : 'c',
++				field3 & TRB_ENT ? 'E' : 'e',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_NORMAL:
+ 	case TRB_ISOC:
+ 	case TRB_EVENT_DATA:
+ 	case TRB_TR_NOOP:
+-		ret = snprintf(str, size,
+-			       "type '%s' Buffer %08x%08x length %ld "
+-			       "TD size %ld intr %ld "
+-			       "flags %c:%c:%c:%c:%c:%c:%c:%c:%c",
+-			       cdnsp_trb_type_string(type),
+-			       field1, field0, TRB_LEN(field2),
+-			       GET_TD_SIZE(field2),
+-			       GET_INTR_TARGET(field2),
+-			       field3 & TRB_BEI ? 'B' : 'b',
+-			       field3 & TRB_IDT ? 'T' : 't',
+-			       field3 & TRB_IOC ? 'I' : 'i',
+-			       field3 & TRB_CHAIN ? 'C' : 'c',
+-			       field3 & TRB_NO_SNOOP ? 'S' : 's',
+-			       field3 & TRB_ISP ? 'I' : 'i',
+-			       field3 & TRB_ENT ? 'E' : 'e',
+-			       field3 & TRB_CYCLE ? 'C' : 'c',
+-			       !(field3 & TRB_EVENT_INVALIDATE) ? 'V' : 'v');
++		ret += snprintf(str, size,
++				"type '%s' Buffer %08x%08x length %ld "
++				"TD size %ld intr %ld "
++				"flags %c:%c:%c:%c:%c:%c:%c:%c:%c",
++				cdnsp_trb_type_string(type),
++				field1, field0, TRB_LEN(field2),
++				GET_TD_SIZE(field2),
++				GET_INTR_TARGET(field2),
++				field3 & TRB_BEI ? 'B' : 'b',
++				field3 & TRB_IDT ? 'T' : 't',
++				field3 & TRB_IOC ? 'I' : 'i',
++				field3 & TRB_CHAIN ? 'C' : 'c',
++				field3 & TRB_NO_SNOOP ? 'S' : 's',
++				field3 & TRB_ISP ? 'I' : 'i',
++				field3 & TRB_ENT ? 'E' : 'e',
++				field3 & TRB_CYCLE ? 'C' : 'c',
++				!(field3 & TRB_EVENT_INVALIDATE) ? 'V' : 'v');
+ 		break;
+ 	case TRB_CMD_NOOP:
+ 	case TRB_ENABLE_SLOT:
+-		ret = snprintf(str, size, "%s: flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size, "%s: flags %c",
++				cdnsp_trb_type_string(type),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_DISABLE_SLOT:
+-		ret = snprintf(str, size, "%s: slot %ld flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size, "%s: slot %ld flags %c",
++				cdnsp_trb_type_string(type),
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_ADDR_DEV:
+-		ret = snprintf(str, size,
+-			       "%s: ctx %08x%08x slot %ld flags %c:%c",
+-			       cdnsp_trb_type_string(type), field1, field0,
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_BSR ? 'B' : 'b',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ctx %08x%08x slot %ld flags %c:%c",
++				cdnsp_trb_type_string(type), field1, field0,
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_BSR ? 'B' : 'b',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_CONFIG_EP:
+-		ret = snprintf(str, size,
+-			       "%s: ctx %08x%08x slot %ld flags %c:%c",
+-			       cdnsp_trb_type_string(type), field1, field0,
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_DC ? 'D' : 'd',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ctx %08x%08x slot %ld flags %c:%c",
++				cdnsp_trb_type_string(type), field1, field0,
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_DC ? 'D' : 'd',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_EVAL_CONTEXT:
+-		ret = snprintf(str, size,
+-			       "%s: ctx %08x%08x slot %ld flags %c",
+-			       cdnsp_trb_type_string(type), field1, field0,
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ctx %08x%08x slot %ld flags %c",
++				cdnsp_trb_type_string(type), field1, field0,
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_RESET_EP:
+ 	case TRB_HALT_ENDPOINT:
+ 	case TRB_FLUSH_ENDPOINT:
+-		ret = snprintf(str, size,
+-			       "%s: ep%d%s(%d) ctx %08x%08x slot %ld flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       ep_num, ep_id % 2 ? "out" : "in",
+-			       TRB_TO_EP_INDEX(field3), field1, field0,
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ep%d%s(%d) ctx %08x%08x slot %ld flags %c",
++				cdnsp_trb_type_string(type),
++				ep_num, ep_id % 2 ? "out" : "in",
++				TRB_TO_EP_INDEX(field3), field1, field0,
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_STOP_RING:
+-		ret = snprintf(str, size,
+-			       "%s: ep%d%s(%d) slot %ld sp %d flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       ep_num, ep_id % 2 ? "out" : "in",
+-			       TRB_TO_EP_INDEX(field3),
+-			       TRB_TO_SLOT_ID(field3),
+-			       TRB_TO_SUSPEND_PORT(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ep%d%s(%d) slot %ld sp %d flags %c",
++				cdnsp_trb_type_string(type),
++				ep_num, ep_id % 2 ? "out" : "in",
++				TRB_TO_EP_INDEX(field3),
++				TRB_TO_SLOT_ID(field3),
++				TRB_TO_SUSPEND_PORT(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_SET_DEQ:
+-		ret = snprintf(str, size,
+-			       "%s: ep%d%s(%d) deq %08x%08x stream %ld slot %ld  flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       ep_num, ep_id % 2 ? "out" : "in",
+-			       TRB_TO_EP_INDEX(field3), field1, field0,
+-			       TRB_TO_STREAM_ID(field2),
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size,
++				"%s: ep%d%s(%d) deq %08x%08x stream %ld slot %ld  flags %c",
++				cdnsp_trb_type_string(type),
++				ep_num, ep_id % 2 ? "out" : "in",
++				TRB_TO_EP_INDEX(field3), field1, field0,
++				TRB_TO_STREAM_ID(field2),
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_RESET_DEV:
+-		ret = snprintf(str, size, "%s: slot %ld flags %c",
+-			       cdnsp_trb_type_string(type),
+-			       TRB_TO_SLOT_ID(field3),
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		ret += snprintf(str, size, "%s: slot %ld flags %c",
++				cdnsp_trb_type_string(type),
++				TRB_TO_SLOT_ID(field3),
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	case TRB_ENDPOINT_NRDY:
+-		temp = TRB_TO_HOST_STREAM(field2);
+-
+-		ret = snprintf(str, size,
+-			       "%s: ep%d%s(%d) H_SID %x%s%s D_SID %lx flags %c:%c",
+-			       cdnsp_trb_type_string(type),
+-			       ep_num, ep_id % 2 ? "out" : "in",
+-			       TRB_TO_EP_INDEX(field3), temp,
+-			       temp == STREAM_PRIME_ACK ? "(PRIME)" : "",
+-			       temp == STREAM_REJECTED ? "(REJECTED)" : "",
+-			       TRB_TO_DEV_STREAM(field0),
+-			       field3 & TRB_STAT ? 'S' : 's',
+-			       field3 & TRB_CYCLE ? 'C' : 'c');
++		temp  = TRB_TO_HOST_STREAM(field2);
++
++		ret += snprintf(str, size,
++				"%s: ep%d%s(%d) H_SID %x%s%s D_SID %lx flags %c:%c",
++				cdnsp_trb_type_string(type),
++				ep_num, ep_id % 2 ? "out" : "in",
++				TRB_TO_EP_INDEX(field3), temp,
++				temp == STREAM_PRIME_ACK ? "(PRIME)" : "",
++				temp == STREAM_REJECTED ? "(REJECTED)" : "",
++				TRB_TO_DEV_STREAM(field0),
++				field3 & TRB_STAT ? 'S' : 's',
++				field3 & TRB_CYCLE ? 'C' : 'c');
+ 		break;
+ 	default:
+-		ret = snprintf(str, size,
+-			       "type '%s' -> raw %08x %08x %08x %08x",
+-			       cdnsp_trb_type_string(type),
+-			       field0, field1, field2, field3);
++		ret += snprintf(str, size,
++				"type '%s' -> raw %08x %08x %08x %08x",
++				cdnsp_trb_type_string(type),
++				field0, field1, field2, field3);
+ 	}
+ 
+-	if (ret >= size)
+-		pr_info("CDNSP: buffer overflowed.\n");
+-
+ 	return str;
+ }
+ 
+diff --git a/drivers/usb/cdns3/cdnsp-ring.c b/drivers/usb/cdns3/cdnsp-ring.c
+index 794e41380..e45c3d6e1 100644
+--- a/drivers/usb/cdns3/cdnsp-ring.c
++++ b/drivers/usb/cdns3/cdnsp-ring.c
+@@ -1941,16 +1941,13 @@ int cdnsp_queue_bulk_tx(struct cdnsp_device *pdev, struct cdnsp_request *preq)
+ 		}
+ 
+ 		if (enqd_len + trb_buff_len >= full_len) {
+-			if (need_zero_pkt && !zero_len_trb) {
+-				zero_len_trb = true;
+-			} else {
+-				zero_len_trb = false;
+-				field &= ~TRB_CHAIN;
+-				field |= TRB_IOC;
+-				more_trbs_coming = false;
+-				need_zero_pkt = false;
+-				preq->td.last_trb = ring->enqueue;
+-			}
++			if (need_zero_pkt)
++				zero_len_trb = !zero_len_trb;
++
++			field &= ~TRB_CHAIN;
++			field |= TRB_IOC;
++			more_trbs_coming = false;
++			preq->td.last_trb = ring->enqueue;
+ 		}
+ 
+ 		/* Only set interrupt on short packet for OUT endpoints. */
+@@ -1965,7 +1962,7 @@ int cdnsp_queue_bulk_tx(struct cdnsp_device *pdev, struct cdnsp_request *preq)
+ 		length_field = TRB_LEN(trb_buff_len) | TRB_TD_SIZE(remainder) |
+ 			TRB_INTR_TARGET(0);
+ 
+-		cdnsp_queue_trb(pdev, ring, more_trbs_coming,
++		cdnsp_queue_trb(pdev, ring, more_trbs_coming | zero_len_trb,
+ 				lower_32_bits(send_addr),
+ 				upper_32_bits(send_addr),
+ 				length_field,
+diff --git a/drivers/usb/chipidea/bits.h b/drivers/usb/chipidea/bits.h
+index b1540ce93..cf8dbd586 100644
+--- a/drivers/usb/chipidea/bits.h
++++ b/drivers/usb/chipidea/bits.h
+@@ -70,6 +70,9 @@
+ #define PORTSC_FPR            BIT(6)
+ #define PORTSC_SUSP           BIT(7)
+ #define PORTSC_HSP            BIT(9)
++#define PORTSC_LS             (BIT(11) | BIT(10))
++#define PORTSC_LS_J           BIT(11)
++#define PORTSC_LS_K           BIT(10)
+ #define PORTSC_PP             BIT(12)
+ #define PORTSC_PTC            (0x0FUL << 16)
+ #define PORTSC_WKCN           BIT(20)
+@@ -78,6 +81,7 @@
+ #define PORTSC_PFSC           BIT(24)
+ #define PORTSC_PTS(d)						\
+ 	(u32)((((d) & 0x3) << 30) | (((d) & 0x4) ? BIT(25) : 0))
++#define PORT_SPEED_LOW(d)     ((((d) >> 26) & 0x3) == 1)
+ #define PORTSC_PTW            BIT(28)
+ #define PORTSC_STS            BIT(29)
+ 
+diff --git a/drivers/usb/chipidea/ci.h b/drivers/usb/chipidea/ci.h
+index 99440baa6..3c8e3640a 100644
+--- a/drivers/usb/chipidea/ci.h
++++ b/drivers/usb/chipidea/ci.h
+@@ -126,12 +126,16 @@ enum ci_revision {
+  * struct ci_role_driver - host/gadget role driver
+  * @start: start this role
+  * @stop: stop this role
++ * @suspend: system suspend handler for this role
++ * @resume: system resume handler for this role
+  * @irq: irq handler for this role
+  * @name: role name string (host/gadget)
+  */
+ struct ci_role_driver {
+ 	int		(*start)(struct ci_hdrc *);
+ 	void		(*stop)(struct ci_hdrc *);
++	void		(*suspend)(struct ci_hdrc *);
++	void		(*resume)(struct ci_hdrc *, bool power_lost);
+ 	irqreturn_t	(*irq)(struct ci_hdrc *);
+ 	const char	*name;
+ };
+@@ -203,6 +207,9 @@ struct hw_bank {
+  * @in_lpm: if the core in low power mode
+  * @wakeup_int: if wakeup interrupt occur
+  * @rev: The revision number for controller
++ * @power_lost_work: work item when controller power is lost
++ * @power_lost_wq: work queue for controller power is lost
++ * @mutex: protect code from concorrent running
+  */
+ struct ci_hdrc {
+ 	struct device			*dev;
+@@ -255,6 +262,20 @@ struct ci_hdrc {
+ 	bool				in_lpm;
+ 	bool				wakeup_int;
+ 	enum ci_revision		rev;
++	struct work_struct		power_lost_work;
++	struct workqueue_struct		*power_lost_wq;
++	/* register save area for suspend&resume */
++	u32				pm_command;
++	u32				pm_status;
++	u32				pm_intr_enable;
++	u32				pm_frame_index;
++	u32				pm_segment;
++	u32				pm_frame_list;
++	u32				pm_async_next;
++	u32				pm_configured_flag;
++	u32				pm_portsc;
++	u32				pm_usbmode;
++	struct mutex			mutex;
+ };
+ 
+ static inline struct ci_role_driver *ci_role(struct ci_hdrc *ci)
+@@ -274,9 +295,21 @@ static inline int ci_role_start(struct ci_hdrc *ci, enum ci_role role)
+ 		return -ENXIO;
+ 
+ 	ret = ci->roles[role]->start(ci);
+-	if (!ret)
+-		ci->role = role;
+-	return ret;
++	if (ret)
++		return ret;
++
++	ci->role = role;
++
++	if (ci->usb_phy) {
++		if (role == CI_ROLE_HOST)
++			usb_phy_set_mode(ci->usb_phy,
++					CUR_USB_MODE_HOST);
++		else
++			usb_phy_set_mode(ci->usb_phy,
++					CUR_USB_MODE_DEVICE);
++	}
++
++	return 0;
+ }
+ 
+ static inline void ci_role_stop(struct ci_hdrc *ci)
+@@ -289,6 +322,9 @@ static inline void ci_role_stop(struct ci_hdrc *ci)
+ 	ci->role = CI_ROLE_END;
+ 
+ 	ci->roles[role]->stop(ci);
++
++	if (ci->usb_phy)
++		usb_phy_set_mode(ci->usb_phy, CUR_USB_MODE_NONE);
+ }
+ 
+ static inline enum usb_role ci_role_to_usb_role(struct ci_hdrc *ci)
+@@ -466,4 +502,5 @@ void ci_platform_configure(struct ci_hdrc *ci);
+ void dbg_create_files(struct ci_hdrc *ci);
+ 
+ void dbg_remove_files(struct ci_hdrc *ci);
++void ci_hdrc_enter_lpm(struct ci_hdrc *ci, bool enable);
+ #endif	/* __DRIVERS_USB_CHIPIDEA_CI_H */
+diff --git a/drivers/usb/chipidea/ci_hdrc_imx.c b/drivers/usb/chipidea/ci_hdrc_imx.c
+index 097142ffb..ce7a1b225 100644
+--- a/drivers/usb/chipidea/ci_hdrc_imx.c
++++ b/drivers/usb/chipidea/ci_hdrc_imx.c
+@@ -14,6 +14,7 @@
+ #include <linux/clk.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/pm_qos.h>
++#include <linux/busfreq-imx.h>
+ 
+ #include "ci.h"
+ #include "ci_hdrc_imx.h"
+@@ -409,6 +410,7 @@ static int ci_hdrc_imx_probe(struct platform_device *pdev)
+ 	if (pdata.flags & CI_HDRC_PMQOS)
+ 		cpu_latency_qos_add_request(&data->pm_qos_req, 0);
+ 
++	request_bus_freq(BUS_FREQ_HIGH);
+ 	ret = imx_get_clks(dev);
+ 	if (ret)
+ 		goto disable_hsic_regulator;
+@@ -447,6 +449,11 @@ static int ci_hdrc_imx_probe(struct platform_device *pdev)
+ 	if (pdata.flags & CI_HDRC_SUPPORTS_RUNTIME_PM)
+ 		data->supports_runtime_pm = true;
+ 
++	if (of_find_property(np, "ci-disable-lpm", NULL)) {
++		data->supports_runtime_pm = false;
++		pdata.flags &= ~CI_HDRC_SUPPORTS_RUNTIME_PM;
++	}
++
+ 	ret = imx_usbmisc_init(data->usbmisc_data);
+ 	if (ret) {
+ 		dev_err(dev, "usbmisc init failed, ret=%d\n", ret);
+@@ -498,6 +505,7 @@ static int ci_hdrc_imx_probe(struct platform_device *pdev)
+ err_clk:
+ 	imx_disable_unprepare_clks(dev);
+ disable_hsic_regulator:
++	release_bus_freq(BUS_FREQ_HIGH);
+ 	if (data->hsic_pad_regulator)
+ 		/* don't overwrite original ret (cf. EPROBE_DEFER) */
+ 		regulator_disable(data->hsic_pad_regulator);
+@@ -522,6 +530,7 @@ static int ci_hdrc_imx_remove(struct platform_device *pdev)
+ 		usb_phy_shutdown(data->phy);
+ 	if (data->ci_pdev) {
+ 		imx_disable_unprepare_clks(&pdev->dev);
++		release_bus_freq(BUS_FREQ_HIGH);
+ 		if (data->plat_data->flags & CI_HDRC_PMQOS)
+ 			cpu_latency_qos_remove_request(&data->pm_qos_req);
+ 		if (data->hsic_pad_regulator)
+@@ -536,20 +545,24 @@ static void ci_hdrc_imx_shutdown(struct platform_device *pdev)
+ 	ci_hdrc_imx_remove(pdev);
+ }
+ 
+-static int __maybe_unused imx_controller_suspend(struct device *dev)
++static int __maybe_unused imx_controller_suspend(struct device *dev,
++						 pm_message_t msg)
+ {
+ 	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+ 	int ret = 0;
+ 
+ 	dev_dbg(dev, "at %s\n", __func__);
+ 
+-	ret = imx_usbmisc_hsic_set_clk(data->usbmisc_data, false);
++	ret = imx_usbmisc_suspend(data->usbmisc_data,
++				  PMSG_IS_AUTO(msg) || device_may_wakeup(dev));
+ 	if (ret) {
+-		dev_err(dev, "usbmisc hsic_set_clk failed, ret=%d\n", ret);
++		dev_err(dev,
++			"usbmisc suspend failed, ret=%d\n", ret);
+ 		return ret;
+ 	}
+ 
+ 	imx_disable_unprepare_clks(dev);
++	release_bus_freq(BUS_FREQ_HIGH);
+ 	if (data->plat_data->flags & CI_HDRC_PMQOS)
+ 		cpu_latency_qos_remove_request(&data->pm_qos_req);
+ 
+@@ -558,43 +571,36 @@ static int __maybe_unused imx_controller_suspend(struct device *dev)
+ 	return 0;
+ }
+ 
+-static int __maybe_unused imx_controller_resume(struct device *dev)
++static int __maybe_unused imx_controller_resume(struct device *dev,
++						pm_message_t msg)
+ {
+ 	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+ 	int ret = 0;
+ 
+ 	dev_dbg(dev, "at %s\n", __func__);
+ 
+-	if (!data->in_lpm) {
+-		WARN_ON(1);
++	if (!data->in_lpm)
+ 		return 0;
+-	}
+ 
+ 	if (data->plat_data->flags & CI_HDRC_PMQOS)
+ 		cpu_latency_qos_add_request(&data->pm_qos_req, 0);
+ 
++	request_bus_freq(BUS_FREQ_HIGH);
+ 	ret = imx_prepare_enable_clks(dev);
+ 	if (ret)
+ 		return ret;
+ 
+ 	data->in_lpm = false;
+ 
+-	ret = imx_usbmisc_set_wakeup(data->usbmisc_data, false);
++	ret = imx_usbmisc_resume(data->usbmisc_data,
++				 PMSG_IS_AUTO(msg) || device_may_wakeup(dev));
+ 	if (ret) {
+-		dev_err(dev, "usbmisc set_wakeup failed, ret=%d\n", ret);
++		dev_err(dev, "usbmisc resume failed, ret=%d\n", ret);
+ 		goto clk_disable;
+ 	}
+ 
+-	ret = imx_usbmisc_hsic_set_clk(data->usbmisc_data, true);
+-	if (ret) {
+-		dev_err(dev, "usbmisc hsic_set_clk failed, ret=%d\n", ret);
+-		goto hsic_set_clk_fail;
+-	}
+-
+ 	return 0;
+ 
+-hsic_set_clk_fail:
+-	imx_usbmisc_set_wakeup(data->usbmisc_data, true);
+ clk_disable:
+ 	imx_disable_unprepare_clks(dev);
+ 	return ret;
+@@ -610,16 +616,7 @@ static int __maybe_unused ci_hdrc_imx_suspend(struct device *dev)
+ 		/* The core's suspend doesn't run */
+ 		return 0;
+ 
+-	if (device_may_wakeup(dev)) {
+-		ret = imx_usbmisc_set_wakeup(data->usbmisc_data, true);
+-		if (ret) {
+-			dev_err(dev, "usbmisc set_wakeup failed, ret=%d\n",
+-					ret);
+-			return ret;
+-		}
+-	}
+-
+-	ret = imx_controller_suspend(dev);
++	ret = imx_controller_suspend(dev, PMSG_SUSPEND);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -633,7 +630,7 @@ static int __maybe_unused ci_hdrc_imx_resume(struct device *dev)
+ 	int ret;
+ 
+ 	pinctrl_pm_select_default_state(dev);
+-	ret = imx_controller_resume(dev);
++	ret = imx_controller_resume(dev, PMSG_RESUME);
+ 	if (!ret && data->supports_runtime_pm) {
+ 		pm_runtime_disable(dev);
+ 		pm_runtime_set_active(dev);
+@@ -646,25 +643,16 @@ static int __maybe_unused ci_hdrc_imx_resume(struct device *dev)
+ static int __maybe_unused ci_hdrc_imx_runtime_suspend(struct device *dev)
+ {
+ 	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+-	int ret;
+ 
+-	if (data->in_lpm) {
+-		WARN_ON(1);
++	if (data->in_lpm)
+ 		return 0;
+-	}
+-
+-	ret = imx_usbmisc_set_wakeup(data->usbmisc_data, true);
+-	if (ret) {
+-		dev_err(dev, "usbmisc set_wakeup failed, ret=%d\n", ret);
+-		return ret;
+-	}
+ 
+-	return imx_controller_suspend(dev);
++	return imx_controller_suspend(dev, PMSG_AUTO_SUSPEND);
+ }
+ 
+ static int __maybe_unused ci_hdrc_imx_runtime_resume(struct device *dev)
+ {
+-	return imx_controller_resume(dev);
++	return imx_controller_resume(dev, PMSG_AUTO_RESUME);
+ }
+ 
+ static const struct dev_pm_ops ci_hdrc_imx_pm_ops = {
+diff --git a/drivers/usb/chipidea/ci_hdrc_imx.h b/drivers/usb/chipidea/ci_hdrc_imx.h
+index 999c65390..cbd580e2b 100644
+--- a/drivers/usb/chipidea/ci_hdrc_imx.h
++++ b/drivers/usb/chipidea/ci_hdrc_imx.h
+@@ -32,9 +32,9 @@ struct imx_usbmisc_data {
+ 
+ int imx_usbmisc_init(struct imx_usbmisc_data *data);
+ int imx_usbmisc_init_post(struct imx_usbmisc_data *data);
+-int imx_usbmisc_set_wakeup(struct imx_usbmisc_data *data, bool enabled);
+ int imx_usbmisc_hsic_set_connect(struct imx_usbmisc_data *data);
+-int imx_usbmisc_hsic_set_clk(struct imx_usbmisc_data *data, bool on);
+ int imx_usbmisc_charger_detection(struct imx_usbmisc_data *data, bool connect);
++int imx_usbmisc_suspend(struct imx_usbmisc_data *data, bool wakeup);
++int imx_usbmisc_resume(struct imx_usbmisc_data *data, bool wakeup);
+ 
+ #endif /* __DRIVER_USB_CHIPIDEA_CI_HDRC_IMX_H */
+diff --git a/drivers/usb/chipidea/core.c b/drivers/usb/chipidea/core.c
+index a56f06368..20e04608f 100644
+--- a/drivers/usb/chipidea/core.c
++++ b/drivers/usb/chipidea/core.c
+@@ -208,7 +208,7 @@ static void ci_hdrc_enter_lpm_common(struct ci_hdrc *ci, bool enable)
+ 				0);
+ }
+ 
+-static void ci_hdrc_enter_lpm(struct ci_hdrc *ci, bool enable)
++void ci_hdrc_enter_lpm(struct ci_hdrc *ci, bool enable)
+ {
+ 	return ci->platdata->enter_lpm(ci, enable);
+ }
+@@ -455,7 +455,7 @@ void ci_platform_configure(struct ci_hdrc *ci)
+   *
+  * This function returns an error code
+  */
+-static int hw_controller_reset(struct ci_hdrc *ci)
++int hw_controller_reset(struct ci_hdrc *ci)
+ {
+ 	int count = 0;
+ 
+@@ -521,6 +521,13 @@ static irqreturn_t ci_irq_handler(int irq, void *data)
+ 	u32 otgsc = 0;
+ 
+ 	if (ci->in_lpm) {
++		/*
++		 * If we already have a wakeup irq pending there,
++		 * let's just return to wait resume finished firstly.
++		 */
++		if (ci->wakeup_int)
++			return IRQ_HANDLED;
++
+ 		disable_irq_nosync(irq);
+ 		ci->wakeup_int = true;
+ 		pm_runtime_get(ci->dev);
+@@ -974,9 +981,12 @@ static ssize_t role_store(struct device *dev,
+ 			     strlen(ci->roles[role]->name)))
+ 			break;
+ 
+-	if (role == CI_ROLE_END || role == ci->role)
++	if (role == CI_ROLE_END)
+ 		return -EINVAL;
+ 
++	if (role == ci->role)
++		return n;
++
+ 	pm_runtime_get_sync(dev);
+ 	disable_irq(ci->irq);
+ 	ci_role_stop(ci);
+@@ -996,6 +1006,54 @@ static struct attribute *ci_attrs[] = {
+ };
+ ATTRIBUTE_GROUPS(ci);
+ 
++static enum ci_role ci_get_role(struct ci_hdrc *ci)
++{
++	if (ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
++		if (ci->is_otg) {
++			hw_write_otgsc(ci, OTGSC_IDIE, OTGSC_IDIE);
++			return ci_otg_role(ci);
++		} else {
++			/*
++			 * If the controller is not OTG capable, but support
++			 * role switch, the defalt role is gadget, and the
++			 * user can switch it through debugfs.
++			 */
++			return CI_ROLE_GADGET;
++		}
++	} else {
++		return ci->roles[CI_ROLE_HOST]
++			? CI_ROLE_HOST
++			: CI_ROLE_GADGET;
++	}
++}
++
++static void ci_start_new_role(struct ci_hdrc *ci)
++{
++	enum ci_role role = ci_get_role(ci);
++
++	if (ci->role != role) {
++		ci_handle_id_switch(ci);
++	} else if (role == CI_ROLE_GADGET) {
++		if (ci->vbus_active)
++			usb_gadget_vbus_disconnect(&ci->gadget);
++		if (hw_read_otgsc(ci, OTGSC_BSV))
++			usb_gadget_vbus_connect(&ci->gadget);
++	}
++}
++
++static void ci_power_lost_work(struct work_struct *work)
++{
++	struct ci_hdrc *ci = container_of(work, struct ci_hdrc,
++						power_lost_work);
++
++	disable_irq_nosync(ci->irq);
++	pm_runtime_get_sync(ci->dev);
++	if (!ci_otg_is_fsm_mode(ci))
++		ci_start_new_role(ci);
++	pm_runtime_put_sync(ci->dev);
++	enable_irq(ci->irq);
++}
++
+ static int ci_hdrc_probe(struct platform_device *pdev)
+ {
+ 	struct device	*dev = &pdev->dev;
+@@ -1148,25 +1206,7 @@ static int ci_hdrc_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	if (ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
+-		if (ci->is_otg) {
+-			ci->role = ci_otg_role(ci);
+-			/* Enable ID change irq */
+-			hw_write_otgsc(ci, OTGSC_IDIE, OTGSC_IDIE);
+-		} else {
+-			/*
+-			 * If the controller is not OTG capable, but support
+-			 * role switch, the defalt role is gadget, and the
+-			 * user can switch it through debugfs.
+-			 */
+-			ci->role = CI_ROLE_GADGET;
+-		}
+-	} else {
+-		ci->role = ci->roles[CI_ROLE_HOST]
+-			? CI_ROLE_HOST
+-			: CI_ROLE_GADGET;
+-	}
+-
++	ci->role = ci_get_role(ci);
+ 	if (!ci_otg_is_fsm_mode(ci)) {
+ 		/* only update vbus status for peripheral */
+ 		if (ci->role == CI_ROLE_GADGET) {
+@@ -1203,11 +1243,22 @@ static int ci_hdrc_probe(struct platform_device *pdev)
+ 	if (ci_otg_is_fsm_mode(ci))
+ 		ci_hdrc_otg_fsm_start(ci);
+ 
++	/* Init workqueue for controller power lost handling */
++	ci->power_lost_wq = create_freezable_workqueue("ci_power_lost");
++	if (!ci->power_lost_wq) {
++		dev_err(ci->dev, "can't create power_lost workqueue\n");
++		goto remove_debug;
++	}
++
++	INIT_WORK(&ci->power_lost_work, ci_power_lost_work);
+ 	device_set_wakeup_capable(&pdev->dev, true);
+ 	dbg_create_files(ci);
++	mutex_init(&ci->mutex);
+ 
+ 	return 0;
+ 
++remove_debug:
++	dbg_remove_files(ci);
+ stop:
+ 	if (ci->role_switch)
+ 		usb_role_switch_unregister(ci->role_switch);
+@@ -1239,6 +1290,8 @@ static int ci_hdrc_remove(struct platform_device *pdev)
+ 		pm_runtime_put_noidle(&pdev->dev);
+ 	}
+ 
++	flush_workqueue(ci->power_lost_wq);
++	destroy_workqueue(ci->power_lost_wq);
+ 	dbg_remove_files(ci);
+ 	ci_role_destroy(ci);
+ 	ci_hdrc_enter_lpm(ci, true);
+@@ -1318,10 +1371,8 @@ static int ci_controller_resume(struct device *dev)
+ 
+ 	dev_dbg(dev, "at %s\n", __func__);
+ 
+-	if (!ci->in_lpm) {
+-		WARN_ON(1);
++	if (!ci->in_lpm)
+ 		return 0;
+-	}
+ 
+ 	ci_hdrc_enter_lpm(ci, false);
+ 
+@@ -1354,6 +1405,7 @@ static int ci_suspend(struct device *dev)
+ {
+ 	struct ci_hdrc *ci = dev_get_drvdata(dev);
+ 
++	flush_workqueue(ci->power_lost_wq);
+ 	if (ci->wq)
+ 		flush_workqueue(ci->wq);
+ 	/*
+@@ -1370,6 +1422,10 @@ static int ci_suspend(struct device *dev)
+ 		return 0;
+ 	}
+ 
++	/* Extra routine per role before system suspend */
++	if (ci->role != CI_ROLE_END && ci_role(ci)->suspend)
++		ci_role(ci)->suspend(ci);
++
+ 	if (device_may_wakeup(dev)) {
+ 		if (ci_otg_is_fsm_mode(ci))
+ 			ci_otg_fsm_suspend_for_srp(ci);
+@@ -1387,6 +1443,16 @@ static int ci_resume(struct device *dev)
+ {
+ 	struct ci_hdrc *ci = dev_get_drvdata(dev);
+ 	int ret;
++	bool power_lost = false;
++	u32 sample_reg_val;
++
++	/* Check if controller resume from power lost */
++	sample_reg_val = hw_read(ci, OP_ENDPTLISTADDR, ~0);
++	if (sample_reg_val == 0)
++		power_lost = true;
++	else if (sample_reg_val == 0xFFFFFFFF)
++		/* Restore value 0 if it was set for power lost check */
++		hw_write(ci, OP_ENDPTLISTADDR, ~0, 0);
+ 
+ 	if (device_may_wakeup(dev))
+ 		disable_irq_wake(ci->irq);
+@@ -1395,6 +1461,19 @@ static int ci_resume(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
++	if (power_lost) {
++		/* shutdown and re-init for phy */
++		ci_usb_phy_exit(ci);
++		ci_usb_phy_init(ci);
++	}
++
++	/* Extra routine per role after system resume */
++	if (ci->role != CI_ROLE_END && ci_role(ci)->resume)
++		ci_role(ci)->resume(ci, power_lost);
++
++	if (power_lost)
++		queue_work(ci->power_lost_wq, &ci->power_lost_work);
++
+ 	if (ci->supports_runtime_pm) {
+ 		pm_runtime_disable(dev);
+ 		pm_runtime_set_active(dev);
+@@ -1411,10 +1490,8 @@ static int ci_runtime_suspend(struct device *dev)
+ 
+ 	dev_dbg(dev, "at %s\n", __func__);
+ 
+-	if (ci->in_lpm) {
+-		WARN_ON(1);
++	if (ci->in_lpm)
+ 		return 0;
+-	}
+ 
+ 	if (ci_otg_is_fsm_mode(ci))
+ 		ci_otg_fsm_suspend_for_srp(ci);
+diff --git a/drivers/usb/chipidea/host.c b/drivers/usb/chipidea/host.c
+index bdc3885c0..212adb132 100644
+--- a/drivers/usb/chipidea/host.c
++++ b/drivers/usb/chipidea/host.c
+@@ -23,6 +23,7 @@
+ 
+ static struct hc_driver __read_mostly ci_ehci_hc_driver;
+ static int (*orig_bus_suspend)(struct usb_hcd *hcd);
++static int (*orig_bus_resume)(struct usb_hcd *hcd);
+ 
+ struct ehci_ci_priv {
+ 	struct regulator *reg_vbus;
+@@ -242,7 +243,7 @@ static int ci_ehci_hub_control(
+ 	struct ehci_hcd	*ehci = hcd_to_ehci(hcd);
+ 	unsigned int	ports = HCS_N_PORTS(ehci->hcs_params);
+ 	u32 __iomem	*status_reg;
+-	u32		temp, port_index;
++	u32		temp, port_index, suspend_line_state;
+ 	unsigned long	flags;
+ 	int		retval = 0;
+ 	bool		done = false;
+@@ -286,6 +287,17 @@ static int ci_ehci_hub_control(
+ 			PORT_SUSPEND, 5000))
+ 			ehci_err(ehci, "timeout waiting for SUSPEND\n");
+ 
++		if (ci->platdata->flags & CI_HDRC_HOST_SUSP_PHY_LPM) {
++			if (PORT_SPEED_LOW(temp))
++				suspend_line_state = PORTSC_LS_K;
++			else
++				suspend_line_state = PORTSC_LS_J;
++			if (!ehci_handshake(ehci, status_reg, PORTSC_LS,
++					   suspend_line_state, 5000))
++				ci_hdrc_enter_lpm(ci, true);
++		}
++
++
+ 		if (ci->platdata->flags & CI_HDRC_IMX_IS_HSIC) {
+ 			if (ci->platdata->notify_event)
+ 				ci->platdata->notify_event(ci,
+@@ -296,6 +308,14 @@ static int ci_ehci_hub_control(
+ 			ehci_writel(ehci, temp, status_reg);
+ 		}
+ 
++		spin_unlock_irqrestore(&ehci->lock, flags);
++		if (ehci_port_speed(ehci, temp) ==
++				USB_PORT_STAT_HIGH_SPEED && hcd->usb_phy) {
++			/* notify the USB PHY */
++			usb_phy_notify_suspend(hcd->usb_phy, USB_SPEED_HIGH);
++		}
++		spin_lock_irqsave(&ehci->lock, flags);
++
+ 		set_bit(port_index, &ehci->suspended_ports);
+ 		goto done;
+ 	}
+@@ -309,6 +329,14 @@ static int ci_ehci_hub_control(
+ 		/* Make sure the resume has finished, it should be finished */
+ 		if (ehci_handshake(ehci, status_reg, PORT_RESUME, 0, 25000))
+ 			ehci_err(ehci, "timeout waiting for resume\n");
++
++		temp = ehci_readl(ehci, status_reg);
++
++		if (ehci_port_speed(ehci, temp) ==
++				USB_PORT_STAT_HIGH_SPEED && hcd->usb_phy) {
++			/* notify the USB PHY */
++			usb_phy_notify_resume(hcd->usb_phy, USB_SPEED_HIGH);
++		}
+ 	}
+ 
+ 	spin_unlock_irqrestore(&ehci->lock, flags);
+@@ -355,6 +383,15 @@ static int ci_ehci_bus_suspend(struct usb_hcd *hcd)
+ 			 * It needs a short delay between set RS bit and PHCD.
+ 			 */
+ 			usleep_range(150, 200);
++			/*
++			 * If a transaction is in progress, there may be
++			 * a delay in suspending the port. Poll until the
++			 * port is suspended.
++			 */
++			if (test_bit(port, &ehci->bus_suspended) &&
++					ehci_handshake(ehci, reg, PORT_SUSPEND,
++							PORT_SUSPEND, 5000))
++				ehci_err(ehci, "timeout waiting for SUSPEND\n");
+ 			/*
+ 			 * Need to clear WKCN and WKOC for imx HSIC,
+ 			 * otherwise, there will be wakeup event.
+@@ -365,6 +402,15 @@ static int ci_ehci_bus_suspend(struct usb_hcd *hcd)
+ 				ehci_writel(ehci, tmp, reg);
+ 			}
+ 
++			if (hcd->usb_phy && test_bit(port, &ehci->bus_suspended)
++				&& (ehci_port_speed(ehci, portsc) ==
++					USB_PORT_STAT_HIGH_SPEED))
++				/*
++				 * notify the USB PHY, it is for global
++				 * suspend case.
++				 */
++				usb_phy_notify_suspend(hcd->usb_phy,
++					USB_SPEED_HIGH);
+ 			break;
+ 		}
+ 	}
+@@ -452,6 +498,119 @@ static void ci_hdrc_unmap_urb_for_dma(struct usb_hcd *hcd, struct urb *urb)
+ 	ci_hdrc_free_dma_aligned_buffer(urb);
+ }
+ 
++static void ci_hdrc_host_save_for_power_lost(struct ci_hdrc *ci)
++{
++	struct ehci_hcd *ehci;
++
++	if (!ci->hcd)
++		return;
++
++	ehci = hcd_to_ehci(ci->hcd);
++	/* save EHCI registers */
++	ci->pm_usbmode = ehci_readl(ehci, &ehci->regs->usbmode);
++	ci->pm_command = ehci_readl(ehci, &ehci->regs->command);
++	ci->pm_command &= ~CMD_RUN;
++	ci->pm_status  = ehci_readl(ehci, &ehci->regs->status);
++	ci->pm_intr_enable  = ehci_readl(ehci, &ehci->regs->intr_enable);
++	ci->pm_frame_index  = ehci_readl(ehci, &ehci->regs->frame_index);
++	ci->pm_segment  = ehci_readl(ehci, &ehci->regs->segment);
++	ci->pm_frame_list  = ehci_readl(ehci, &ehci->regs->frame_list);
++	ci->pm_async_next  = ehci_readl(ehci, &ehci->regs->async_next);
++	ci->pm_configured_flag  =
++			ehci_readl(ehci, &ehci->regs->configured_flag);
++	ci->pm_portsc = ehci_readl(ehci, &ehci->regs->port_status[0]);
++}
++
++static void ci_hdrc_host_restore_from_power_lost(struct ci_hdrc *ci)
++{
++	struct ehci_hcd *ehci;
++	unsigned long   flags;
++	u32 tmp;
++	int step_ms;
++	/*
++	 * If the vbus is off during system suspend, most of devices will pull
++	 * DP up within 200ms when they see vbus, set 1000ms for safety.
++	 */
++	int timeout_ms = 1000;
++
++	if (!ci->hcd)
++		return;
++
++	hw_controller_reset(ci);
++
++	ehci = hcd_to_ehci(ci->hcd);
++	spin_lock_irqsave(&ehci->lock, flags);
++	/* Restore EHCI registers */
++	ehci_writel(ehci, ci->pm_usbmode, &ehci->regs->usbmode);
++	ehci_writel(ehci, ci->pm_portsc, &ehci->regs->port_status[0]);
++	ehci_writel(ehci, ci->pm_command, &ehci->regs->command);
++	ehci_writel(ehci, ci->pm_intr_enable, &ehci->regs->intr_enable);
++	ehci_writel(ehci, ci->pm_frame_index, &ehci->regs->frame_index);
++	ehci_writel(ehci, ci->pm_segment, &ehci->regs->segment);
++	ehci_writel(ehci, ci->pm_frame_list, &ehci->regs->frame_list);
++	ehci_writel(ehci, ci->pm_async_next, &ehci->regs->async_next);
++	ehci_writel(ehci, ci->pm_configured_flag,
++					&ehci->regs->configured_flag);
++	/* Restore the PHY's connect notifier setting */
++	if (ci->pm_portsc & PORTSC_HSP)
++		usb_phy_notify_connect(ci->usb_phy, USB_SPEED_HIGH);
++
++	tmp = ehci_readl(ehci, &ehci->regs->command);
++	tmp |= CMD_RUN;
++	ehci_writel(ehci, tmp, &ehci->regs->command);
++	spin_unlock_irqrestore(&ehci->lock, flags);
++
++	if (!(ci->pm_portsc & PORTSC_CCS))
++		return;
++
++	for (step_ms = 0; step_ms < timeout_ms; step_ms += 25) {
++		if (ehci_readl(ehci, &ehci->regs->port_status[0]) & PORTSC_CCS)
++			break;
++		msleep(25);
++	}
++}
++
++static void ci_hdrc_host_suspend(struct ci_hdrc *ci)
++{
++	ci_hdrc_host_save_for_power_lost(ci);
++}
++
++static void ci_hdrc_host_resume(struct ci_hdrc *ci, bool power_lost)
++{
++	if (power_lost)
++		ci_hdrc_host_restore_from_power_lost(ci);
++}
++
++static int ci_ehci_bus_resume(struct usb_hcd *hcd)
++{
++	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++	int port;
++
++	int ret = orig_bus_resume(hcd);
++
++	if (ret)
++		return ret;
++
++	port = HCS_N_PORTS(ehci->hcs_params);
++	while (port--) {
++		u32 __iomem *reg = &ehci->regs->port_status[port];
++		u32 portsc = ehci_readl(ehci, reg);
++		/*
++		 * Notify PHY after resume signal has finished, it is
++		 * for global suspend case.
++		 */
++		if (hcd->usb_phy
++			&& test_bit(port, &ehci->bus_suspended)
++			&& (portsc & PORT_CONNECT)
++			&& (ehci_port_speed(ehci, portsc) ==
++				USB_PORT_STAT_HIGH_SPEED))
++			/* notify the USB PHY */
++			usb_phy_notify_resume(hcd->usb_phy, USB_SPEED_HIGH);
++	}
++
++	return 0;
++}
++
+ int ci_hdrc_host_init(struct ci_hdrc *ci)
+ {
+ 	struct ci_role_driver *rdrv;
+@@ -465,6 +624,8 @@ int ci_hdrc_host_init(struct ci_hdrc *ci)
+ 
+ 	rdrv->start	= host_start;
+ 	rdrv->stop	= host_stop;
++	rdrv->suspend	= ci_hdrc_host_suspend;
++	rdrv->resume	= ci_hdrc_host_resume;
+ 	rdrv->irq	= host_irq;
+ 	rdrv->name	= "host";
+ 	ci->roles[CI_ROLE_HOST] = rdrv;
+@@ -481,6 +642,8 @@ void ci_hdrc_host_driver_init(void)
+ {
+ 	ehci_init_driver(&ci_ehci_hc_driver, &ehci_ci_overrides);
+ 	orig_bus_suspend = ci_ehci_hc_driver.bus_suspend;
++	orig_bus_resume = ci_ehci_hc_driver.bus_resume;
++	ci_ehci_hc_driver.bus_resume = ci_ehci_bus_resume;
+ 	ci_ehci_hc_driver.bus_suspend = ci_ehci_bus_suspend;
+ 	ci_ehci_hc_driver.hub_control = ci_ehci_hub_control;
+ }
+diff --git a/drivers/usb/chipidea/otg.c b/drivers/usb/chipidea/otg.c
+index 8dd592828..e2c62ea2a 100644
+--- a/drivers/usb/chipidea/otg.c
++++ b/drivers/usb/chipidea/otg.c
+@@ -165,10 +165,12 @@ static int hw_wait_vbus_lower_bsv(struct ci_hdrc *ci)
+ 	return 0;
+ }
+ 
+-static void ci_handle_id_switch(struct ci_hdrc *ci)
++void ci_handle_id_switch(struct ci_hdrc *ci)
+ {
+-	enum ci_role role = ci_otg_role(ci);
++	enum ci_role role;
+ 
++	mutex_lock(&ci->mutex);
++	role = ci_otg_role(ci);
+ 	if (role != ci->role) {
+ 		dev_dbg(ci->dev, "switching from %s to %s\n",
+ 			ci_role(ci)->name, ci->roles[role]->name);
+@@ -198,6 +200,7 @@ static void ci_handle_id_switch(struct ci_hdrc *ci)
+ 		if (role == CI_ROLE_GADGET)
+ 			ci_handle_vbus_change(ci);
+ 	}
++	mutex_unlock(&ci->mutex);
+ }
+ /**
+  * ci_otg_work - perform otg (vbus/id) event handle
+diff --git a/drivers/usb/chipidea/otg.h b/drivers/usb/chipidea/otg.h
+index 5e7a6e571..87629b81e 100644
+--- a/drivers/usb/chipidea/otg.h
++++ b/drivers/usb/chipidea/otg.h
+@@ -14,6 +14,7 @@ int ci_hdrc_otg_init(struct ci_hdrc *ci);
+ void ci_hdrc_otg_destroy(struct ci_hdrc *ci);
+ enum ci_role ci_otg_role(struct ci_hdrc *ci);
+ void ci_handle_vbus_change(struct ci_hdrc *ci);
++void ci_handle_id_switch(struct ci_hdrc *ci);
+ static inline void ci_otg_queue_work(struct ci_hdrc *ci)
+ {
+ 	disable_irq_nosync(ci->irq);
+diff --git a/drivers/usb/chipidea/udc.c b/drivers/usb/chipidea/udc.c
+index 8834ca613..2c62af56b 100644
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -1694,6 +1694,13 @@ static int ci_udc_vbus_session(struct usb_gadget *_gadget, int is_active)
+ 		ret = ci->platdata->notify_event(ci,
+ 				CI_HDRC_CONTROLLER_VBUS_EVENT);
+ 
++	if (ci->usb_phy) {
++		if (is_active)
++			usb_phy_set_event(ci->usb_phy, USB_EVENT_VBUS);
++		else
++			usb_phy_set_event(ci->usb_phy, USB_EVENT_NONE);
++	}
++
+ 	if (ci->driver)
+ 		ci_hdrc_gadget_connect(_gadget, is_active);
+ 
+@@ -2009,6 +2016,9 @@ static irqreturn_t udc_irq(struct ci_hdrc *ci)
+ 		if (USBi_PCI & intr) {
+ 			ci->gadget.speed = hw_port_is_high_speed(ci) ?
+ 				USB_SPEED_HIGH : USB_SPEED_FULL;
++			if (ci->usb_phy)
++				usb_phy_set_event(ci->usb_phy,
++					USB_EVENT_ENUMERATED);
+ 			if (ci->suspended) {
+ 				if (ci->driver->resume) {
+ 					spin_unlock(&ci->lock);
+@@ -2156,6 +2166,44 @@ static void udc_id_switch_for_host(struct ci_hdrc *ci)
+ 				     ci->platdata->pins_default);
+ }
+ 
++static void udc_suspend_for_power_lost(struct ci_hdrc *ci)
++{
++	/*
++	 * Set OP_ENDPTLISTADDR to be non-zero for
++	 * checking if controller resume from power lost
++	 * in non-host mode.
++	 */
++	if (hw_read(ci, OP_ENDPTLISTADDR, ~0) == 0)
++		hw_write(ci, OP_ENDPTLISTADDR, ~0, ~0);
++}
++
++/* Power lost with device mode */
++static void udc_resume_from_power_lost(struct ci_hdrc *ci)
++{
++	if (ci->is_otg)
++		hw_write_otgsc(ci, OTGSC_BSVIS | OTGSC_BSVIE,
++					OTGSC_BSVIS | OTGSC_BSVIE);
++}
++
++static void udc_suspend(struct ci_hdrc *ci)
++{
++	udc_suspend_for_power_lost(ci);
++
++	if (ci->driver && ci->vbus_active &&
++			(ci->gadget.state != USB_STATE_SUSPENDED))
++		usb_gadget_disconnect(&ci->gadget);
++}
++
++static void udc_resume(struct ci_hdrc *ci, bool power_lost)
++{
++	if (power_lost) {
++		udc_resume_from_power_lost(ci);
++	} else {
++		if (ci->driver && ci->vbus_active)
++			usb_gadget_connect(&ci->gadget);
++	}
++}
++
+ /**
+  * ci_hdrc_gadget_init - initialize device related bits
+  * @ci: the controller
+@@ -2176,6 +2224,8 @@ int ci_hdrc_gadget_init(struct ci_hdrc *ci)
+ 
+ 	rdrv->start	= udc_id_switch_for_device;
+ 	rdrv->stop	= udc_id_switch_for_host;
++	rdrv->suspend	= udc_suspend;
++	rdrv->resume	= udc_resume;
+ 	rdrv->irq	= udc_irq;
+ 	rdrv->name	= "gadget";
+ 
+diff --git a/drivers/usb/chipidea/usbmisc_imx.c b/drivers/usb/chipidea/usbmisc_imx.c
+index bac0f5458..e59d3baf7 100644
+--- a/drivers/usb/chipidea/usbmisc_imx.c
++++ b/drivers/usb/chipidea/usbmisc_imx.c
+@@ -113,7 +113,6 @@
+ #define MX7D_USBNC_USB_CTRL2_DP_DM_MASK			(BIT(12) | BIT(13) | \
+ 							BIT(14) | BIT(15))
+ 
+-#define MX7D_USB_OTG_PHY_CFG1		0x30
+ #define MX7D_USB_OTG_PHY_CFG2_CHRG_CHRGSEL	BIT(0)
+ #define MX7D_USB_OTG_PHY_CFG2_CHRG_VDATDETENB0	BIT(1)
+ #define MX7D_USB_OTG_PHY_CFG2_CHRG_VDATSRCENB0	BIT(2)
+@@ -135,7 +134,7 @@
+ #define TXVREFTUNE0_MASK		(0xf << 20)
+ 
+ #define MX6_USB_OTG_WAKEUP_BITS (MX6_BM_WAKEUP_ENABLE | MX6_BM_VBUS_WAKEUP | \
+-				 MX6_BM_ID_WAKEUP)
++				 MX6_BM_ID_WAKEUP | MX6SX_BM_DPDM_WAKEUP_EN)
+ 
+ struct usbmisc_ops {
+ 	/* It's called once when probe a usb device */
+@@ -150,6 +149,9 @@ struct usbmisc_ops {
+ 	int (*hsic_set_clk)(struct imx_usbmisc_data *data, bool enabled);
+ 	/* usb charger detection */
+ 	int (*charger_detection)(struct imx_usbmisc_data *data);
++	/* It's called when system resume from usb power lost */
++	int (*power_lost_check)(struct imx_usbmisc_data *data);
++	void (*vbus_comparator_on)(struct imx_usbmisc_data *data, bool on);
+ };
+ 
+ struct imx_usbmisc {
+@@ -873,6 +875,33 @@ static int imx7d_charger_detection(struct imx_usbmisc_data *data)
+ 	return ret;
+ }
+ 
++static void usbmisc_imx7d_vbus_comparator_on(struct imx_usbmisc_data *data,
++					     bool on)
++{
++	unsigned long flags;
++	struct imx_usbmisc *usbmisc = dev_get_drvdata(data->dev);
++	u32 val;
++
++	if (data->hsic)
++		return;
++
++	spin_lock_irqsave(&usbmisc->lock, flags);
++	/*
++	 * Disable VBUS valid comparator when in suspend mode,
++	 * when OTG is disabled and DRVVBUS0 is asserted case
++	 * the Bandgap circuitry and VBUS Valid comparator are
++	 * still powered, even in Suspend or Sleep mode.
++	 */
++	val = readl(usbmisc->base + MX7D_USB_OTG_PHY_CFG2);
++	if (on)
++		val |= MX7D_USB_OTG_PHY_CFG2_DRVVBUS0;
++	else
++		val &= ~MX7D_USB_OTG_PHY_CFG2_DRVVBUS0;
++
++	writel(val, usbmisc->base + MX7D_USB_OTG_PHY_CFG2);
++	spin_unlock_irqrestore(&usbmisc->lock, flags);
++}
++
+ static int usbmisc_imx7ulp_init(struct imx_usbmisc_data *data)
+ {
+ 	struct imx_usbmisc *usbmisc = dev_get_drvdata(data->dev);
+@@ -937,6 +966,44 @@ static int usbmisc_imx7ulp_init(struct imx_usbmisc_data *data)
+ 	return 0;
+ }
+ 
++static int usbmisc_imx7d_power_lost_check(struct imx_usbmisc_data *data)
++{
++	struct imx_usbmisc *usbmisc = dev_get_drvdata(data->dev);
++	unsigned long flags;
++	u32 val;
++
++	spin_lock_irqsave(&usbmisc->lock, flags);
++	val = readl(usbmisc->base);
++	spin_unlock_irqrestore(&usbmisc->lock, flags);
++	/*
++	 * Here use a power on reset value to judge
++	 * if the controller experienced a power lost
++	 */
++	if (val == 0x30001000)
++		return 1;
++	else
++		return 0;
++}
++
++static int usbmisc_imx6sx_power_lost_check(struct imx_usbmisc_data *data)
++{
++	struct imx_usbmisc *usbmisc = dev_get_drvdata(data->dev);
++	unsigned long flags;
++	u32 val;
++
++	spin_lock_irqsave(&usbmisc->lock, flags);
++	val = readl(usbmisc->base + data->index * 4);
++	spin_unlock_irqrestore(&usbmisc->lock, flags);
++	/*
++	 * Here use a power on reset value to judge
++	 * if the controller experienced a power lost
++	 */
++	if (val == 0x30001000)
++		return 1;
++	else
++		return 0;
++}
++
+ static const struct usbmisc_ops imx25_usbmisc_ops = {
+ 	.init = usbmisc_imx25_init,
+ 	.post = usbmisc_imx25_post,
+@@ -970,12 +1037,15 @@ static const struct usbmisc_ops imx6sx_usbmisc_ops = {
+ 	.init = usbmisc_imx6sx_init,
+ 	.hsic_set_connect = usbmisc_imx6_hsic_set_connect,
+ 	.hsic_set_clk = usbmisc_imx6_hsic_set_clk,
++	.power_lost_check = usbmisc_imx6sx_power_lost_check,
+ };
+ 
+ static const struct usbmisc_ops imx7d_usbmisc_ops = {
+ 	.init = usbmisc_imx7d_init,
+ 	.set_wakeup = usbmisc_imx7d_set_wakeup,
+ 	.charger_detection = imx7d_charger_detection,
++	.power_lost_check = usbmisc_imx7d_power_lost_check,
++	.vbus_comparator_on = usbmisc_imx7d_vbus_comparator_on,
+ };
+ 
+ static const struct usbmisc_ops imx7ulp_usbmisc_ops = {
+@@ -983,6 +1053,7 @@ static const struct usbmisc_ops imx7ulp_usbmisc_ops = {
+ 	.set_wakeup = usbmisc_imx7d_set_wakeup,
+ 	.hsic_set_connect = usbmisc_imx6_hsic_set_connect,
+ 	.hsic_set_clk = usbmisc_imx6_hsic_set_clk,
++	.power_lost_check = usbmisc_imx7d_power_lost_check,
+ };
+ 
+ static inline bool is_imx53_usbmisc(struct imx_usbmisc_data *data)
+@@ -1009,30 +1080,29 @@ EXPORT_SYMBOL_GPL(imx_usbmisc_init);
+ int imx_usbmisc_init_post(struct imx_usbmisc_data *data)
+ {
+ 	struct imx_usbmisc *usbmisc;
++	int ret = 0;
+ 
+ 	if (!data)
+ 		return 0;
+ 
+ 	usbmisc = dev_get_drvdata(data->dev);
+-	if (!usbmisc->ops->post)
+-		return 0;
+-	return usbmisc->ops->post(data);
+-}
+-EXPORT_SYMBOL_GPL(imx_usbmisc_init_post);
+-
+-int imx_usbmisc_set_wakeup(struct imx_usbmisc_data *data, bool enabled)
+-{
+-	struct imx_usbmisc *usbmisc;
++	if (usbmisc->ops->post)
++		ret = usbmisc->ops->post(data);
++	if (ret) {
++		dev_err(data->dev, "post init failed, ret=%d\n", ret);
++		return ret;
++	}
+ 
+-	if (!data)
+-		return 0;
++	if (usbmisc->ops->set_wakeup)
++		ret = usbmisc->ops->set_wakeup(data, false);
++	if (ret) {
++		dev_err(data->dev, "set_wakeup failed, ret=%d\n", ret);
++		return ret;
++	}
+ 
+-	usbmisc = dev_get_drvdata(data->dev);
+-	if (!usbmisc->ops->set_wakeup)
+-		return 0;
+-	return usbmisc->ops->set_wakeup(data, enabled);
++	return 0;
+ }
+-EXPORT_SYMBOL_GPL(imx_usbmisc_set_wakeup);
++EXPORT_SYMBOL_GPL(imx_usbmisc_init_post);
+ 
+ int imx_usbmisc_hsic_set_connect(struct imx_usbmisc_data *data)
+ {
+@@ -1048,20 +1118,6 @@ int imx_usbmisc_hsic_set_connect(struct imx_usbmisc_data *data)
+ }
+ EXPORT_SYMBOL_GPL(imx_usbmisc_hsic_set_connect);
+ 
+-int imx_usbmisc_hsic_set_clk(struct imx_usbmisc_data *data, bool on)
+-{
+-	struct imx_usbmisc *usbmisc;
+-
+-	if (!data)
+-		return 0;
+-
+-	usbmisc = dev_get_drvdata(data->dev);
+-	if (!usbmisc->ops->hsic_set_clk || !data->hsic)
+-		return 0;
+-	return usbmisc->ops->hsic_set_clk(data, on);
+-}
+-EXPORT_SYMBOL_GPL(imx_usbmisc_hsic_set_clk);
+-
+ int imx_usbmisc_charger_detection(struct imx_usbmisc_data *data, bool connect)
+ {
+ 	struct imx_usbmisc *usbmisc;
+@@ -1094,6 +1150,84 @@ int imx_usbmisc_charger_detection(struct imx_usbmisc_data *data, bool connect)
+ }
+ EXPORT_SYMBOL_GPL(imx_usbmisc_charger_detection);
+ 
++int imx_usbmisc_suspend(struct imx_usbmisc_data *data, bool wakeup)
++{
++	struct imx_usbmisc *usbmisc;
++	int ret = 0;
++
++	if (!data)
++		return 0;
++
++	usbmisc = dev_get_drvdata(data->dev);
++
++	if (usbmisc->ops->vbus_comparator_on)
++		usbmisc->ops->vbus_comparator_on(data, false);
++
++	if (wakeup && usbmisc->ops->set_wakeup)
++		ret = usbmisc->ops->set_wakeup(data, true);
++	if (ret) {
++		dev_err(data->dev, "set_wakeup failed, ret=%d\n", ret);
++		return ret;
++	}
++
++	if (usbmisc->ops->hsic_set_clk && data->hsic)
++		ret = usbmisc->ops->hsic_set_clk(data, false);
++	if (ret) {
++		dev_err(data->dev, "set_wakeup failed, ret=%d\n", ret);
++		return ret;
++	}
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(imx_usbmisc_suspend);
++
++int imx_usbmisc_resume(struct imx_usbmisc_data *data, bool wakeup)
++{
++	struct imx_usbmisc *usbmisc;
++	int ret = 0;
++
++	if (!data)
++		return 0;
++
++	usbmisc = dev_get_drvdata(data->dev);
++
++	if (usbmisc->ops->power_lost_check)
++		ret = usbmisc->ops->power_lost_check(data);
++	if (ret > 0) {
++		/* re-init if resume from power lost */
++		ret = imx_usbmisc_init(data);
++		if (ret) {
++			dev_err(data->dev, "re-init failed, ret=%d\n", ret);
++			return ret;
++		}
++	}
++
++	if (wakeup && usbmisc->ops->set_wakeup)
++		ret = usbmisc->ops->set_wakeup(data, false);
++	if (ret) {
++		dev_err(data->dev, "set_wakeup failed, ret=%d\n", ret);
++		return ret;
++	}
++
++	if (usbmisc->ops->hsic_set_clk && data->hsic)
++		ret = usbmisc->ops->hsic_set_clk(data, true);
++	if (ret) {
++		dev_err(data->dev, "set_wakeup failed, ret=%d\n", ret);
++		goto hsic_set_clk_fail;
++	}
++
++	if (usbmisc->ops->vbus_comparator_on)
++		usbmisc->ops->vbus_comparator_on(data, true);
++
++	return 0;
++
++hsic_set_clk_fail:
++	if (wakeup && usbmisc->ops->set_wakeup)
++		usbmisc->ops->set_wakeup(data, true);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(imx_usbmisc_resume);
++
+ static const struct of_device_id usbmisc_imx_dt_ids[] = {
+ 	{
+ 		.compatible = "fsl,imx25-usbmisc",
+diff --git a/drivers/usb/core/hcd.c b/drivers/usb/core/hcd.c
+index 9e28d715f..dd3c288fa 100644
+--- a/drivers/usb/core/hcd.c
++++ b/drivers/usb/core/hcd.c
+@@ -2816,7 +2816,6 @@ int usb_add_hcd(struct usb_hcd *hcd,
+ {
+ 	int retval;
+ 	struct usb_device *rhdev;
+-	struct usb_hcd *shared_hcd;
+ 
+ 	if (!hcd->skip_phy_initialization && usb_hcd_is_primary_hcd(hcd)) {
+ 		hcd->phy_roothub = usb_phy_roothub_alloc(hcd->self.sysdev);
+@@ -2977,26 +2976,13 @@ int usb_add_hcd(struct usb_hcd *hcd,
+ 		goto err_hcd_driver_start;
+ 	}
+ 
+-	/* starting here, usbcore will pay attention to the shared HCD roothub */
+-	shared_hcd = hcd->shared_hcd;
+-	if (!usb_hcd_is_primary_hcd(hcd) && shared_hcd && HCD_DEFER_RH_REGISTER(shared_hcd)) {
+-		retval = register_root_hub(shared_hcd);
+-		if (retval != 0)
+-			goto err_register_root_hub;
+-
+-		if (shared_hcd->uses_new_polling && HCD_POLL_RH(shared_hcd))
+-			usb_hcd_poll_rh_status(shared_hcd);
+-	}
+-
+ 	/* starting here, usbcore will pay attention to this root hub */
+-	if (!HCD_DEFER_RH_REGISTER(hcd)) {
+-		retval = register_root_hub(hcd);
+-		if (retval != 0)
+-			goto err_register_root_hub;
++	retval = register_root_hub(hcd);
++	if (retval != 0)
++		goto err_register_root_hub;
+ 
+-		if (hcd->uses_new_polling && HCD_POLL_RH(hcd))
+-			usb_hcd_poll_rh_status(hcd);
+-	}
++	if (hcd->uses_new_polling && HCD_POLL_RH(hcd))
++		usb_hcd_poll_rh_status(hcd);
+ 
+ 	return retval;
+ 
+@@ -3034,7 +3020,6 @@ EXPORT_SYMBOL_GPL(usb_add_hcd);
+ void usb_remove_hcd(struct usb_hcd *hcd)
+ {
+ 	struct usb_device *rhdev = hcd->self.root_hub;
+-	bool rh_registered;
+ 
+ 	dev_info(hcd->self.controller, "remove, state %x\n", hcd->state);
+ 
+@@ -3045,7 +3030,6 @@ void usb_remove_hcd(struct usb_hcd *hcd)
+ 
+ 	dev_dbg(hcd->self.controller, "roothub graceful disconnect\n");
+ 	spin_lock_irq (&hcd_root_hub_lock);
+-	rh_registered = hcd->rh_registered;
+ 	hcd->rh_registered = 0;
+ 	spin_unlock_irq (&hcd_root_hub_lock);
+ 
+@@ -3055,8 +3039,7 @@ void usb_remove_hcd(struct usb_hcd *hcd)
+ 	cancel_work_sync(&hcd->died_work);
+ 
+ 	mutex_lock(&usb_bus_idr_lock);
+-	if (rh_registered)
+-		usb_disconnect(&rhdev);		/* Sets rhdev to NULL */
++	usb_disconnect(&rhdev);		/* Sets rhdev to NULL */
+ 	mutex_unlock(&usb_bus_idr_lock);
+ 
+ 	/*
+diff --git a/drivers/usb/dwc3/core.c b/drivers/usb/dwc3/core.c
+index 5cb1350ec..153114d72 100644
+--- a/drivers/usb/dwc3/core.c
++++ b/drivers/usb/dwc3/core.c
+@@ -104,11 +104,17 @@ static int dwc3_get_dr_mode(struct dwc3 *dwc)
+ 
+ void dwc3_set_prtcap(struct dwc3 *dwc, u32 mode)
+ {
+-	u32 reg;
++	u32 reg, reg_mode;
++
++	/* Set PRTCAPDIR to be device mode for disconnect */
++	if (mode == DWC3_GCTL_PRTCAP_NONE)
++		reg_mode = DWC3_GCTL_PRTCAP_DEVICE;
++	else
++		reg_mode = mode;
+ 
+ 	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
+ 	reg &= ~(DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_OTG));
+-	reg |= DWC3_GCTL_PRTCAPDIR(mode);
++	reg |= DWC3_GCTL_PRTCAPDIR(reg_mode);
+ 	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
+ 
+ 	dwc->current_dr_role = mode;
+@@ -119,6 +125,7 @@ static int dwc3_core_soft_reset(struct dwc3 *dwc);
+ static void __dwc3_set_mode(struct work_struct *work)
+ {
+ 	struct dwc3 *dwc = work_to_dwc(work);
++	struct dwc3_platform_data *dwc3_pdata;
+ 	unsigned long flags;
+ 	int ret;
+ 	u32 reg;
+@@ -130,9 +137,6 @@ static void __dwc3_set_mode(struct work_struct *work)
+ 	if (dwc->current_dr_role == DWC3_GCTL_PRTCAP_OTG)
+ 		dwc3_otg_update(dwc, 0);
+ 
+-	if (!dwc->desired_dr_role)
+-		goto out;
+-
+ 	if (dwc->desired_dr_role == dwc->current_dr_role)
+ 		goto out;
+ 
+@@ -222,6 +226,10 @@ static void __dwc3_set_mode(struct work_struct *work)
+ 		break;
+ 	}
+ 
++	dwc3_pdata = (struct dwc3_platform_data *)dev_get_platdata(dwc->dev);
++	if (dwc3_pdata && dwc3_pdata->set_role_post)
++		dwc3_pdata->set_role_post(dwc, dwc->desired_dr_role);
++
+ out:
+ 	pm_runtime_mark_last_busy(dwc->dev);
+ 	pm_runtime_put_autosuspend(dwc->dev);
+@@ -275,8 +283,7 @@ static int dwc3_core_soft_reset(struct dwc3 *dwc)
+ 
+ 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+ 	reg |= DWC3_DCTL_CSFTRST;
+-	reg &= ~DWC3_DCTL_RUN_STOP;
+-	dwc3_gadget_dctl_write_safe(dwc, reg);
++	dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+ 
+ 	/*
+ 	 * For DWC_usb31 controller 1.90a and later, the DCTL.CSFRST bit
+@@ -318,9 +325,64 @@ static int dwc3_core_soft_reset(struct dwc3 *dwc)
+  */
+ static void dwc3_frame_length_adjustment(struct dwc3 *dwc)
+ {
++	struct dwc3_platform_data *dwc3_pdata;
+ 	u32 reg;
+ 	u32 dft;
+ 
++	dwc3_pdata = (struct dwc3_platform_data *)dev_get_platdata(dwc->dev);
++	if (dwc3_pdata && dwc3_pdata->quirks & DWC3_SOFT_ITP_SYNC) {
++		u32 ref_clk_hz, ref_clk_period_integer;
++		unsigned long long temp;
++		struct device_node *node = dwc->dev->of_node;
++		struct clk *ref_clk;
++
++		reg = dwc3_readl(dwc->regs, DWC3_GCTL);
++		reg |= DWC3_GCTL_SOFITPSYNC;
++		dwc3_writel(dwc->regs, DWC3_GCTL, reg);
++
++		/*
++		 * if GCTL.SOFITPSYNC is set to '1':
++		 * FLADJ_REF_CLK_FLADJ=
++		 * ((125000/ref_clk_period_integer)-(125000/ref_clk_period)) *
++		 * ref_clk_period
++		 * where
++		 * - the ref_clk_period_integer is the integer value of
++		 *   the ref_clk period got by truncating the decimal
++		 *   (fractional) value that is programmed in the
++		 *   GUCTL.REF_CLK_PERIOD field.
++		 * - the ref_clk_period is the ref_clk period including
++		 *   the fractional value.
++		 */
++		ref_clk = of_clk_get_by_name(node, "ref");
++		if (IS_ERR(ref_clk)) {
++			dev_err(dwc->dev, "Can't get ref clock for fladj\n");
++			return;
++		}
++		reg = dwc3_readl(dwc->regs, DWC3_GFLADJ);
++		ref_clk_hz = clk_get_rate(ref_clk);
++		clk_put(ref_clk);
++		if (ref_clk_hz == 0) {
++			dev_err(dwc->dev, "ref clk is 0, can't set fladj\n");
++			return;
++		}
++
++		/* nano seconds the period of ref_clk */
++		ref_clk_period_integer = DIV_ROUND_DOWN_ULL(1000000000, ref_clk_hz);
++		temp = 125000ULL * 1000000000ULL;
++		temp = DIV_ROUND_DOWN_ULL(temp, ref_clk_hz);
++		temp = DIV_ROUND_DOWN_ULL(temp, ref_clk_period_integer);
++		temp = temp - 125000;
++		temp = temp << GFLADJ_REFCLK_FLADJ_SHIFT;
++		reg &= ~GFLADJ_REFCLK_FLADJ_MASK;
++		reg |= temp;
++		dwc3_writel(dwc->regs, DWC3_GFLADJ, reg);
++
++		reg = dwc3_readl(dwc->regs, DWC3_GUCTL);
++		reg &= ~DWC3_GUCTL_REFCLKPER_MASK;
++		reg |= ref_clk_period_integer << DWC3_GUCTL_REFCLKPER_SHIFT;
++		dwc3_writel(dwc->regs, DWC3_GUCTL, reg);
++	}
++
+ 	if (DWC3_VER_IS_PRIOR(DWC3, 250A))
+ 		return;
+ 
+@@ -737,6 +799,8 @@ static void dwc3_core_exit(struct dwc3 *dwc)
+ 	phy_power_off(dwc->usb3_generic_phy);
+ 	clk_bulk_disable_unprepare(dwc->num_clks, dwc->clks);
+ 	reset_control_assert(dwc->reset);
++
++	dwc->core_inited = false;
+ }
+ 
+ static bool dwc3_core_is_valid(struct dwc3 *dwc)
+@@ -929,6 +993,79 @@ static void dwc3_set_incr_burst_type(struct dwc3 *dwc)
+ 	dwc3_writel(dwc->regs, DWC3_GSBUSCFG0, cfg);
+ }
+ 
++static void dwc3_set_power_down_clk_scale(struct dwc3 *dwc)
++{
++	struct device		*dev = dwc->dev;
++	struct device_node	*node = dev->of_node;
++	struct clk		*suspend_clk;
++	u32 			reg, scale;
++
++	if (dwc->num_clks == 0)
++		return;
++
++	/*
++	 * The power down scale field specifies how many suspend_clk
++	 * periods fit into a 16KHz clock period. When performing
++	 * the division, round up the remainder.
++	 */
++	suspend_clk = of_clk_get_by_name(node, "suspend");
++	if (IS_ERR(suspend_clk))
++		return;
++
++	scale = DIV_ROUND_UP(clk_get_rate(suspend_clk), 16384);
++	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
++	reg &= ~(DWC3_GCTL_PWRDNSCALE_MASK);
++	reg |= DWC3_GCTL_PWRDNSCALE(scale);
++	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
++}
++
++#ifdef CONFIG_OF
++struct dwc3_cache_type {
++	u8 transfer_type_datard;
++	u8 transfer_type_descrd;
++	u8 transfer_type_datawr;
++	u8 transfer_type_descwr;
++};
++
++static const struct dwc3_cache_type ls1088a_dwc3_cache_type = {
++	.transfer_type_datard = 2,
++	.transfer_type_descrd = 2,
++	.transfer_type_datawr = 2,
++	.transfer_type_descwr = 2,
++};
++
++/**
++ * dwc3_set_cache_type - Configure cache type registers
++ * @dwc: Pointer to our controller context structure
++ */
++static void dwc3_set_cache_type(struct dwc3 *dwc)
++{
++	u32 tmp, reg;
++	const struct dwc3_cache_type *cache_type =
++		device_get_match_data(dwc->dev);
++
++	if (cache_type) {
++		reg = dwc3_readl(dwc->regs,  DWC3_GSBUSCFG0);
++		tmp = reg;
++
++		reg &= ~DWC3_GSBUSCFG0_DATARD(~0);
++		reg |= DWC3_GSBUSCFG0_DATARD(cache_type->transfer_type_datard);
++
++		reg &= ~DWC3_GSBUSCFG0_DESCRD(~0);
++		reg |= DWC3_GSBUSCFG0_DESCRD(cache_type->transfer_type_descrd);
++
++		reg &= ~DWC3_GSBUSCFG0_DATAWR(~0);
++		reg |= DWC3_GSBUSCFG0_DATAWR(cache_type->transfer_type_datawr);
++
++		reg &= ~DWC3_GSBUSCFG0_DESCWR(~0);
++		reg |= DWC3_GSBUSCFG0_DESCWR(cache_type->transfer_type_descwr);
++
++		if (tmp != reg)
++			dwc3_writel(dwc->regs, DWC3_GSBUSCFG0, reg);
++	}
++}
++#endif
++
+ /**
+  * dwc3_core_init - Low-level initialization of DWC3 Core
+  * @dwc: Pointer to our controller context structure
+@@ -949,6 +1086,8 @@ static int dwc3_core_init(struct dwc3 *dwc)
+ 	 */
+ 	dwc3_writel(dwc->regs, DWC3_GUID, LINUX_VERSION_CODE);
+ 
++	dwc3_set_power_down_clk_scale(dwc);
++
+ 	ret = dwc3_phy_setup(dwc);
+ 	if (ret)
+ 		goto err0;
+@@ -1010,6 +1149,10 @@ static int dwc3_core_init(struct dwc3 *dwc)
+ 
+ 	dwc3_set_incr_burst_type(dwc);
+ 
++#ifdef CONFIG_OF
++	dwc3_set_cache_type(dwc);
++#endif
++
+ 	usb_phy_set_suspend(dwc->usb2_phy, 0);
+ 	usb_phy_set_suspend(dwc->usb3_phy, 0);
+ 	ret = phy_power_on(dwc->usb2_generic_phy);
+@@ -1118,6 +1261,8 @@ static int dwc3_core_init(struct dwc3 *dwc)
+ 		}
+ 	}
+ 
++	dwc->core_inited = true;
++
+ 	return 0;
+ 
+ err4:
+@@ -1200,6 +1345,7 @@ static int dwc3_core_get_phy(struct dwc3 *dwc)
+ 
+ static int dwc3_core_init_mode(struct dwc3 *dwc)
+ {
++	struct dwc3_platform_data *dwc3_pdata;
+ 	struct device *dev = dwc->dev;
+ 	int ret;
+ 
+@@ -1239,6 +1385,10 @@ static int dwc3_core_init_mode(struct dwc3 *dwc)
+ 		return -EINVAL;
+ 	}
+ 
++	dwc3_pdata = (struct dwc3_platform_data *)dev_get_platdata(dwc->dev);
++	if (dwc3_pdata && dwc3_pdata->set_role_post)
++		dwc3_pdata->set_role_post(dwc, dwc->current_dr_role);
++
+ 	return 0;
+ }
+ 
+@@ -1269,10 +1419,10 @@ static void dwc3_get_properties(struct dwc3 *dwc)
+ 	u8			lpm_nyet_threshold;
+ 	u8			tx_de_emphasis;
+ 	u8			hird_threshold;
+-	u8			rx_thr_num_pkt_prd = 0;
+-	u8			rx_max_burst_prd = 0;
+-	u8			tx_thr_num_pkt_prd = 0;
+-	u8			tx_max_burst_prd = 0;
++	u8			rx_thr_num_pkt_prd;
++	u8			rx_max_burst_prd;
++	u8			tx_thr_num_pkt_prd;
++	u8			tx_max_burst_prd;
+ 	u8			tx_fifo_resize_max_num;
+ 	const char		*usb_psy_name;
+ 	int			ret;
+@@ -1299,6 +1449,17 @@ static void dwc3_get_properties(struct dwc3 *dwc)
+ 	dwc->maximum_speed = usb_get_maximum_speed(dev);
+ 	dwc->max_ssp_rate = usb_get_maximum_ssp_rate(dev);
+ 	dwc->dr_mode = usb_get_dr_mode(dev);
++	if (dwc->dr_mode == USB_DR_MODE_OTG) {
++		dwc->otg_caps.otg_rev = 0x0300;
++		dwc->otg_caps.hnp_support = true;
++		dwc->otg_caps.srp_support = true;
++		dwc->otg_caps.adp_support = true;
++
++		/* Update otg capabilities by DT properties */
++		of_usb_update_otg_caps(dev->of_node,
++				       &dwc->otg_caps);
++	}
++
+ 	dwc->hsphy_mode = of_usb_get_phy_mode(dev->of_node);
+ 
+ 	dwc->sysdev_is_parent = device_property_read_bool(dev,
+@@ -1397,6 +1558,9 @@ static void dwc3_get_properties(struct dwc3 *dwc)
+ 	dwc->dis_split_quirk = device_property_read_bool(dev,
+ 				"snps,dis-split-quirk");
+ 
++	dwc->host_vbus_glitches = device_property_read_bool(dev,
++				"snps,host-vbus-glitches");
++
+ 	dwc->lpm_nyet_threshold = lpm_nyet_threshold;
+ 	dwc->tx_de_emphasis = tx_de_emphasis;
+ 
+@@ -1751,6 +1915,11 @@ static int dwc3_suspend_common(struct dwc3 *dwc, pm_message_t msg)
+ 	u32 reg;
+ 
+ 	switch (dwc->current_dr_role) {
++	case DWC3_GCTL_PRTCAP_NONE:
++		if (pm_runtime_suspended(dwc->dev))
++			break;
++		dwc3_core_exit(dwc);
++		break;
+ 	case DWC3_GCTL_PRTCAP_DEVICE:
+ 		if (pm_runtime_suspended(dwc->dev))
+ 			break;
+@@ -1811,7 +1980,24 @@ static int dwc3_resume_common(struct dwc3 *dwc, pm_message_t msg)
+ 	u32		reg;
+ 
+ 	switch (dwc->current_dr_role) {
++	case DWC3_GCTL_PRTCAP_NONE:
++		if (dwc->core_inited)
++			break;
++
++		ret = dwc3_core_init_for_resume(dwc);
++		if (ret)
++			return ret;
++		break;
+ 	case DWC3_GCTL_PRTCAP_DEVICE:
++		/*
++		 * system resume may come after runtime resume
++		 * e.g. rpm suspend -> pm suspend -> wakeup
++		 * -> rpm resume -> system resume, so if already
++		 *  runtime resumed, system resume should skip it.
++		 */
++		if (dwc->core_inited)
++			break;
++
+ 		ret = dwc3_core_init_for_resume(dwc);
+ 		if (ret)
+ 			return ret;
+@@ -1899,8 +2085,6 @@ static int dwc3_runtime_suspend(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
+-	device_init_wakeup(dev, true);
+-
+ 	return 0;
+ }
+ 
+@@ -1909,8 +2093,6 @@ static int dwc3_runtime_resume(struct device *dev)
+ 	struct dwc3     *dwc = dev_get_drvdata(dev);
+ 	int		ret;
+ 
+-	device_init_wakeup(dev, false);
+-
+ 	ret = dwc3_resume_common(dwc, PMSG_AUTO_RESUME);
+ 	if (ret)
+ 		return ret;
+@@ -2010,12 +2192,16 @@ static const struct dev_pm_ops dwc3_dev_pm_ops = {
+ 
+ #ifdef CONFIG_OF
+ static const struct of_device_id of_dwc3_match[] = {
+-	{
+-		.compatible = "snps,dwc3"
+-	},
+-	{
+-		.compatible = "synopsys,dwc3"
+-	},
++	{ .compatible = "fsl,ls1012a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls1021a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls1028a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls1043a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls1046a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls1088a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,ls2088a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "fsl,lx2160a-dwc3", .data = &ls1088a_dwc3_cache_type, },
++	{ .compatible = "snps,dwc3" },
++	{ .compatible = "synopsys,dwc3"	},
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, of_dwc3_match);
+diff --git a/drivers/usb/dwc3/core.h b/drivers/usb/dwc3/core.h
+index fd5d42ec5..e70b3687d 100644
+--- a/drivers/usb/dwc3/core.h
++++ b/drivers/usb/dwc3/core.h
+@@ -30,6 +30,7 @@
+ #include <linux/ulpi/interface.h>
+ 
+ #include <linux/phy/phy.h>
++#include "../host/xhci-plat.h"
+ 
+ #include <linux/power_supply.h>
+ 
+@@ -172,6 +173,21 @@
+ /* Bit fields */
+ 
+ /* Global SoC Bus Configuration INCRx Register 0 */
++#ifdef CONFIG_OF
++#define DWC3_GSBUSCFG0_DATARD_SHIFT	28
++#define DWC3_GSBUSCFG0_DATARD(n)	(((n) & 0xf)		\
++			<< DWC3_GSBUSCFG0_DATARD_SHIFT)
++#define DWC3_GSBUSCFG0_DESCRD_SHIFT	24
++#define DWC3_GSBUSCFG0_DESCRD(n)	(((n) & 0xf)		\
++			<< DWC3_GSBUSCFG0_DESCRD_SHIFT)
++#define DWC3_GSBUSCFG0_DATAWR_SHIFT	20
++#define DWC3_GSBUSCFG0_DATAWR(n)	(((n) & 0xf)		\
++			<< DWC3_GSBUSCFG0_DATAWR_SHIFT)
++#define DWC3_GSBUSCFG0_DESCWR_SHIFT	16
++#define DWC3_GSBUSCFG0_DESCWR(n)	(((n) & 0xf)		\
++			<< DWC3_GSBUSCFG0_DESCWR_SHIFT)
++#endif
++
+ #define DWC3_GSBUSCFG0_INCR256BRSTENA	(1 << 7) /* INCR256 burst */
+ #define DWC3_GSBUSCFG0_INCR128BRSTENA	(1 << 6) /* INCR128 burst */
+ #define DWC3_GSBUSCFG0_INCR64BRSTENA	(1 << 5) /* INCR64 burst */
+@@ -230,6 +246,7 @@
+ 
+ /* Global Configuration Register */
+ #define DWC3_GCTL_PWRDNSCALE(n)	((n) << 19)
++#define DWC3_GCTL_PWRDNSCALE_MASK	DWC3_GCTL_PWRDNSCALE(0x1fff)
+ #define DWC3_GCTL_U2RSTECN	BIT(16)
+ #define DWC3_GCTL_RAMCLKSEL(x)	(((x) & DWC3_GCTL_CLK_MASK) << 6)
+ #define DWC3_GCTL_CLK_BUS	(0)
+@@ -239,6 +256,7 @@
+ 
+ #define DWC3_GCTL_PRTCAP(n)	(((n) & (3 << 12)) >> 12)
+ #define DWC3_GCTL_PRTCAPDIR(n)	((n) << 12)
++#define DWC3_GCTL_PRTCAP_NONE	0
+ #define DWC3_GCTL_PRTCAP_HOST	1
+ #define DWC3_GCTL_PRTCAP_DEVICE	2
+ #define DWC3_GCTL_PRTCAP_OTG	3
+@@ -254,6 +272,8 @@
+ 
+ /* Global User Control Register */
+ #define DWC3_GUCTL_HSTINAUTORETRY	BIT(14)
++#define DWC3_GUCTL_REFCLKPER_MASK	GENMASK(31, 22)
++#define DWC3_GUCTL_REFCLKPER_SHIFT	22
+ 
+ /* Global User Control 1 Register */
+ #define DWC3_GUCTL1_DEV_DECOUPLE_L1L2_EVT	BIT(31)
+@@ -386,6 +406,8 @@
+ /* Global Frame Length Adjustment Register */
+ #define DWC3_GFLADJ_30MHZ_SDBND_SEL		BIT(7)
+ #define DWC3_GFLADJ_30MHZ_MASK			0x3f
++#define GFLADJ_REFCLK_FLADJ_MASK		GENMASK(21, 8)
++#define GFLADJ_REFCLK_FLADJ_SHIFT		8
+ 
+ /* Global User Control Register 2 */
+ #define DWC3_GUCTL2_RST_ACTBITLATER		BIT(14)
+@@ -943,6 +965,13 @@ struct dwc3_scratchpad_array {
+ 	__le64	dma_adr[DWC3_MAX_HIBER_SCRATCHBUFS];
+ };
+ 
++struct dwc3_platform_data {
++	struct xhci_plat_priv *xhci_priv;
++	void	(*set_role_post)(struct dwc3 *dwc, u32 role);
++	unsigned long long quirks;
++#define DWC3_SOFT_ITP_SYNC		BIT(0)
++};
++
+ /**
+  * struct dwc3 - representation of our controller
+  * @drd_work: workqueue used for role swapping
+@@ -986,6 +1015,7 @@ struct dwc3_scratchpad_array {
+  * @ip: controller's ID
+  * @revision: controller's version of an IP
+  * @version_type: VERSIONTYPE register contents, a sub release of a revision
++ * @otg_caps: the OTG capabilities from hardware point
+  * @dr_mode: requested mode of operation
+  * @current_dr_role: current role of operation when in dual-role mode
+  * @desired_dr_role: desired role of operation when in dual-role mode
+@@ -1081,6 +1111,8 @@ struct dwc3_scratchpad_array {
+  *	3	- Reserved
+  * @dis_metastability_quirk: set to disable metastability quirk.
+  * @dis_split_quirk: set to disable split boundary.
++ * @host_vbus_glitches: set to avoid vbus glitch during
++ *                      xhci reset.
+  * @imod_interval: set the interrupt moderation interval in 250ns
+  *			increments or 0 to disable.
+  * @max_cfg_eps: current max number of IN eps used across all USB configs.
+@@ -1122,6 +1154,7 @@ struct dwc3 {
+ 	struct clk_bulk_data	*clks;
+ 	int			num_clks;
+ 
++	bool			core_inited;
+ 	struct reset_control	*reset;
+ 
+ 	struct usb_phy		*usb2_phy;
+@@ -1161,6 +1194,7 @@ struct dwc3 {
+ 	u32			gadget_max_speed;
+ 	enum usb_ssp_rate	max_ssp_rate;
+ 	enum usb_ssp_rate	gadget_ssp_rate;
++	struct usb_otg_caps	otg_caps;
+ 
+ 	u32			ip;
+ 
+@@ -1288,6 +1322,7 @@ struct dwc3 {
+ 	unsigned		tx_de_emphasis:2;
+ 
+ 	unsigned		dis_metastability_quirk:1;
++	unsigned		host_vbus_glitches:1;
+ 
+ 	unsigned		dis_split_quirk:1;
+ 	unsigned		async_callbacks:1;
+diff --git a/drivers/usb/dwc3/drd.c b/drivers/usb/dwc3/drd.c
+index 81ff21bd4..ca061e650 100644
+--- a/drivers/usb/dwc3/drd.c
++++ b/drivers/usb/dwc3/drd.c
+@@ -454,8 +454,13 @@ static struct extcon_dev *dwc3_get_extcon(struct dwc3 *dwc)
+ 	 * This device property is for kernel internal use only and
+ 	 * is expected to be set by the glue code.
+ 	 */
+-	if (device_property_read_string(dev, "linux,extcon-name", &name) == 0)
+-		return extcon_get_extcon_dev(name);
++	if (device_property_read_string(dev, "linux,extcon-name", &name) == 0) {
++		edev = extcon_get_extcon_dev(name);
++		if (!edev)
++			return ERR_PTR(-EPROBE_DEFER);
++
++		return edev;
++	}
+ 
+ 	/*
+ 	 * Try to get an extcon device from the USB PHY controller's "port"
+@@ -496,6 +501,8 @@ static int dwc3_usb_role_switch_set(struct usb_role_switch *sw,
+ 	default:
+ 		if (dwc->role_switch_default_mode == USB_DR_MODE_HOST)
+ 			mode = DWC3_GCTL_PRTCAP_HOST;
++		else if (dwc->role_switch_default_mode == USB_DR_MODE_UNKNOWN)
++			mode = DWC3_GCTL_PRTCAP_NONE;
+ 		else
+ 			mode = DWC3_GCTL_PRTCAP_DEVICE;
+ 		break;
+@@ -525,6 +532,8 @@ static enum usb_role dwc3_usb_role_switch_get(struct usb_role_switch *sw)
+ 	default:
+ 		if (dwc->role_switch_default_mode == USB_DR_MODE_HOST)
+ 			role = USB_ROLE_HOST;
++		else if (dwc->role_switch_default_mode == USB_DR_MODE_UNKNOWN)
++			role = USB_ROLE_NONE;
+ 		else
+ 			role = USB_ROLE_DEVICE;
+ 		break;
+@@ -539,11 +548,16 @@ static int dwc3_setup_role_switch(struct dwc3 *dwc)
+ 	u32 mode;
+ 
+ 	dwc->role_switch_default_mode = usb_get_role_switch_default_mode(dwc->dev);
+-	if (dwc->role_switch_default_mode == USB_DR_MODE_HOST) {
++	switch (dwc->role_switch_default_mode) {
++	case USB_DR_MODE_HOST:
+ 		mode = DWC3_GCTL_PRTCAP_HOST;
+-	} else {
+-		dwc->role_switch_default_mode = USB_DR_MODE_PERIPHERAL;
++		break;
++	case USB_DR_MODE_UNKNOWN:
++		mode = DWC3_GCTL_PRTCAP_NONE;
++		break;
++	default:
+ 		mode = DWC3_GCTL_PRTCAP_DEVICE;
++		break;
+ 	}
+ 
+ 	dwc3_role_switch.fwnode = dev_fwnode(dwc->dev);
+@@ -566,15 +580,16 @@ int dwc3_drd_init(struct dwc3 *dwc)
+ {
+ 	int ret, irq;
+ 
+-	if (ROLE_SWITCH &&
+-	    device_property_read_bool(dwc->dev, "usb-role-switch"))
+-		return dwc3_setup_role_switch(dwc);
+-
+ 	dwc->edev = dwc3_get_extcon(dwc);
+ 	if (IS_ERR(dwc->edev))
+ 		return PTR_ERR(dwc->edev);
+ 
+-	if (dwc->edev) {
++	if (ROLE_SWITCH &&
++	    device_property_read_bool(dwc->dev, "usb-role-switch")) {
++		ret = dwc3_setup_role_switch(dwc);
++		if (ret < 0)
++			return ret;
++	} else if (dwc->edev) {
+ 		dwc->edev_nb.notifier_call = dwc3_drd_notifier;
+ 		ret = extcon_register_notifier(dwc->edev, EXTCON_USB_HOST,
+ 					       &dwc->edev_nb);
+diff --git a/drivers/usb/dwc3/dwc3-imx8mp.c b/drivers/usb/dwc3/dwc3-imx8mp.c
+index d328d20ab..503bf4a3f 100644
+--- a/drivers/usb/dwc3/dwc3-imx8mp.c
++++ b/drivers/usb/dwc3/dwc3-imx8mp.c
+@@ -5,6 +5,7 @@
+  * Copyright (c) 2020 NXP.
+  */
+ 
++#include <linux/busfreq-imx.h>
+ #include <linux/clk.h>
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+@@ -95,6 +96,46 @@ static irqreturn_t dwc3_imx8mp_interrupt(int irq, void *_dwc3_imx)
+ 	return IRQ_HANDLED;
+ }
+ 
++static void dwc3_imx8mp_set_role_post(struct dwc3 *dwc, u32 role)
++{
++	switch (role) {
++	case DWC3_GCTL_PRTCAP_HOST:
++		/*
++		 * For xhci host, we need disable dwc core auto
++		 * suspend, because during this auto suspend delay(5s),
++		 * xhci host RUN_STOP is cleared and wakeup is not
++		 * enabled, if device is inserted, xhci host can't
++		 * response the connection.
++		 */
++		pm_runtime_dont_use_autosuspend(dwc->dev);
++		break;
++	case DWC3_GCTL_PRTCAP_DEVICE:
++		pm_runtime_use_autosuspend(dwc->dev);
++		break;
++	default:
++		break;
++	}
++}
++
++static struct xhci_plat_priv dwc3_imx8mp_xhci_priv = {
++	.quirks = XHCI_MISSING_CAS |
++		  XHCI_SKIP_PHY_INIT,
++};
++
++static struct dwc3_platform_data dwc3_imx8mp_pdata = {
++	.xhci_priv = &dwc3_imx8mp_xhci_priv,
++	.set_role_post = dwc3_imx8mp_set_role_post,
++	.quirks = DWC3_SOFT_ITP_SYNC,
++};
++
++static struct of_dev_auxdata dwc3_imx8mp_auxdata[] = {
++	{
++	.compatible = "snps,dwc3",
++	.platform_data = &dwc3_imx8mp_pdata,
++	},
++	{},
++};
++
+ static int dwc3_imx8mp_probe(struct platform_device *pdev)
+ {
+ 	struct device		*dev = &pdev->dev;
+@@ -119,11 +160,12 @@ static int dwc3_imx8mp_probe(struct platform_device *pdev)
+ 	if (IS_ERR(dwc3_imx->glue_base))
+ 		return PTR_ERR(dwc3_imx->glue_base);
+ 
++	request_bus_freq(BUS_FREQ_HIGH);
+ 	dwc3_imx->hsio_clk = devm_clk_get(dev, "hsio");
+ 	if (IS_ERR(dwc3_imx->hsio_clk)) {
+ 		err = PTR_ERR(dwc3_imx->hsio_clk);
+ 		dev_err(dev, "Failed to get hsio clk, err=%d\n", err);
+-		return err;
++		goto rel_high_bus;
+ 	}
+ 
+ 	err = clk_prepare_enable(dwc3_imx->hsio_clk);
+@@ -165,7 +207,7 @@ static int dwc3_imx8mp_probe(struct platform_device *pdev)
+ 		goto disable_rpm;
+ 	}
+ 
+-	err = of_platform_populate(node, NULL, NULL, dev);
++	err = of_platform_populate(node, NULL, dwc3_imx8mp_auxdata, dev);
+ 	if (err) {
+ 		dev_err(&pdev->dev, "failed to create dwc3 core\n");
+ 		goto err_node_put;
+@@ -202,6 +244,8 @@ static int dwc3_imx8mp_probe(struct platform_device *pdev)
+ 	clk_disable_unprepare(dwc3_imx->suspend_clk);
+ disable_hsio_clk:
+ 	clk_disable_unprepare(dwc3_imx->hsio_clk);
++rel_high_bus:
++	release_bus_freq(BUS_FREQ_HIGH);
+ 
+ 	return err;
+ }
+@@ -216,7 +260,7 @@ static int dwc3_imx8mp_remove(struct platform_device *pdev)
+ 
+ 	clk_disable_unprepare(dwc3_imx->suspend_clk);
+ 	clk_disable_unprepare(dwc3_imx->hsio_clk);
+-
++	release_bus_freq(BUS_FREQ_HIGH);
+ 	pm_runtime_disable(dev);
+ 	pm_runtime_put_noidle(dev);
+ 	platform_set_drvdata(pdev, NULL);
+@@ -234,6 +278,7 @@ static int __maybe_unused dwc3_imx8mp_suspend(struct dwc3_imx8mp *dwc3_imx,
+ 	if (PMSG_IS_AUTO(msg) || device_may_wakeup(dwc3_imx->dev))
+ 		dwc3_imx8mp_wakeup_enable(dwc3_imx);
+ 
++	release_bus_freq(BUS_FREQ_HIGH);
+ 	dwc3_imx->pm_suspended = true;
+ 
+ 	return 0;
+@@ -248,6 +293,7 @@ static int __maybe_unused dwc3_imx8mp_resume(struct dwc3_imx8mp *dwc3_imx,
+ 	if (!dwc3_imx->pm_suspended)
+ 		return 0;
+ 
++	request_bus_freq(BUS_FREQ_HIGH);
+ 	/* Wakeup disable */
+ 	dwc3_imx8mp_wakeup_disable(dwc3_imx);
+ 	dwc3_imx->pm_suspended = false;
+diff --git a/drivers/usb/dwc3/dwc3-omap.c b/drivers/usb/dwc3/dwc3-omap.c
+index efaf0db59..e196673f5 100644
+--- a/drivers/usb/dwc3/dwc3-omap.c
++++ b/drivers/usb/dwc3/dwc3-omap.c
+@@ -242,7 +242,7 @@ static void dwc3_omap_set_mailbox(struct dwc3_omap *omap,
+ 		break;
+ 
+ 	case OMAP_DWC3_ID_FLOAT:
+-		if (omap->vbus_reg && regulator_is_enabled(omap->vbus_reg))
++		if (omap->vbus_reg)
+ 			regulator_disable(omap->vbus_reg);
+ 		val = dwc3_omap_read_utmi_ctrl(omap);
+ 		val |= USBOTGSS_UTMI_OTG_CTRL_IDDIG;
+diff --git a/drivers/usb/dwc3/dwc3-pci.c b/drivers/usb/dwc3/dwc3-pci.c
+index 9c8887615..06d0e88ec 100644
+--- a/drivers/usb/dwc3/dwc3-pci.c
++++ b/drivers/usb/dwc3/dwc3-pci.c
+@@ -44,8 +44,6 @@
+ #define PCI_DEVICE_ID_INTEL_ADLM		0x54ee
+ #define PCI_DEVICE_ID_INTEL_ADLS		0x7ae1
+ #define PCI_DEVICE_ID_INTEL_RPLS		0x7a61
+-#define PCI_DEVICE_ID_INTEL_MTLP		0x7ec1
+-#define PCI_DEVICE_ID_INTEL_MTL			0x7e7e
+ #define PCI_DEVICE_ID_INTEL_TGL			0x9a15
+ #define PCI_DEVICE_ID_AMD_MR			0x163a
+ 
+@@ -187,8 +185,7 @@ static const struct software_node dwc3_pci_amd_mr_swnode = {
+ 	.properties = dwc3_pci_mr_properties,
+ };
+ 
+-static int dwc3_pci_quirks(struct dwc3_pci *dwc,
+-			   const struct software_node *swnode)
++static int dwc3_pci_quirks(struct dwc3_pci *dwc)
+ {
+ 	struct pci_dev			*pdev = dwc->pci;
+ 
+@@ -245,7 +242,7 @@ static int dwc3_pci_quirks(struct dwc3_pci *dwc,
+ 		}
+ 	}
+ 
+-	return device_add_software_node(&dwc->dwc3->dev, swnode);
++	return 0;
+ }
+ 
+ #ifdef CONFIG_PM
+@@ -256,7 +253,7 @@ static void dwc3_pci_resume_work(struct work_struct *work)
+ 	int ret;
+ 
+ 	ret = pm_runtime_get_sync(&dwc3->dev);
+-	if (ret < 0) {
++	if (ret) {
+ 		pm_runtime_put_sync_autosuspend(&dwc3->dev);
+ 		return;
+ 	}
+@@ -310,7 +307,11 @@ static int dwc3_pci_probe(struct pci_dev *pci, const struct pci_device_id *id)
+ 	dwc->dwc3->dev.parent = dev;
+ 	ACPI_COMPANION_SET(&dwc->dwc3->dev, ACPI_COMPANION(dev));
+ 
+-	ret = dwc3_pci_quirks(dwc, (void *)id->driver_data);
++	ret = device_add_software_node(&dwc->dwc3->dev, (void *)id->driver_data);
++	if (ret < 0)
++		goto err;
++
++	ret = dwc3_pci_quirks(dwc);
+ 	if (ret)
+ 		goto err;
+ 
+@@ -423,12 +424,6 @@ static const struct pci_device_id dwc3_pci_id_table[] = {
+ 	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_RPLS),
+ 	  (kernel_ulong_t) &dwc3_pci_intel_swnode, },
+ 
+-	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_MTLP),
+-	  (kernel_ulong_t) &dwc3_pci_intel_swnode, },
+-
+-	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_MTL),
+-	  (kernel_ulong_t) &dwc3_pci_intel_swnode, },
+-
+ 	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_TGL),
+ 	  (kernel_ulong_t) &dwc3_pci_intel_swnode, },
+ 
+diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
+index 99d0372ed..a531a890a 100644
+--- a/drivers/usb/dwc3/gadget.c
++++ b/drivers/usb/dwc3/gadget.c
+@@ -1955,10 +1955,10 @@ static void dwc3_gadget_ep_skip_trbs(struct dwc3_ep *dep, struct dwc3_request *r
+ static void dwc3_gadget_ep_cleanup_cancelled_requests(struct dwc3_ep *dep)
+ {
+ 	struct dwc3_request		*req;
++	struct dwc3_request		*tmp;
+ 	struct dwc3			*dwc = dep->dwc;
+ 
+-	while (!list_empty(&dep->cancelled_list)) {
+-		req = next_request(&dep->cancelled_list);
++	list_for_each_entry_safe(req, tmp, &dep->cancelled_list, list) {
+ 		dwc3_gadget_ep_skip_trbs(dep, req);
+ 		switch (req->status) {
+ 		case DWC3_REQUEST_STATUS_DISCONNECTED:
+@@ -1975,12 +1975,6 @@ static void dwc3_gadget_ep_cleanup_cancelled_requests(struct dwc3_ep *dep)
+ 			dwc3_gadget_giveback(dep, req, -ECONNRESET);
+ 			break;
+ 		}
+-		/*
+-		 * The endpoint is disabled, let the dwc3_remove_requests()
+-		 * handle the cleanup.
+-		 */
+-		if (!dep->endpoint.desc)
+-			break;
+ 	}
+ }
+ 
+@@ -3205,7 +3199,6 @@ static int dwc3_gadget_ep_cleanup_completed_request(struct dwc3_ep *dep,
+ 		const struct dwc3_event_depevt *event,
+ 		struct dwc3_request *req, int status)
+ {
+-	int request_status;
+ 	int ret;
+ 
+ 	if (req->request.num_mapped_sgs)
+@@ -3226,35 +3219,7 @@ static int dwc3_gadget_ep_cleanup_completed_request(struct dwc3_ep *dep,
+ 		req->needs_extra_trb = false;
+ 	}
+ 
+-	/*
+-	 * The event status only reflects the status of the TRB with IOC set.
+-	 * For the requests that don't set interrupt on completion, the driver
+-	 * needs to check and return the status of the completed TRBs associated
+-	 * with the request. Use the status of the last TRB of the request.
+-	 */
+-	if (req->request.no_interrupt) {
+-		struct dwc3_trb *trb;
+-
+-		trb = dwc3_ep_prev_trb(dep, dep->trb_dequeue);
+-		switch (DWC3_TRB_SIZE_TRBSTS(trb->size)) {
+-		case DWC3_TRBSTS_MISSED_ISOC:
+-			/* Isoc endpoint only */
+-			request_status = -EXDEV;
+-			break;
+-		case DWC3_TRB_STS_XFER_IN_PROG:
+-			/* Applicable when End Transfer with ForceRM=0 */
+-		case DWC3_TRBSTS_SETUP_PENDING:
+-			/* Control endpoint only */
+-		case DWC3_TRBSTS_OK:
+-		default:
+-			request_status = 0;
+-			break;
+-		}
+-	} else {
+-		request_status = status;
+-	}
+-
+-	dwc3_gadget_giveback(dep, req, request_status);
++	dwc3_gadget_giveback(dep, req, status);
+ 
+ out:
+ 	return ret;
+@@ -3264,21 +3229,15 @@ static void dwc3_gadget_ep_cleanup_completed_requests(struct dwc3_ep *dep,
+ 		const struct dwc3_event_depevt *event, int status)
+ {
+ 	struct dwc3_request	*req;
++	struct dwc3_request	*tmp;
+ 
+-	while (!list_empty(&dep->started_list)) {
++	list_for_each_entry_safe(req, tmp, &dep->started_list, list) {
+ 		int ret;
+ 
+-		req = next_request(&dep->started_list);
+ 		ret = dwc3_gadget_ep_cleanup_completed_request(dep, event,
+ 				req, status);
+ 		if (ret)
+ 			break;
+-		/*
+-		 * The endpoint is disabled, let the dwc3_remove_requests()
+-		 * handle the cleanup.
+-		 */
+-		if (!dep->endpoint.desc)
+-			break;
+ 	}
+ }
+ 
+@@ -3317,14 +3276,14 @@ static bool dwc3_gadget_endpoint_trbs_complete(struct dwc3_ep *dep,
+ 	struct dwc3		*dwc = dep->dwc;
+ 	bool			no_started_trb = true;
+ 
++	if (!dep->endpoint.desc)
++		return no_started_trb;
++
+ 	dwc3_gadget_ep_cleanup_completed_requests(dep, event, status);
+ 
+ 	if (dep->flags & DWC3_EP_END_TRANSFER_PENDING)
+ 		goto out;
+ 
+-	if (!dep->endpoint.desc)
+-		return no_started_trb;
+-
+ 	if (usb_endpoint_xfer_isoc(dep->endpoint.desc) &&
+ 		list_empty(&dep->started_list) &&
+ 		(list_empty(&dep->pending_list) || status == -EXDEV))
+@@ -4331,6 +4290,10 @@ int dwc3_gadget_init(struct dwc3 *dwc)
+ 	dwc->gadget->sg_supported	= true;
+ 	dwc->gadget->name		= "dwc3-gadget";
+ 	dwc->gadget->lpm_capable	= !dwc->usb2_gadget_lpm_disable;
++	dwc->gadget->is_otg		= (dwc->dr_mode == USB_DR_MODE_OTG) &&
++					  (dwc->otg_caps.hnp_support ||
++					   dwc->otg_caps.srp_support ||
++					   dwc->otg_caps.adp_support);
+ 
+ 	/*
+ 	 * FIXME We might be setting max_speed to <SUPER, however versions
+diff --git a/drivers/usb/dwc3/host.c b/drivers/usb/dwc3/host.c
+index f29a26463..fddf8bf40 100644
+--- a/drivers/usb/dwc3/host.c
++++ b/drivers/usb/dwc3/host.c
+@@ -10,8 +10,49 @@
+ #include <linux/acpi.h>
+ #include <linux/platform_device.h>
+ 
++#include "../host/xhci.h"
++
+ #include "core.h"
+ 
++
++#define XHCI_HCSPARAMS1		0x4
++#define XHCI_PORTSC_BASE	0x400
++
++/*
++ * dwc3_power_off_all_roothub_ports - Power off all Root hub ports
++ * @dwc3: Pointer to our controller context structure
++ */
++static void dwc3_power_off_all_roothub_ports(struct dwc3 *dwc)
++{
++	int i, port_num;
++	u32 reg, op_regs_base, offset;
++	void __iomem *xhci_regs;
++
++	/* xhci regs is not mapped yet, do it temperary here */
++	if (dwc->xhci_resources[0].start) {
++		xhci_regs = ioremap(dwc->xhci_resources[0].start,
++				DWC3_XHCI_REGS_END);
++		if (IS_ERR(xhci_regs)) {
++			dev_err(dwc->dev, "Failed to ioremap xhci_regs\n");
++			return;
++		}
++
++		op_regs_base = HC_LENGTH(readl(xhci_regs));
++		reg = readl(xhci_regs + XHCI_HCSPARAMS1);
++		port_num = HCS_MAX_PORTS(reg);
++
++		for (i = 1; i <= port_num; i++) {
++			offset = op_regs_base + XHCI_PORTSC_BASE + 0x10*(i-1);
++			reg = readl(xhci_regs + offset);
++			reg &= ~PORT_POWER;
++			writel(reg, xhci_regs + offset);
++		}
++
++		iounmap(xhci_regs);
++	} else
++		dev_err(dwc->dev, "xhci base reg invalid\n");
++}
++
+ static int dwc3_host_get_irq(struct dwc3 *dwc)
+ {
+ 	struct platform_device	*dwc3_pdev = to_platform_device(dwc->dev);
+@@ -46,11 +87,19 @@ int dwc3_host_init(struct dwc3 *dwc)
+ {
+ 	struct property_entry	props[4];
+ 	struct platform_device	*xhci;
++	struct dwc3_platform_data *dwc3_pdata;
+ 	int			ret, irq;
+ 	struct resource		*res;
+ 	struct platform_device	*dwc3_pdev = to_platform_device(dwc->dev);
+ 	int			prop_idx = 0;
+ 
++	/*
++	 * We have to power off all Root hub ports immediately after DWC3 set
++	 * to host mode to avoid VBUS glitch happen when xhci get reset later.
++	 */
++	if (dwc->host_vbus_glitches)
++		dwc3_power_off_all_roothub_ports(dwc);
++
+ 	irq = dwc3_host_get_irq(dwc);
+ 	if (irq < 0)
+ 		return irq;
+@@ -115,6 +164,14 @@ int dwc3_host_init(struct dwc3 *dwc)
+ 		}
+ 	}
+ 
++	dwc3_pdata = (struct dwc3_platform_data *)dev_get_platdata(dwc->dev);
++	if (dwc3_pdata && dwc3_pdata->xhci_priv) {
++		ret = platform_device_add_data(xhci, dwc3_pdata->xhci_priv,
++					       sizeof(struct xhci_plat_priv));
++		if (ret)
++			goto err;
++	}
++
+ 	ret = platform_device_add(xhci);
+ 	if (ret) {
+ 		dev_err(dwc->dev, "failed to register xHCI device\n");
+diff --git a/drivers/usb/host/ehci-hcd.c b/drivers/usb/host/ehci-hcd.c
+index 144080321..17693fa3a 100644
+--- a/drivers/usb/host/ehci-hcd.c
++++ b/drivers/usb/host/ehci-hcd.c
+@@ -82,7 +82,7 @@ module_param (log2_irq_thresh, int, S_IRUGO);
+ MODULE_PARM_DESC (log2_irq_thresh, "log2 IRQ latency, 1-64 microframes");
+ 
+ /* initial park setting:  slower than hw default */
+-static unsigned park;
++static unsigned park = 3;
+ module_param (park, uint, S_IRUGO);
+ MODULE_PARM_DESC (park, "park setting; 1-3 back-to-back async packets");
+ 
+diff --git a/drivers/usb/host/xhci-hub.c b/drivers/usb/host/xhci-hub.c
+index f65f1ba2b..7d1c48bde 100644
+--- a/drivers/usb/host/xhci-hub.c
++++ b/drivers/usb/host/xhci-hub.c
+@@ -762,7 +762,7 @@ static int xhci_exit_test_mode(struct xhci_hcd *xhci)
+ 	}
+ 	pm_runtime_allow(xhci_to_hcd(xhci)->self.controller);
+ 	xhci->test_mode = 0;
+-	return xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
++	return xhci_reset(xhci);
+ }
+ 
+ void xhci_set_link_state(struct xhci_hcd *xhci, struct xhci_port *port,
+@@ -1088,9 +1088,6 @@ static void xhci_get_usb2_port_status(struct xhci_port *port, u32 *status,
+ 		if (link_state == XDEV_U2)
+ 			*status |= USB_PORT_STAT_L1;
+ 		if (link_state == XDEV_U0) {
+-			if (bus_state->resume_done[portnum])
+-				usb_hcd_end_port_resume(&port->rhub->hcd->self,
+-							portnum);
+ 			bus_state->resume_done[portnum] = 0;
+ 			clear_bit(portnum, &bus_state->resuming_ports);
+ 			if (bus_state->suspended_ports & (1 << portnum)) {
+@@ -1434,7 +1431,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
+ 				}
+ 				spin_unlock_irqrestore(&xhci->lock, flags);
+ 				if (!wait_for_completion_timeout(&bus_state->u3exit_done[wIndex],
+-								 msecs_to_jiffies(500)))
++								 msecs_to_jiffies(100)))
+ 					xhci_dbg(xhci, "missing U0 port change event for port %d-%d\n",
+ 						 hcd->self.busnum, wIndex + 1);
+ 				spin_lock_irqsave(&xhci->lock, flags);
+@@ -1516,6 +1513,16 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
+ 			/* 4.19.6 Port Test Modes (USB2 Test Mode) */
+ 			if (hcd->speed != HCD_USB2)
+ 				goto error;
++
++#ifdef CONFIG_USB_HCD_TEST_MODE
++			if (test_mode == EHSET_TEST_SINGLE_STEP_SET_FEATURE) {
++				spin_unlock_irqrestore(&xhci->lock, flags);
++				retval = ehset_single_step_set_feature(hcd,
++								wIndex + 1);
++				spin_lock_irqsave(&xhci->lock, flags);
++				break;
++			}
++#endif
+ 			if (test_mode > USB_TEST_FORCE_ENABLE ||
+ 			    test_mode < USB_TEST_J)
+ 				goto error;
+@@ -1829,7 +1836,8 @@ static bool xhci_port_missing_cas_quirk(struct xhci_port *port)
+ 		return false;
+ 
+ 	if (((portsc & PORT_PLS_MASK) != XDEV_POLLING) &&
+-	    ((portsc & PORT_PLS_MASK) != XDEV_COMP_MODE))
++	    ((portsc & PORT_PLS_MASK) != XDEV_COMP_MODE) &&
++	    ((portsc & PORT_PLS_MASK) != XDEV_RXDETECT))
+ 		return false;
+ 
+ 	/* clear wakeup/change bits, and do a warm port reset */
+diff --git a/drivers/usb/host/xhci-mem.c b/drivers/usb/host/xhci-mem.c
+index b398d3fda..0e312066c 100644
+--- a/drivers/usb/host/xhci-mem.c
++++ b/drivers/usb/host/xhci-mem.c
+@@ -2583,7 +2583,7 @@ int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
+ 
+ fail:
+ 	xhci_halt(xhci);
+-	xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
++	xhci_reset(xhci);
+ 	xhci_mem_cleanup(xhci);
+ 	return -ENOMEM;
+ }
+diff --git a/drivers/usb/host/xhci-pci.c b/drivers/usb/host/xhci-pci.c
+index 7d13ddff6..de9a9ea2c 100644
+--- a/drivers/usb/host/xhci-pci.c
++++ b/drivers/usb/host/xhci-pci.c
+@@ -59,8 +59,6 @@
+ #define PCI_DEVICE_ID_INTEL_TIGER_LAKE_XHCI		0x9a13
+ #define PCI_DEVICE_ID_INTEL_MAPLE_RIDGE_XHCI		0x1138
+ #define PCI_DEVICE_ID_INTEL_ALDER_LAKE_XHCI		0x461e
+-#define PCI_DEVICE_ID_INTEL_ALDER_LAKE_N_XHCI		0x464e
+-#define PCI_DEVICE_ID_INTEL_ALDER_LAKE_PCH_XHCI	0x51ed
+ 
+ #define PCI_DEVICE_ID_AMD_RENOIR_XHCI			0x1639
+ #define PCI_DEVICE_ID_AMD_PROMONTORYA_4			0x43b9
+@@ -268,9 +266,7 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
+ 	     pdev->device == PCI_DEVICE_ID_INTEL_ICE_LAKE_XHCI ||
+ 	     pdev->device == PCI_DEVICE_ID_INTEL_TIGER_LAKE_XHCI ||
+ 	     pdev->device == PCI_DEVICE_ID_INTEL_MAPLE_RIDGE_XHCI ||
+-	     pdev->device == PCI_DEVICE_ID_INTEL_ALDER_LAKE_XHCI ||
+-	     pdev->device == PCI_DEVICE_ID_INTEL_ALDER_LAKE_N_XHCI ||
+-	     pdev->device == PCI_DEVICE_ID_INTEL_ALDER_LAKE_PCH_XHCI))
++	     pdev->device == PCI_DEVICE_ID_INTEL_ALDER_LAKE_XHCI))
+ 		xhci->quirks |= XHCI_DEFAULT_PM_RUNTIME_ALLOW;
+ 
+ 	if (pdev->vendor == PCI_VENDOR_ID_ETRON &&
+diff --git a/drivers/usb/host/xhci-plat.c b/drivers/usb/host/xhci-plat.c
+index dc570ce4e..7d2f66527 100644
+--- a/drivers/usb/host/xhci-plat.c
++++ b/drivers/usb/host/xhci-plat.c
+@@ -325,6 +325,10 @@ static int xhci_plat_probe(struct platform_device *pdev)
+ 
+ 		device_property_read_u32(tmpdev, "imod-interval-ns",
+ 					 &xhci->imod_interval);
++
++		if (device_property_read_bool(tmpdev,
++					      "usb3-resume-missing-cas"))
++			xhci->quirks |= XHCI_MISSING_CAS;
+ 	}
+ 
+ 	hcd->usb_phy = devm_usb_get_phy_by_phandle(sysdev, "usb-phy", 0);
+@@ -372,7 +376,8 @@ static int xhci_plat_probe(struct platform_device *pdev)
+ 	 * Prevent runtime pm from being on as default, users should enable
+ 	 * runtime pm using power/control in sysfs.
+ 	 */
+-	pm_runtime_forbid(&pdev->dev);
++	if (!(xhci->quirks & XHCI_DEFAULT_PM_RUNTIME_ALLOW))
++		pm_runtime_forbid(&pdev->dev);
+ 
+ 	return 0;
+ 
+diff --git a/drivers/usb/host/xhci-ring.c b/drivers/usb/host/xhci-ring.c
+index f97079979..3c82eae09 100644
+--- a/drivers/usb/host/xhci-ring.c
++++ b/drivers/usb/host/xhci-ring.c
+@@ -2318,12 +2318,9 @@ static int process_ctrl_td(struct xhci_hcd *xhci, struct xhci_virt_ep *ep,
+ 
+ 	switch (trb_comp_code) {
+ 	case COMP_SUCCESS:
+-		if (trb_type != TRB_STATUS) {
+-			xhci_warn(xhci, "WARN: Success on ctrl %s TRB without IOC set?\n",
++		if (trb_type != TRB_STATUS)
++			xhci_dbg(xhci, "Success on ctrl %s TRB without IOC set?\n",
+ 				  (trb_type == TRB_DATA) ? "data" : "setup");
+-			td->status = -ESHUTDOWN;
+-			break;
+-		}
+ 		td->status = 0;
+ 		break;
+ 	case COMP_SHORT_PACKET:
+@@ -3141,7 +3138,6 @@ irqreturn_t xhci_irq(struct usb_hcd *hcd)
+ 		if (event_loop++ < TRBS_PER_SEGMENT / 2)
+ 			continue;
+ 		xhci_update_erst_dequeue(xhci, event_ring_deq);
+-		event_ring_deq = xhci->event_ring->dequeue;
+ 
+ 		/* ring is half-full, force isoc trbs to interrupt more often */
+ 		if (xhci->isoc_bei_interval > AVOID_BEI_INTERVAL_MIN)
+@@ -3870,6 +3866,129 @@ int xhci_queue_ctrl_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_USB_HCD_TEST_MODE
++/*
++ * This function prepare TRBs and submits them for the
++ * SINGLE_STEP_SET_FEATURE Test.
++ * This is done in two parts: first SETUP req for GetDesc is sent then
++ * 15 seconds later, the IN stage for GetDesc starts to req data from dev
++ *
++ * is_setup : argument decides which of the two stage needs to be
++ * performed; TRUE - SETUP and FALSE - IN+STATUS
++ * Returns 0 if success
++ */
++int xhci_submit_single_step_set_feature(struct usb_hcd *hcd,
++	struct urb *urb, int is_setup)
++{
++	int slot_id;
++	unsigned int ep_index;
++	struct xhci_ring *ep_ring;
++	int ret;
++	struct usb_ctrlrequest *setup;
++	struct xhci_generic_trb *start_trb;
++	int start_cycle;
++	u32 field, length_field, remainder;
++	struct urb_priv *urb_priv;
++	struct xhci_td *td;
++	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
++
++	/* urb_priv will be free after transcation has completed */
++	urb_priv = kzalloc(sizeof(struct urb_priv) +
++			sizeof(struct xhci_td), GFP_KERNEL);
++	if (!urb_priv)
++		return -ENOMEM;
++
++	td = &urb_priv->td[0];
++	urb_priv->num_tds = 1;
++	urb_priv->num_tds_done = 0;
++	urb->hcpriv = urb_priv;
++
++	ep_ring = xhci_urb_to_transfer_ring(xhci, urb);
++	if (!ep_ring) {
++		ret = -EINVAL;
++		goto free_priv;
++	}
++
++	slot_id = urb->dev->slot_id;
++	ep_index = xhci_get_endpoint_index(&urb->ep->desc);
++
++	setup = (struct usb_ctrlrequest *) urb->setup_packet;
++	if (is_setup) {
++		ret = prepare_transfer(xhci, xhci->devs[slot_id],
++				ep_index, urb->stream_id,
++				1, urb, 0, GFP_KERNEL);
++		if (ret < 0)
++			goto free_priv;
++
++		start_trb = &ep_ring->enqueue->generic;
++		start_cycle = ep_ring->cycle_state;
++		/* Save the DMA address of the last TRB in the TD */
++		td->last_trb = ep_ring->enqueue;
++		field = TRB_IOC | TRB_IDT | TRB_TYPE(TRB_SETUP) | start_cycle;
++		/* xHCI 1.0/1.1 6.4.1.2.1: Transfer Type field */
++		if ((xhci->hci_version >= 0x100) ||
++				(xhci->quirks & XHCI_MTK_HOST))
++			field |= TRB_TX_TYPE(TRB_DATA_IN);
++
++		queue_trb(xhci, ep_ring, false,
++			  setup->bRequestType | setup->bRequest << 8 |
++			  le16_to_cpu(setup->wValue) << 16,
++			  le16_to_cpu(setup->wIndex) |
++			  le16_to_cpu(setup->wLength) << 16,
++			  TRB_LEN(8) | TRB_INTR_TARGET(0),
++			  /* Immediate data in pointer */
++			  field);
++		giveback_first_trb(xhci, slot_id, ep_index, urb->stream_id,
++				start_cycle, start_trb);
++		return 0;
++	}
++
++	ret = prepare_transfer(xhci, xhci->devs[slot_id],
++			ep_index, urb->stream_id,
++			2, urb, 0, GFP_KERNEL);
++	if (ret < 0)
++		goto free_priv;
++
++	start_trb = &ep_ring->enqueue->generic;
++	start_cycle = ep_ring->cycle_state;
++	field = TRB_ISP | TRB_TYPE(TRB_DATA);
++
++	remainder = xhci_td_remainder(xhci, 0,
++				   urb->transfer_buffer_length,
++				   urb->transfer_buffer_length,
++				   urb, 1);
++
++	length_field = TRB_LEN(urb->transfer_buffer_length) |
++		TRB_TD_SIZE(remainder) |
++		TRB_INTR_TARGET(0);
++
++	if (urb->transfer_buffer_length > 0) {
++		field |= TRB_DIR_IN;
++		queue_trb(xhci, ep_ring, true,
++				lower_32_bits(urb->transfer_dma),
++				upper_32_bits(urb->transfer_dma),
++				length_field,
++				field | ep_ring->cycle_state);
++	}
++
++	td->last_trb = ep_ring->enqueue;
++	field = TRB_IOC | TRB_TYPE(TRB_STATUS) | ep_ring->cycle_state;
++	queue_trb(xhci, ep_ring, false,
++			0,
++			0,
++			TRB_INTR_TARGET(0),
++			field);
++
++	giveback_first_trb(xhci, slot_id, ep_index, 0,
++			start_cycle, start_trb);
++
++	return 0;
++free_priv:
++	xhci_urb_free_priv(urb_priv);
++	return ret;
++}
++#endif /* CONFIG_USB_HCD_TEST_MODE */
++
+ /*
+  * The transfer burst count field of the isochronous TRB defines the number of
+  * bursts that are required to move all packets in this TD.  Only SuperSpeed
+diff --git a/drivers/usb/host/xhci.c b/drivers/usb/host/xhci.c
+index 90f5a3ce7..5e5d9112f 100644
+--- a/drivers/usb/host/xhci.c
++++ b/drivers/usb/host/xhci.c
+@@ -65,7 +65,7 @@ static bool td_on_ring(struct xhci_td *td, struct xhci_ring *ring)
+  * handshake done).  There are two failure modes:  "usec" have passed (major
+  * hardware flakeout), or the register reads as all-ones (hardware removed).
+  */
+-int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, u64 timeout_us)
++int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, int usec)
+ {
+ 	u32	result;
+ 	int	ret;
+@@ -73,7 +73,7 @@ int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, u64 timeout_us)
+ 	ret = readl_poll_timeout_atomic(ptr, result,
+ 					(result & mask) == done ||
+ 					result == U32_MAX,
+-					1, timeout_us);
++					1, usec);
+ 	if (result == U32_MAX)		/* card removed */
+ 		return -ENODEV;
+ 
+@@ -162,7 +162,7 @@ int xhci_start(struct xhci_hcd *xhci)
+  * Transactions will be terminated immediately, and operational registers
+  * will be set to their defaults.
+  */
+-int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
++int xhci_reset(struct xhci_hcd *xhci)
+ {
+ 	u32 command;
+ 	u32 state;
+@@ -192,10 +192,11 @@ int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
+ 	 * Without this delay, the subsequent HC register access,
+ 	 * may result in a system hang very rarely.
+ 	 */
+-	if (xhci->quirks & XHCI_INTEL_HOST)
++	if (xhci->quirks & (XHCI_INTEL_HOST | XHCI_CDNS_HOST))
+ 		udelay(1000);
+ 
+-	ret = xhci_handshake(&xhci->op_regs->command, CMD_RESET, 0, timeout_us);
++	ret = xhci_handshake(&xhci->op_regs->command,
++			CMD_RESET, 0, 10 * 1000 * 1000);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -208,7 +209,8 @@ int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
+ 	 * xHCI cannot write to any doorbells or operational registers other
+ 	 * than status until the "Controller Not Ready" flag is cleared.
+ 	 */
+-	ret = xhci_handshake(&xhci->op_regs->status, STS_CNR, 0, timeout_us);
++	ret = xhci_handshake(&xhci->op_regs->status,
++			STS_CNR, 0, 10 * 1000 * 1000);
+ 
+ 	xhci->usb2_rhub.bus_state.port_c_suspend = 0;
+ 	xhci->usb2_rhub.bus_state.suspended_ports = 0;
+@@ -729,7 +731,7 @@ static void xhci_stop(struct usb_hcd *hcd)
+ 	xhci->xhc_state |= XHCI_STATE_HALTED;
+ 	xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
+ 	xhci_halt(xhci);
+-	xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
++	xhci_reset(xhci);
+ 	spin_unlock_irq(&xhci->lock);
+ 
+ 	xhci_cleanup_msix(xhci);
+@@ -778,22 +780,11 @@ void xhci_shutdown(struct usb_hcd *hcd)
+ 	if (xhci->quirks & XHCI_SPURIOUS_REBOOT)
+ 		usb_disable_xhci_ports(to_pci_dev(hcd->self.sysdev));
+ 
+-	/* Don't poll the roothubs after shutdown. */
+-	xhci_dbg(xhci, "%s: stopping usb%d port polling.\n",
+-			__func__, hcd->self.busnum);
+-	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
+-	del_timer_sync(&hcd->rh_timer);
+-
+-	if (xhci->shared_hcd) {
+-		clear_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
+-		del_timer_sync(&xhci->shared_hcd->rh_timer);
+-	}
+-
+ 	spin_lock_irq(&xhci->lock);
+ 	xhci_halt(xhci);
+ 	/* Workaround for spurious wakeups at shutdown with HSW */
+ 	if (xhci->quirks & XHCI_SPURIOUS_WAKEUP)
+-		xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
++		xhci_reset(xhci);
+ 	spin_unlock_irq(&xhci->lock);
+ 
+ 	xhci_cleanup_msix(xhci);
+@@ -1179,7 +1170,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
+ 		xhci_dbg(xhci, "Stop HCD\n");
+ 		xhci_halt(xhci);
+ 		xhci_zero_64b_regs(xhci);
+-		retval = xhci_reset(xhci, XHCI_RESET_LONG_USEC);
++		retval = xhci_reset(xhci);
+ 		spin_unlock_irq(&xhci->lock);
+ 		if (retval)
+ 			return retval;
+@@ -5327,7 +5318,7 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
+ 
+ 	xhci_dbg(xhci, "Resetting HCD\n");
+ 	/* Reset the internal HC memory state and registers. */
+-	retval = xhci_reset(xhci, XHCI_RESET_LONG_USEC);
++	retval = xhci_reset(xhci);
+ 	if (retval)
+ 		return retval;
+ 	xhci_dbg(xhci, "Reset complete\n");
+@@ -5460,6 +5451,7 @@ static const struct hc_driver xhci_hc_driver = {
+ 	.disable_usb3_lpm_timeout =	xhci_disable_usb3_lpm_timeout,
+ 	.find_raw_port_number =	xhci_find_raw_port_number,
+ 	.clear_tt_buffer_complete = xhci_clear_tt_buffer_complete,
++	.submit_single_step_set_feature	= xhci_submit_single_step_set_feature,
+ };
+ 
+ void xhci_init_driver(struct hc_driver *drv,
+@@ -5484,6 +5476,8 @@ void xhci_init_driver(struct hc_driver *drv,
+ 			drv->check_bandwidth = over->check_bandwidth;
+ 		if (over->reset_bandwidth)
+ 			drv->reset_bandwidth = over->reset_bandwidth;
++		if (over->bus_suspend)
++			drv->bus_suspend = over->bus_suspend;
+ 	}
+ }
+ EXPORT_SYMBOL_GPL(xhci_init_driver);
+diff --git a/drivers/usb/host/xhci.h b/drivers/usb/host/xhci.h
+index bc0789229..7afd3fd2c 100644
+--- a/drivers/usb/host/xhci.h
++++ b/drivers/usb/host/xhci.h
+@@ -229,9 +229,6 @@ struct xhci_op_regs {
+ #define CMD_ETE		(1 << 14)
+ /* bits 15:31 are reserved (and should be preserved on writes). */
+ 
+-#define XHCI_RESET_LONG_USEC		(10 * 1000 * 1000)
+-#define XHCI_RESET_SHORT_USEC		(250 * 1000)
+-
+ /* IMAN - Interrupt Management Register */
+ #define IMAN_IE		(1 << 1)
+ #define IMAN_IP		(1 << 0)
+@@ -1903,6 +1900,7 @@ struct xhci_hcd {
+ #define XHCI_NO_SOFT_RETRY	BIT_ULL(40)
+ #define XHCI_BROKEN_D3COLD	BIT_ULL(41)
+ #define XHCI_EP_CTX_BROKEN_DCS	BIT_ULL(42)
++#define XHCI_CDNS_HOST		BIT_ULL(43)
+ 
+ 	unsigned int		num_active_eps;
+ 	unsigned int		limit_active_eps;
+@@ -1946,6 +1944,7 @@ struct xhci_driver_overrides {
+ 			     struct usb_host_endpoint *ep);
+ 	int (*check_bandwidth)(struct usb_hcd *, struct usb_device *);
+ 	void (*reset_bandwidth)(struct usb_hcd *, struct usb_device *);
++	int (*bus_suspend)(struct usb_hcd *hcd);
+ };
+ 
+ #define	XHCI_CFC_DELAY		10
+@@ -2086,11 +2085,11 @@ void xhci_free_container_ctx(struct xhci_hcd *xhci,
+ 
+ /* xHCI host controller glue */
+ typedef void (*xhci_get_quirks_t)(struct device *, struct xhci_hcd *);
+-int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, u64 timeout_us);
++int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, int usec);
+ void xhci_quiesce(struct xhci_hcd *xhci);
+ int xhci_halt(struct xhci_hcd *xhci);
+ int xhci_start(struct xhci_hcd *xhci);
+-int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us);
++int xhci_reset(struct xhci_hcd *xhci);
+ int xhci_run(struct usb_hcd *hcd);
+ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks);
+ void xhci_shutdown(struct usb_hcd *hcd);
+@@ -2176,6 +2175,16 @@ int xhci_find_raw_port_number(struct usb_hcd *hcd, int port1);
+ struct xhci_hub *xhci_get_rhub(struct usb_hcd *hcd);
+ 
+ void xhci_hc_died(struct xhci_hcd *xhci);
++#ifdef CONFIG_USB_HCD_TEST_MODE
++int xhci_submit_single_step_set_feature(struct usb_hcd *hcd,
++	struct urb *urb, int is_setup);
++#else
++static inline int xhci_submit_single_step_set_feature(struct usb_hcd *hcd,
++	struct urb *urb, int is_setup)
++{
++	return 0;
++}
++#endif
+ 
+ #ifdef CONFIG_PM
+ int xhci_bus_suspend(struct usb_hcd *hcd);
+@@ -2470,8 +2479,6 @@ static inline const char *xhci_decode_ctrl_ctx(char *str,
+ 	unsigned int	bit;
+ 	int		ret = 0;
+ 
+-	str[0] = '\0';
+-
+ 	if (drop) {
+ 		ret = sprintf(str, "Drop:");
+ 		for_each_set_bit(bit, &drop, 32)
+@@ -2629,11 +2636,8 @@ static inline const char *xhci_decode_usbsts(char *str, u32 usbsts)
+ {
+ 	int ret = 0;
+ 
+-	ret = sprintf(str, " 0x%08x", usbsts);
+-
+ 	if (usbsts == ~(u32)0)
+-		return str;
+-
++		return " 0xffffffff";
+ 	if (usbsts & STS_HALT)
+ 		ret += sprintf(str + ret, " HCHalted");
+ 	if (usbsts & STS_FATAL)
+diff --git a/drivers/usb/typec/tcpm/tcpci.c b/drivers/usb/typec/tcpm/tcpci.c
+index 64e248117..89235abc9 100644
+--- a/drivers/usb/typec/tcpm/tcpci.c
++++ b/drivers/usb/typec/tcpm/tcpci.c
+@@ -10,6 +10,7 @@
+ #include <linux/module.h>
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
++#include <linux/irq.h>
+ #include <linux/property.h>
+ #include <linux/regmap.h>
+ #include <linux/usb/pd.h>
+@@ -180,9 +181,6 @@ static int tcpci_start_toggling(struct tcpc_dev *tcpc,
+ 	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
+ 	unsigned int reg = TCPC_ROLE_CTRL_DRP;
+ 
+-	if (port_type != TYPEC_PORT_DRP)
+-		return -EOPNOTSUPP;
+-
+ 	/* Handle vendor drp toggling */
+ 	if (tcpci->data->start_drp_toggling) {
+ 		ret = tcpci->data->start_drp_toggling(tcpci, tcpci->data, cc);
+@@ -494,6 +492,32 @@ static bool tcpci_is_vbus_vsafe0v(struct tcpc_dev *tcpc)
+ 	return !!(reg & TCPC_EXTENDED_STATUS_VSAFE0V);
+ }
+ 
++static int tcpci_vbus_force_discharge(struct tcpc_dev *tcpc, bool enable)
++{
++	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
++	unsigned int reg;
++	int ret;
++
++	if (enable)
++		regmap_write(tcpci->regmap,
++			TCPC_VBUS_VOLTAGE_ALARM_LO_CFG, 0x1c);
++	else
++		regmap_write(tcpci->regmap,
++			TCPC_VBUS_VOLTAGE_ALARM_LO_CFG, 0);
++
++	regmap_read(tcpci->regmap, TCPC_POWER_CTRL, &reg);
++
++	if (enable)
++		reg |= TCPC_POWER_CTRL_FORCEDISCH;
++	else
++		reg &= ~TCPC_POWER_CTRL_FORCEDISCH;
++	ret = regmap_write(tcpci->regmap, TCPC_POWER_CTRL, reg);
++	if (ret < 0)
++		return ret;
++
++	return 0;
++}
++
+ static int tcpci_set_vbus(struct tcpc_dev *tcpc, bool source, bool sink)
+ {
+ 	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
+@@ -522,6 +546,9 @@ static int tcpci_set_vbus(struct tcpc_dev *tcpc, bool source, bool sink)
+ 			return ret;
+ 	}
+ 
++	if (!source && !sink)
++		tcpci_vbus_force_discharge(tcpc, true);
++
+ 	if (source) {
+ 		ret = regmap_write(tcpci->regmap, TCPC_COMMAND,
+ 				   TCPC_CMD_SRC_VBUS_DEFAULT);
+@@ -628,6 +655,9 @@ static int tcpci_init(struct tcpc_dev *tcpc)
+ 	if (ret < 0)
+ 		return ret;
+ 
++	/* Clear fault condition */
++	regmap_write(tcpci->regmap, TCPC_FAULT_STATUS, 0x80);
++
+ 	if (tcpci->controls_vbus)
+ 		reg = TCPC_POWER_STATUS_VBUS_PRES;
+ 	else
+@@ -644,7 +674,8 @@ static int tcpci_init(struct tcpc_dev *tcpc)
+ 
+ 	reg = TCPC_ALERT_TX_SUCCESS | TCPC_ALERT_TX_FAILED |
+ 		TCPC_ALERT_TX_DISCARDED | TCPC_ALERT_RX_STATUS |
+-		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS;
++		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS |
++		TCPC_ALERT_V_ALARM_LO | TCPC_ALERT_FAULT;
+ 	if (tcpci->controls_vbus)
+ 		reg |= TCPC_ALERT_POWER_STATUS;
+ 	/* Enable VSAFE0V status interrupt when detecting VSAFE0V is supported */
+@@ -678,7 +709,10 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 		tcpm_cc_change(tcpci->port);
+ 
+ 	if (status & TCPC_ALERT_POWER_STATUS) {
++		/* Read power status to clear the event */
++		regmap_read(tcpci->regmap, TCPC_POWER_STATUS, &raw);
+ 		regmap_read(tcpci->regmap, TCPC_POWER_STATUS_MASK, &raw);
++
+ 		/*
+ 		 * If power status mask has been reset, then the TCPC
+ 		 * has reset.
+@@ -689,6 +723,9 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 			tcpm_vbus_change(tcpci->port);
+ 	}
+ 
++	if (status & TCPC_ALERT_V_ALARM_LO)
++		tcpci_vbus_force_discharge(&tcpci->tcpc, false);
++
+ 	if (status & TCPC_ALERT_RX_STATUS) {
+ 		struct pd_message msg;
+ 		unsigned int cnt, payload_cnt;
+@@ -728,6 +765,13 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 			tcpm_vbus_change(tcpci->port);
+ 	}
+ 
++	/* Clear the fault status anyway */
++	if (status & TCPC_ALERT_FAULT) {
++		regmap_read(tcpci->regmap, TCPC_FAULT_STATUS, &raw);
++		regmap_write(tcpci->regmap, TCPC_FAULT_STATUS,
++				raw | TCPC_FAULT_STATUS_CLEAR);
++	}
++
+ 	if (status & TCPC_ALERT_RX_HARD_RST)
+ 		tcpm_pd_hard_reset(tcpci->port);
+ 
+@@ -857,15 +901,18 @@ static int tcpci_probe(struct i2c_client *client,
+ 	if (IS_ERR(chip->tcpci))
+ 		return PTR_ERR(chip->tcpci);
+ 
++	irq_set_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
+ 	err = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+ 					_tcpci_irq,
+-					IRQF_ONESHOT | IRQF_TRIGGER_LOW,
++					IRQF_SHARED | IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+ 					dev_name(&client->dev), chip);
+ 	if (err < 0) {
+ 		tcpci_unregister_port(chip->tcpci);
+ 		return err;
+ 	}
+ 
++	device_set_wakeup_capable(chip->tcpci->dev, true);
++
+ 	return 0;
+ }
+ 
+@@ -877,13 +924,43 @@ static int tcpci_remove(struct i2c_client *client)
+ 	/* Disable chip interrupts before unregistering port */
+ 	err = tcpci_write16(chip->tcpci, TCPC_ALERT_MASK, 0);
+ 	if (err < 0)
+-		dev_warn(&client->dev, "Failed to disable irqs (%pe)\n", ERR_PTR(err));
++		return err;
+ 
+ 	tcpci_unregister_port(chip->tcpci);
++	irq_clear_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
++
++	return 0;
++}
++
++static int __maybe_unused tcpci_suspend(struct device *dev)
++{
++	struct i2c_client *i2c = to_i2c_client(dev);
++
++	if (device_may_wakeup(dev))
++		enable_irq_wake(i2c->irq);
++	else
++		disable_irq(i2c->irq);
+ 
+ 	return 0;
+ }
+ 
++
++static int __maybe_unused tcpci_resume(struct device *dev)
++{
++	struct i2c_client *i2c = to_i2c_client(dev);
++
++	if (device_may_wakeup(dev))
++		disable_irq_wake(i2c->irq);
++	else
++		enable_irq(i2c->irq);
++
++	return 0;
++}
++
++static const struct dev_pm_ops tcpci_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(tcpci_suspend, tcpci_resume)
++};
++
+ static const struct i2c_device_id tcpci_id[] = {
+ 	{ "tcpci", 0 },
+ 	{ }
+@@ -901,6 +978,7 @@ MODULE_DEVICE_TABLE(of, tcpci_of_match);
+ static struct i2c_driver tcpci_i2c_driver = {
+ 	.driver = {
+ 		.name = "tcpci",
++		.pm = &tcpci_pm_ops,
+ 		.of_match_table = of_match_ptr(tcpci_of_match),
+ 	},
+ 	.probe = tcpci_probe,
+diff --git a/drivers/usb/typec/tcpm/tcpci.h b/drivers/usb/typec/tcpm/tcpci.h
+index b2edd45f1..b1d5d1ea5 100644
+--- a/drivers/usb/typec/tcpm/tcpci.h
++++ b/drivers/usb/typec/tcpm/tcpci.h
+@@ -36,6 +36,7 @@
+ #define TCPC_ALERT_MASK			0x12
+ #define TCPC_POWER_STATUS_MASK		0x14
+ #define TCPC_FAULT_STATUS_MASK		0x15
++#define TCPC_FAULT_STATUS_CLEAR		BIT(7)
+ 
+ #define TCPC_EXTENDED_STATUS_MASK		0x16
+ #define TCPC_EXTENDED_STATUS_MASK_VSAFE0V	BIT(0)
+@@ -75,6 +76,7 @@
+ 
+ #define TCPC_POWER_CTRL			0x1c
+ #define TCPC_POWER_CTRL_VCONN_ENABLE	BIT(0)
++#define TCPC_POWER_CTRL_FORCEDISCH	BIT(2)
+ #define TCPC_POWER_CTRL_BLEED_DISCHARGE	BIT(3)
+ #define TCPC_POWER_CTRL_AUTO_DISCHARGE	BIT(4)
+ #define TCPC_DIS_VOLT_ALRM		BIT(5)
+diff --git a/drivers/usb/typec/tcpm/tcpm.c b/drivers/usb/typec/tcpm/tcpm.c
+index 5fce795b6..34aee5393 100644
+--- a/drivers/usb/typec/tcpm/tcpm.c
++++ b/drivers/usb/typec/tcpm/tcpm.c
+@@ -3110,20 +3110,11 @@ static int tcpm_pd_select_pdo(struct tcpm_port *port, int *sink_pdo,
+ 			continue;
+ 		}
+ 
+-		switch (type) {
+-		case PDO_TYPE_FIXED:
+-		case PDO_TYPE_VAR:
++		if (type == PDO_TYPE_FIXED || type == PDO_TYPE_VAR) {
+ 			src_ma = pdo_max_current(pdo);
+ 			src_mw = src_ma * min_src_mv / 1000;
+-			break;
+-		case PDO_TYPE_BATT:
++		} else if (type == PDO_TYPE_BATT) {
+ 			src_mw = pdo_max_power(pdo);
+-			break;
+-		case PDO_TYPE_APDO:
+-			continue;
+-		default:
+-			tcpm_log(port, "Invalid source PDO type, ignoring");
+-			continue;
+ 		}
+ 
+ 		for (j = 0; j < port->nr_snk_pdo; j++) {
+@@ -3567,6 +3558,8 @@ static int tcpm_src_attach(struct tcpm_port *port)
+ 	if (port->attached)
+ 		return 0;
+ 
++	tcpm_set_cc(port, tcpm_rp_cc(port));
++
+ 	ret = tcpm_set_polarity(port, polarity);
+ 	if (ret < 0)
+ 		return ret;
+@@ -3714,6 +3707,8 @@ static int tcpm_snk_attach(struct tcpm_port *port)
+ 	if (port->attached)
+ 		return 0;
+ 
++	tcpm_set_cc(port, TYPEC_CC_RD);
++
+ 	ret = tcpm_set_polarity(port, port->cc2 != TYPEC_CC_OPEN ?
+ 				TYPEC_POLARITY_CC2 : TYPEC_POLARITY_CC1);
+ 	if (ret < 0)
+@@ -4159,7 +4154,11 @@ static void run_state_machine(struct tcpm_port *port)
+ 		ret = tcpm_snk_attach(port);
+ 		if (ret < 0)
+ 			tcpm_set_state(port, SNK_UNATTACHED, 0);
+-		else
++		else if (port->port_type == TYPEC_PORT_SRC &&
++			 port->typec_caps.data == TYPEC_PORT_DRD) {
++			tcpm_typec_connect(port);
++			tcpm_log(port, "Keep at SNK_ATTACHED for USB data.");
++		} else
+ 			tcpm_set_state(port, SNK_STARTUP, 0);
+ 		break;
+ 	case SNK_STARTUP:
+@@ -6088,7 +6087,7 @@ static enum power_supply_property tcpm_psy_props[] = {
+ static int tcpm_psy_get_online(struct tcpm_port *port,
+ 			       union power_supply_propval *val)
+ {
+-	if (port->vbus_charge) {
++	if (port->vbus_present && tcpm_port_is_sink(port)) {
+ 		if (port->pps_data.active)
+ 			val->intval = TCPM_PSY_PROG_ONLINE;
+ 		else
+@@ -6211,7 +6210,7 @@ static int tcpm_psy_set_prop(struct power_supply *psy,
+ 			     const union power_supply_propval *val)
+ {
+ 	struct tcpm_port *port = power_supply_get_drvdata(psy);
+-	int ret;
++	int ret = 0;
+ 
+ 	switch (psp) {
+ 	case POWER_SUPPLY_PROP_ONLINE:
+@@ -6230,6 +6229,9 @@ static int tcpm_psy_set_prop(struct power_supply *psy,
+ 		else
+ 			ret = tcpm_pps_set_op_curr(port, val->intval / 1000);
+ 		break;
++	case POWER_SUPPLY_PROP_USB_TYPE:
++		port->usb_type = val->intval;
++		break;
+ 	default:
+ 		ret = -EINVAL;
+ 		break;
+@@ -6252,6 +6254,10 @@ static int tcpm_psy_prop_writeable(struct power_supply *psy,
+ }
+ 
+ static enum power_supply_usb_type tcpm_psy_usb_types[] = {
++	POWER_SUPPLY_USB_TYPE_SDP,
++	POWER_SUPPLY_USB_TYPE_DCP,
++	POWER_SUPPLY_USB_TYPE_CDP,
++	POWER_SUPPLY_USB_TYPE_ACA,
+ 	POWER_SUPPLY_USB_TYPE_C,
+ 	POWER_SUPPLY_USB_TYPE_PD,
+ 	POWER_SUPPLY_USB_TYPE_PD_PPS,
+diff --git a/include/linux/phy/phy.h b/include/linux/phy/phy.h
+index f3286f4cd..980a2427c 100644
+--- a/include/linux/phy/phy.h
++++ b/include/linux/phy/phy.h
+@@ -211,6 +211,8 @@ static inline void *phy_get_drvdata(struct phy *phy)
+ 	return dev_get_drvdata(&phy->dev);
+ }
+ 
++extern struct dentry *phy_debugfs_root;
++
+ #if IS_ENABLED(CONFIG_GENERIC_PHY)
+ int phy_pm_runtime_get(struct phy *phy);
+ int phy_pm_runtime_get_sync(struct phy *phy);
+diff --git a/include/linux/usb/chipidea.h b/include/linux/usb/chipidea.h
+index edf334250..9ee80aba6 100644
+--- a/include/linux/usb/chipidea.h
++++ b/include/linux/usb/chipidea.h
+@@ -62,6 +62,8 @@ struct ci_hdrc_platform_data {
+ #define CI_HDRC_REQUIRES_ALIGNED_DMA	BIT(13)
+ #define CI_HDRC_IMX_IS_HSIC		BIT(14)
+ #define CI_HDRC_PMQOS			BIT(15)
++/* PHY enter low power mode when bus suspend */
++#define CI_HDRC_HOST_SUSP_PHY_LPM	BIT(16)
+ 	enum usb_dr_mode	dr_mode;
+ #define CI_HDRC_CONTROLLER_RESET_EVENT		0
+ #define CI_HDRC_CONTROLLER_STOPPED_EVENT	1
+@@ -107,5 +109,6 @@ struct platform_device *ci_hdrc_add_device(struct device *dev,
+ void ci_hdrc_remove_device(struct platform_device *pdev);
+ /* Get current available role */
+ enum usb_dr_mode ci_hdrc_query_available_role(struct platform_device *pdev);
++int hw_controller_reset(struct ci_hdrc *ci);
+ 
+ #endif
+diff --git a/include/linux/usb/hcd.h b/include/linux/usb/hcd.h
+index 2c1fc9212..548a028f2 100644
+--- a/include/linux/usb/hcd.h
++++ b/include/linux/usb/hcd.h
+@@ -124,7 +124,6 @@ struct usb_hcd {
+ #define HCD_FLAG_RH_RUNNING		5	/* root hub is running? */
+ #define HCD_FLAG_DEAD			6	/* controller has died? */
+ #define HCD_FLAG_INTF_AUTHORIZED	7	/* authorize interfaces? */
+-#define HCD_FLAG_DEFER_RH_REGISTER	8	/* Defer roothub registration */
+ 
+ 	/* The flags can be tested using these macros; they are likely to
+ 	 * be slightly faster than test_bit().
+@@ -135,7 +134,6 @@ struct usb_hcd {
+ #define HCD_WAKEUP_PENDING(hcd)	((hcd)->flags & (1U << HCD_FLAG_WAKEUP_PENDING))
+ #define HCD_RH_RUNNING(hcd)	((hcd)->flags & (1U << HCD_FLAG_RH_RUNNING))
+ #define HCD_DEAD(hcd)		((hcd)->flags & (1U << HCD_FLAG_DEAD))
+-#define HCD_DEFER_RH_REGISTER(hcd) ((hcd)->flags & (1U << HCD_FLAG_DEFER_RH_REGISTER))
+ 
+ 	/*
+ 	 * Specifies if interfaces are authorized by default
+diff --git a/include/linux/usb/phy.h b/include/linux/usb/phy.h
+index e4de6bc1f..086f95f7b 100644
+--- a/include/linux/usb/phy.h
++++ b/include/linux/usb/phy.h
+@@ -63,6 +63,13 @@ enum usb_otg_state {
+ 	OTG_STATE_A_VBUS_ERR,
+ };
+ 
++/* The usb role of phy to be working with */
++enum usb_current_mode {
++	CUR_USB_MODE_NONE,
++	CUR_USB_MODE_HOST,
++	CUR_USB_MODE_DEVICE,
++};
++
+ struct usb_phy;
+ struct usb_otg;
+ 
+@@ -155,6 +162,15 @@ struct usb_phy {
+ 	 * manually detect the charger type.
+ 	 */
+ 	enum usb_charger_type (*charger_detect)(struct usb_phy *x);
++
++	int	(*notify_suspend)(struct usb_phy *x,
++			enum usb_device_speed speed);
++	int	(*notify_resume)(struct usb_phy *x,
++			enum usb_device_speed speed);
++
++	int	(*set_mode)(struct usb_phy *x,
++			enum usb_current_mode mode);
++
+ };
+ 
+ /* for board-specific init logic */
+@@ -213,6 +229,15 @@ usb_phy_vbus_off(struct usb_phy *x)
+ 	return x->set_vbus(x, false);
+ }
+ 
++static inline int
++usb_phy_set_mode(struct usb_phy *x, enum usb_current_mode mode)
++{
++	if (!x || !x->set_mode)
++		return 0;
++
++	return x->set_mode(x, mode);
++}
++
+ /* for usb host and peripheral controller drivers */
+ #if IS_ENABLED(CONFIG_USB_PHY)
+ extern struct usb_phy *usb_get_phy(enum usb_phy_type type);
+@@ -334,6 +359,24 @@ usb_phy_notify_disconnect(struct usb_phy *x, enum usb_device_speed speed)
+ 		return 0;
+ }
+ 
++static inline int usb_phy_notify_suspend
++	(struct usb_phy *x, enum usb_device_speed speed)
++{
++	if (x && x->notify_suspend)
++		return x->notify_suspend(x, speed);
++	else
++		return 0;
++}
++
++static inline int usb_phy_notify_resume
++	(struct usb_phy *x, enum usb_device_speed speed)
++{
++	if (x && x->notify_resume)
++		return x->notify_resume(x, speed);
++	else
++		return 0;
++}
++
+ /* notifiers */
+ static inline int
+ usb_register_notifier(struct usb_phy *x, struct notifier_block *nb)
+-- 
+2.25.1
+
