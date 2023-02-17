@@ -1,0 +1,132 @@
+From 37d760a64a46c673762777d2f4cf82835472d1fc Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 16 Feb 2023 16:11:18 +0800
+Subject: [PATCH 14/16] imx8: update gpio driver
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ drivers/gpio/Kconfig        | 28 +++++++++++++++++++++++++++-
+ drivers/gpio/gpio-pca953x.c |  9 +++++++--
+ drivers/gpio/gpio-vf610.c   |  2 +-
+ 3 files changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index 947474f6a..52b717954 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -439,6 +439,12 @@ config GPIO_MXC
+ 	select GPIO_GENERIC
+ 	select GENERIC_IRQ_CHIP
+ 
++config GPIO_SCU
++	def_bool y
++	depends on IMX_SCU
++	help
++	  Say Y here to enable the imx8 gpio over SCFW MISC API
++
+ config GPIO_MXS
+ 	bool "Freescale MXS GPIO support" if COMPILE_TEST
+ 	depends on ARCH_MXS || COMPILE_TEST
+@@ -446,6 +452,13 @@ config GPIO_MXS
+ 	select GPIO_GENERIC
+ 	select GENERIC_IRQ_CHIP
+ 
++config GPIO_MXC_PAD_WAKEUP
++	def_bool y
++	depends on IMX_SCU
++	select GPIO_MXC
++	help
++	  Say Y here to enable the imx8 gpio pad wakeup
++
+ config GPIO_OCTEON
+ 	tristate "Cavium OCTEON GPIO"
+ 	depends on CAVIUM_OCTEON_SOC
+@@ -664,7 +677,7 @@ config GPIO_UNIPHIER
+ 
+ config GPIO_VF610
+ 	def_bool y
+-	depends on ARCH_MXC && SOC_VF610
++	depends on ARCH_MXC
+ 	select GPIOLIB_IRQCHIP
+ 	help
+ 	  Say yes here to support Vybrid vf610 GPIOs.
+@@ -679,6 +692,12 @@ config GPIO_VISCONTI
+ 	help
+ 	  Say yes here to support GPIO on Tohisba Visconti.
+ 
++config GPIO_IMX_RPMSG
++	tristate "NXP i.MX7ULP RPMSG GPIO support"
++	depends on ARCH_MXC && RPMSG && GPIOLIB
++	help
++	  This driver support i.MX7ULP RPMSG virtual GPIOs.
++
+ config GPIO_VR41XX
+ 	tristate "NEC VR4100 series General-purpose I/O Uint support"
+ 	depends on CPU_VR41XX
+@@ -1107,6 +1126,13 @@ config GPIO_ADP5520
+ 	  This option enables support for on-chip GPIO found
+ 	  on Analog Devices ADP5520 PMICs.
+ 
++config GPIO_ADP5585
++	tristate "GPIO Support for ADP5585"
++	depends on MFD_ADP5585
++	help
++	  This option enables support for on-chip GPIO found
++	  on Analog Devices ADP5585.
++
+ config GPIO_ALTERA_A10SR
+ 	tristate "Altera Arria10 System Resource GPIO"
+ 	depends on MFD_ALTERA_A10SR
+diff --git a/drivers/gpio/gpio-pca953x.c b/drivers/gpio/gpio-pca953x.c
+index 33683295a..08e67b467 100644
+--- a/drivers/gpio/gpio-pca953x.c
++++ b/drivers/gpio/gpio-pca953x.c
+@@ -20,6 +20,7 @@
+ #include <linux/platform_data/pca953x.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
++#include <linux/reset.h>
+ #include <linux/slab.h>
+ 
+ #include <asm/unaligned.h>
+@@ -762,11 +763,11 @@ static bool pca953x_irq_pending(struct pca953x_chip *chip, unsigned long *pendin
+ 	bitmap_xor(cur_stat, new_stat, old_stat, gc->ngpio);
+ 	bitmap_and(trigger, cur_stat, chip->irq_mask, gc->ngpio);
+ 
+-	bitmap_copy(chip->irq_stat, new_stat, gc->ngpio);
+-
+ 	if (bitmap_empty(trigger, gc->ngpio))
+ 		return false;
+ 
++	bitmap_copy(chip->irq_stat, new_stat, gc->ngpio);
++
+ 	bitmap_and(cur_stat, chip->irq_trig_fall, old_stat, gc->ngpio);
+ 	bitmap_and(old_stat, chip->irq_trig_raise, new_stat, gc->ngpio);
+ 	bitmap_or(new_stat, old_stat, cur_stat, gc->ngpio);
+@@ -1047,6 +1048,10 @@ static int pca953x_probe(struct i2c_client *client,
+ 	lockdep_set_subclass(&chip->i2c_lock,
+ 			     i2c_adapter_depth(client->adapter));
+ 
++	ret = device_reset(&client->dev);
++	if (ret == -EPROBE_DEFER)
++		return -EPROBE_DEFER;
++
+ 	/* initialize cached registers from their original values.
+ 	 * we can't share this chip with another i2c master.
+ 	 */
+diff --git a/drivers/gpio/gpio-vf610.c b/drivers/gpio/gpio-vf610.c
+index 47e191e11..edb28af7b 100644
+--- a/drivers/gpio/gpio-vf610.c
++++ b/drivers/gpio/gpio-vf610.c
+@@ -304,7 +304,7 @@ static int vf610_gpio_probe(struct platform_device *pdev)
+ 	gc = &port->gc;
+ 	gc->of_node = np;
+ 	gc->parent = dev;
+-	gc->label = "vf610-gpio";
++	gc->label = dev_name(dev);
+ 	gc->ngpio = VF610_GPIO_PER_PORT;
+ 	gc->base = of_alias_get_id(np, "gpio") * VF610_GPIO_PER_PORT;
+ 
+-- 
+2.25.1
+
