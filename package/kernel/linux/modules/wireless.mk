@@ -23,7 +23,6 @@ endef
 
 $(eval $(call KernelPackage,net-prism54))
 
-
 define KernelPackage/net-rtl8192su
   SUBMENU:=$(WIRELESS_MENU)
   TITLE:=RTL8192SU support (staging)
@@ -38,5 +37,20 @@ endef
 define KernelPackage/net-rtl8192su/description
  Kernel modules for RealTek RTL8712 and RTL81XXSU fullmac support.
 endef
-
 $(eval $(call KernelPackage,net-rtl8192su))
+
+define KernelPackage/net-mwifiex
+  SUBMENU:=$(WIRELESS_MENU)
+  TITLE:=NXP 88W9098 wifi 6 card support
+  DEPENDS:=+@DRIVER_WEXT_SUPPORT
+  	KCONFIG:=\
+	CONFIG_WLAN_VENDOR_NXP \
+	CONFIG_MXMWIFIEX
+  FILES:=$(LINUX_DIR)/drivers/net/wireless/nxp/mxm_wifiex/wlan_src/mlan.ko \
+		 $(LINUX_DIR)/drivers/net/wireless/nxp/mxm_wifiex/wlan_src/moal.ko
+endef
+
+define KernelPackage/net-mwifiex/description
+ Kernel modules for NXP wifi 6 88W9098 PCI card support.
+endef
+$(eval $(call KernelPackage,net-mwifiex))
