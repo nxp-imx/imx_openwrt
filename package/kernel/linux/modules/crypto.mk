@@ -294,12 +294,11 @@ define KernelPackage/crypto-ghash
   $(call AddDepends/crypto)
 endef
 
-define KernelPackage/crypto-ghash/arm-ce
-  FILES+= $(LINUX_DIR)/arch/arm/crypto/ghash-arm-ce.ko
-  AUTOLOAD+=$(call AutoLoad,09,ghash-arm-ce)
+define KernelPackage/crypto-ghash/arm64-ce
+  FILES+= $(LINUX_DIR)/arch/arm/crypto/ghash-arm64-ce.ko
+  AUTOLOAD+=$(call AutoLoad,09,ghash-arm64-ce)
 endef
-
-KernelPackage/crypto-ghash/imx=$(KernelPackage/crypto-ghash/arm-ce)
+KernelPackage/crypto-ghash/imx8=$(KernelPackage/crypto-ghash/arm64-ce)
 KernelPackage/crypto-ghash/ipq40xx=$(KernelPackage/crypto-ghash/arm-ce)
 KernelPackage/crypto-ghash/mvebu/cortexa9=$(KernelPackage/crypto-ghash/arm-ce)
 
