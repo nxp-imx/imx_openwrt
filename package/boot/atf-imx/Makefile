@@ -33,7 +33,7 @@ define Package/atf-imx8m/Default
   MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
   BUILD_TARGET:=imx
   BUILD_SUBTARGET:=imx8
-  DEPENDS:=@TARGET_imx_imx8
+  DEPENDS:=@TARGET_imx_imx8 +imx-mkimage
 endef
 
 define Package/atf-imx8mp
