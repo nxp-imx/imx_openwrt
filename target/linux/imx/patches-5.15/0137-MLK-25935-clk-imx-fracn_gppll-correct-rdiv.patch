@@ -1,0 +1,40 @@
+From cf56c914ac8a91eb4c9331a7e264a46be82064a3 Mon Sep 17 00:00:00 2001
+From: Peng Fan <peng.fan@nxp.com>
+Date: Thu, 9 Jun 2022 10:20:33 +0800
+Subject: [PATCH 137/274] MLK-25935 clk: imx: fracn_gppll: correct rdiv
+
+According to Reference Manual:
+ 000b - Divide by 1
+ 001b - Divide by 1
+ 010b - Divide by 2
+ 011b - Divide by 3
+ 100b - Divide by 4
+ 101b - Divide by 5
+ 110b - Divide by 6
+ 111b - Divide by 7
+
+So only need increase rdiv by 1 when the register value is 0.
+
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+Signed-off-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 5b8af81e5..a2aaa14fc 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -152,7 +152,8 @@ static unsigned long clk_fracn_gppll_recalc_rate(struct clk_hw *hw, unsigned lon
+ 	if (rate)
+ 		return (unsigned long)rate;
+ 
+-	rdiv = rdiv + 1;
++	if (!rdiv)
++		rdiv = rdiv + 1;
+ 
+ 	switch (odiv) {
+ 	case 0:
+-- 
+2.25.1
+

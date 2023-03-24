@@ -1,0 +1,68 @@
+From e24e1475195f1a0afd615b7c87a30d55dc5223ff Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 13 Sep 2021 11:08:44 +0800
+Subject: [PATCH 075/274] LF-6254-1 arm64: dts: imx93: Add LCD controller node
+
+This patch adds i.MX93 LCDIFv3 device tree node.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 40 ++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index fb7359835..ae6ccdf20 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -746,6 +746,46 @@ media_blk_ctrl: blk-ctrl@4ac10000 {
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		lcdif: lcd-controller@4ae30000 {
++			#address-cells = <1>;
++			#size-cells = <0>;
++			compatible = "fsl,imx93-lcdif";
++			reg = <0x4ae30000 0x10000>;
++			interrupts = <GIC_SPI 176 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&clk IMX93_CLK_MEDIA_DISP_PIX>,
++				 <&clk IMX93_CLK_MEDIA_AXI>,
++				 <&clk IMX93_CLK_LCDIF_GATE>;
++			clock-names = "pix", "disp-axi", "disp-apb";
++			assigned-clocks = <&clk IMX93_CLK_VIDEO_PLL>,
++					  <&clk IMX93_CLK_MEDIA_DISP_PIX>,
++					  <&clk IMX93_CLK_MEDIA_AXI>,
++					  <&clk IMX93_CLK_MEDIA_APB>;
++			assigned-clock-parents = <&clk IMX93_CLK_24M>,
++						 <&clk IMX93_CLK_VIDEO_PLL>,
++						 <&clk IMX93_CLK_SYS_PLL_PFD1>,
++						 <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>;
++			power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_LCDIF>;
++			status = "disabled";
++
++			lcdif_disp: port@0 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <0>;
++
++				lcdif_to_dsi: endpoint@0 {
++					reg = <0>;
++				};
++
++				lcdif_to_ldb: endpoint@1 {
++					reg = <1>;
++				};
++
++				lcdif_to_dpi: endpoint@2 {
++					reg = <2>;
++				};
++			};
++		};
++
+ 		ddr-pmu@4e300dc0 {
+ 			compatible = "fsl,imx93-ddr-pmu";
+ 			reg = <0x4e300dc0 0x200>;
+-- 
+2.25.1
+

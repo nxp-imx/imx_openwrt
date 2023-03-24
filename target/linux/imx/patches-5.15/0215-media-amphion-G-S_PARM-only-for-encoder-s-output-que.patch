@@ -1,0 +1,46 @@
+From d3ccc3c445ff57310058e1b224b39da347621a96 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Mon, 9 May 2022 09:52:25 +0200
+Subject: [PATCH 215/274] media: amphion: G/S_PARM only for encoder's output
+ queue
+
+G/S_PARM doesn't make sense for the capture queue of a stateful encoder,
+unless V4L2_FMT_FLAG_ENC_CAP_FRAME_INTERVAL is set to reserve hardware
+resources.
+
+Otherwise it will fail the v4l2-compliance
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/venc.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/media/platform/amphion/venc.c b/drivers/media/platform/amphion/venc.c
+index ba9f49cca..43d61d82f 100644
+--- a/drivers/media/platform/amphion/venc.c
++++ b/drivers/media/platform/amphion/venc.c
+@@ -283,6 +283,9 @@ static int venc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *parm
+ 	if (!parm)
+ 		return -EINVAL;
+ 
++	if (!V4L2_TYPE_IS_OUTPUT(parm->type))
++		return -EINVAL;
++
+ 	if (!vpu_helper_check_type(inst, parm->type))
+ 		return -EINVAL;
+ 
+@@ -304,6 +307,9 @@ static int venc_s_parm(struct file *file, void *fh, struct v4l2_streamparm *parm
+ 	if (!parm)
+ 		return -EINVAL;
+ 
++	if (!V4L2_TYPE_IS_OUTPUT(parm->type))
++		return -EINVAL;
++
+ 	if (!vpu_helper_check_type(inst, parm->type))
+ 		return -EINVAL;
+ 
+-- 
+2.25.1
+

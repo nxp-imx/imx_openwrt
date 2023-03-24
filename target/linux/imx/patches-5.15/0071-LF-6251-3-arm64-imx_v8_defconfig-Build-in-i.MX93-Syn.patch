@@ -1,0 +1,32 @@
+From 46a7b52287fd8f3e71ec40a43fc0798f27d541ce Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 30 May 2022 11:05:53 +0800
+Subject: [PATCH 071/274] LF-6251-3 arm64: imx_v8_defconfig: Build in i.MX93
+ Synopsys DesignWare MIPI DSI driver
+
+This patch changes imx_v8_defconfig to build in
+i.MX93 Synopsys DesignWare MIPI DSI controller
+drm encoder driver.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index 46e584123..fad7e2da4 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -605,6 +605,7 @@ CONFIG_DRM_IMX_LDB=y
+ CONFIG_DRM_IMX8QM_LDB=y
+ CONFIG_DRM_IMX8QXP_LDB=y
+ CONFIG_DRM_IMX8MP_LDB=y
++CONFIG_DRM_IMX_DW_MIPI_DSI=y
+ CONFIG_DRM_IMX_HDMI=y
+ CONFIG_DRM_IMX_SEC_DSIM=y
+ CONFIG_DRM_IMX_DCNANO=y
+-- 
+2.25.1
+

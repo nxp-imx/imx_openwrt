@@ -1,0 +1,32 @@
+From a6b640327e856760de0f8d8c57724a5475aea12c Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 13 Sep 2021 13:32:48 +0800
+Subject: [PATCH 079/274] LF-6254-5 arm64: dts: imx93: Add display subsystem
+ node
+
+This patch adds i.MX93 display subsystem device tree node.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 9db1c3867..9a1d5d514 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -887,4 +887,9 @@ usbmisc2: usbmisc@4c200200 {
+ 			reg = <0x4c200200 0x200>;
+ 		};
+ 	};
++
++	display-subsystem {
++		compatible = "fsl,imx-display-subsystem";
++		ports = <&lcdif_disp>;
++	};
+ };
+-- 
+2.25.1
+

@@ -1,0 +1,42 @@
+From ef7363371b8b796d972b2f6c0a133d55da5108b2 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Fri, 11 Mar 2022 12:33:26 +0800
+Subject: [PATCH 077/274] LF-6254-3 arm64: dts: imx93: Add MIPI DPHY support
+
+This patch adds i.MX93 Synopsys DesignWare MIPI DPHY
+device tree node.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 005148e3d..2fdb4b5a5 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -744,6 +744,19 @@ media_blk_ctrl: blk-ctrl@4ac10000 {
+ 			clock-names = "apb", "axi", "nic", "disp", "cam",
+ 				      "pxp", "lcdif", "isi", "csi", "dsi";
+ 			#power-domain-cells = <1>;
++
++			dphy: dphy {
++				compatible = "fsl,imx93-mipi-dphy";
++				clocks = <&clk IMX93_CLK_MIPI_PHY_CFG>,
++					 <&clk IMX93_CLK_24M>;
++				clock-names = "phy_cfg", "phy_ref";
++				assigned-clocks = <&clk IMX93_CLK_MIPI_PHY_CFG>;
++				assigned-clock-parents = <&clk IMX93_CLK_24M>;
++				assigned-clock-rates = <24000000>;
++				#phy-cells = <0>;
++				power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_MIPI_DSI>;
++				status = "disabled";
++			};
+ 		};
+ 
+ 		lcdif: lcd-controller@4ae30000 {
+-- 
+2.25.1
+

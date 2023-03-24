@@ -1,0 +1,41 @@
+From d83f9c196bfaed8212c119e53328cdcbd3a2e0a0 Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Mon, 20 Jun 2022 15:44:44 +0800
+Subject: [PATCH 164/274] MLK-25957 soc: imx: Change dev_info message to
+ dev_dbg
+
+These print logs in the imx93 blk_ctrl are unnecessary
+for normal usage, so change them to dev_dbg just for debug
+purpose.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/soc/imx/imx93-blk-ctrl.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/soc/imx/imx93-blk-ctrl.c b/drivers/soc/imx/imx93-blk-ctrl.c
+index 1a15d3bbb..7faea20d4 100644
+--- a/drivers/soc/imx/imx93-blk-ctrl.c
++++ b/drivers/soc/imx/imx93-blk-ctrl.c
+@@ -99,7 +99,7 @@ static int imx93_blk_ctrl_power_on(struct generic_pm_domain *genpd)
+ 	/* release reset */
+ 	regmap_set_bits(bc->regmap, BLK_SFT_RSTN, data->rst_mask);
+ 
+-	dev_info(bc->dev, "pd_on: name: %s\n", genpd->name);
++	dev_dbg(bc->dev, "pd_on: name: %s\n", genpd->name);
+ 
+ 	return 0;
+ 
+@@ -115,7 +115,7 @@ static int imx93_blk_ctrl_power_off(struct generic_pm_domain *genpd)
+ 	const struct imx93_blk_ctrl_domain_data *data = domain->data;
+ 	struct imx93_blk_ctrl *bc = domain->bc;
+ 
+-	dev_info(bc->dev, "pd_off: name: %s\n", genpd->name);
++	dev_dbg(bc->dev, "pd_off: name: %s\n", genpd->name);
+ 
+ 	regmap_clear_bits(bc->regmap, BLK_SFT_RSTN, data->rst_mask);
+ 	regmap_set_bits(bc->regmap, BLK_CLK_EN, data->clk_mask);
+-- 
+2.25.1
+

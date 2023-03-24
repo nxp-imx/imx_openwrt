@@ -1,0 +1,39 @@
+From 2662b3d08de32818ebf91602cf74b96b391f18f0 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Tue, 28 Jun 2022 10:56:41 +0800
+Subject: [PATCH 222/274] media: amphion: release core lock before reset vpu
+ core
+
+In reset vpu core, driver will wait for a response event,
+but if there are still some events unhandled,
+they will be handled first, driver may acquire core lock for that.
+So if we do reset in core lock, it may led to reset timeout.
+
+Fixes: 9f599f351e86a ("media: amphion: add vpu core driver")
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+---
+ drivers/media/platform/amphion/vpu_core.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_core.c b/drivers/media/platform/amphion/vpu_core.c
+index 3cca7ae23..73faa50d2 100644
+--- a/drivers/media/platform/amphion/vpu_core.c
++++ b/drivers/media/platform/amphion/vpu_core.c
+@@ -452,8 +452,13 @@ int vpu_inst_unregister(struct vpu_inst *inst)
+ 	}
+ 	vpu_core_check_hang(core);
+ 	if (core->state == VPU_CORE_HANG && !core->instance_mask) {
++		int err;
++
+ 		dev_info(core->dev, "reset hang core\n");
+-		if (!vpu_core_sw_reset(core)) {
++		mutex_unlock(&core->lock);
++		err = vpu_core_sw_reset(core);
++		mutex_lock(&core->lock);
++		if (!err) {
+ 			core->state = VPU_CORE_ACTIVE;
+ 			core->hang_mask = 0;
+ 		}
+-- 
+2.25.1
+

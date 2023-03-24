@@ -1,0 +1,31 @@
+From c5cb4746bb4d05dc7b30da7f6cc98998311c7765 Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Wed, 22 Jun 2022 14:30:16 +0800
+Subject: [PATCH 167/274] LF-6278-1: arm64: dts: imx8mm-evk-rpmsg-wm8524:
+ Change frequency of sai mclk
+
+wm8524 supports sample rates up to 192kHz and the minimum frequency
+of mclk to satisfy it is 2.4576MHz.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx8mm-evk-rpmsg-wm8524.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx8mm-evk-rpmsg-wm8524.dts b/arch/arm64/boot/dts/freescale/imx8mm-evk-rpmsg-wm8524.dts
+index af30367d7..68bcc47fd 100644
+--- a/arch/arm64/boot/dts/freescale/imx8mm-evk-rpmsg-wm8524.dts
++++ b/arch/arm64/boot/dts/freescale/imx8mm-evk-rpmsg-wm8524.dts
+@@ -69,7 +69,7 @@ rpmsg_audio: rpmsg_audio {
+ 		fsl,rpmsg-out;
+ 		assigned-clocks = <&clk IMX8MM_CLK_SAI3>;
+ 		assigned-clock-parents = <&clk IMX8MM_AUDIO_PLL1_OUT>;
+-		assigned-clock-rates = <12288000>;
++		assigned-clock-rates = <24576000>;
+ 		clocks = <&clk IMX8MM_CLK_SAI3_IPG>,
+ 			 <&clk IMX8MM_CLK_SAI3_ROOT>,
+ 			 <&clk IMX8MM_CLK_SDMA3_ROOT>,
+-- 
+2.25.1
+

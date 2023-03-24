@@ -1,0 +1,41 @@
+From 3c8789a8c80299764f00195c8399c95dd960be77 Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Thu, 10 Nov 2022 15:59:19 +0800
+Subject: [PATCH 265/274] imx93 gpio: vf610: remove the dependency on SOC_VF610
+ imx93 gpio: vf610: clarify the content of GPIO labels
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/gpio/Kconfig      | 2 +-
+ drivers/gpio/gpio-vf610.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index d55d4a35a..79b61342f 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -664,7 +664,7 @@ config GPIO_UNIPHIER
+ 
+ config GPIO_VF610
+ 	def_bool y
+-	depends on ARCH_MXC && SOC_VF610
++	depends on ARCH_MXC
+ 	select GPIOLIB_IRQCHIP
+ 	help
+ 	  Say yes here to support Vybrid vf610 GPIOs.
+diff --git a/drivers/gpio/gpio-vf610.c b/drivers/gpio/gpio-vf610.c
+index 47e191e11..edb28af7b 100644
+--- a/drivers/gpio/gpio-vf610.c
++++ b/drivers/gpio/gpio-vf610.c
+@@ -304,7 +304,7 @@ static int vf610_gpio_probe(struct platform_device *pdev)
+ 	gc = &port->gc;
+ 	gc->of_node = np;
+ 	gc->parent = dev;
+-	gc->label = "vf610-gpio";
++	gc->label = dev_name(dev);
+ 	gc->ngpio = VF610_GPIO_PER_PORT;
+ 	gc->base = of_alias_get_id(np, "gpio") * VF610_GPIO_PER_PORT;
+ 
+-- 
+2.25.1
+

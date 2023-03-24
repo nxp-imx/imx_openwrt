@@ -1,0 +1,36 @@
+From 6a8a5ff9f5764170824240db74628bcb63496b47 Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Thu, 2 Jun 2022 16:43:51 +0800
+Subject: [PATCH 138/274] MLK-25933: dmaengine: fsl-edma-v3: Extend edma dual
+ FIFOs to multiple FIFOs
+
+edma has dual fifo mode feature for audio cyclic. Besides dual fifo,
+there is also multiple fifo use case. In this patch MLOFF field of
+TCD register is modified to support multiple fifo. Correspondingly,
+the burst should be set to the suitable value. For example it is set
+to the number of channels if there is 1 channel in per fifo.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ drivers/dma/fsl-edma-v3.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dma/fsl-edma-v3.c b/drivers/dma/fsl-edma-v3.c
+index 7da7cb743..f5f400908 100644
+--- a/drivers/dma/fsl-edma-v3.c
++++ b/drivers/dma/fsl-edma-v3.c
+@@ -570,8 +570,8 @@ void fsl_edma3_fill_tcd(struct fsl_edma3_chan *fsl_chan,
+ 	tcd->soff = cpu_to_le16(EDMA_TCD_SOFF_SOFF(soff));
+ 
+ 	if (fsl_chan->is_dfifo) {
+-		/* set mloff as -8 */
+-		nbytes |= EDMA_TCD_NBYTES_MLOFF(-8);
++		/* set mloff to support dual fifo and multiple fifo */
++		nbytes |= EDMA_TCD_NBYTES_MLOFF(-(fsl_chan->fsc.burst * 4));
+ 		/* enable DMLOE/SMLOE */
+ 		if (fsl_chan->fsc.dir == DMA_MEM_TO_DEV) {
+ 			nbytes |= EDMA_TCD_NBYTES_DMLOE;
+-- 
+2.25.1
+

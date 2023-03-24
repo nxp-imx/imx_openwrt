@@ -1,0 +1,33 @@
+From c158e910b5c64028a1fa1f3b2d6af87fb5ce1a4c Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Thu, 12 May 2022 13:56:14 +0800
+Subject: [PATCH 085/274] MLK-25926-1: dt-bindings: clock: Add SAIx_IPG clock
+ definition on i.MX93
+
+Add SAIx_IPG clock definition for SAI IP use.
+
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ include/dt-bindings/clock/imx93-clock.h | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/include/dt-bindings/clock/imx93-clock.h b/include/dt-bindings/clock/imx93-clock.h
+index 21fda9c5c..50caa9124 100644
+--- a/include/dt-bindings/clock/imx93-clock.h
++++ b/include/dt-bindings/clock/imx93-clock.h
+@@ -196,6 +196,9 @@
+ #define IMX93_CLK_TMC_GATE		187
+ #define IMX93_CLK_PMRO_GATE		188
+ #define IMX93_CLK_32K			189
+-#define IMX93_CLK_END			190
++#define IMX93_CLK_SAI1_IPG		190
++#define IMX93_CLK_SAI2_IPG		191
++#define IMX93_CLK_SAI3_IPG		192
++#define IMX93_CLK_END			193
+ 
+ #endif
+-- 
+2.25.1
+

@@ -1,0 +1,22 @@
+From b954462b94c8f4f50aaa380c45c95a571cd017bd Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Wed, 12 Oct 2022 11:25:11 +0800
+Subject: [PATCH 257/274] imx93: Add CONFIG_ETHOSU
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index 783cd9962..abea5f02f 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -1067,3 +1067,4 @@ CONFIG_TRUSTED_KEYS_TEE=n
+ CONFIG_TRUSTED_KEYS_CAAM=y
+ 
+ CONFIG_SOC_IMX9=y
++CONFIG_ETHOSU=y
+-- 
+2.25.1
+

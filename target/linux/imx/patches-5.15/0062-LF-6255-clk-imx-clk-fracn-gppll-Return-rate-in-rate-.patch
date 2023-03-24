@@ -1,0 +1,71 @@
+From dc6800a16a58f775851dee509abea1562bdbc97a Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Sun, 29 May 2022 14:37:19 +0800
+Subject: [PATCH 062/274] LF-6255 clk: imx: clk-fracn-gppll: Return rate in
+ rate table properly in ->recalc_rate()
+
+The PLL parameters in rate table should be directly compared with
+those read from PLL registers instead of the cooked ones.
+
+Fixes: 1b26cb8a77a4 ("clk: imx: support fracn gppll")
+Cc: Abel Vesa <abel.vesa@nxp.com>
+Cc: Michael Turquette <mturquette@baylibre.com>
+Cc: Stephen Boyd <sboyd@kernel.org>
+Cc: Shawn Guo <shawnguo@kernel.org>
+Cc: Sascha Hauer <s.hauer@pengutronix.de>
+Cc: Pengutronix Kernel Team <kernel@pengutronix.de>
+Cc: Fabio Estevam <festevam@gmail.com>
+Cc: NXP Linux Team <linux-imx@nxp.com>
+Cc: Peng Fan <peng.fan@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 24 +++++++++++++-----------
+ 1 file changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 02ed94e8a..5b8af81e5 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -134,18 +134,7 @@ static unsigned long clk_fracn_gppll_recalc_rate(struct clk_hw *hw, unsigned lon
+ 	mfi = FIELD_GET(PLL_MFI_MASK, pll_div);
+ 
+ 	rdiv = FIELD_GET(PLL_RDIV_MASK, pll_div);
+-	rdiv = rdiv + 1;
+ 	odiv = FIELD_GET(PLL_ODIV_MASK, pll_div);
+-	switch (odiv) {
+-	case 0:
+-		odiv = 2;
+-		break;
+-	case 1:
+-		odiv = 3;
+-		break;
+-	default:
+-		break;
+-	}
+ 
+ 	/*
+ 	 * Sometimes, the recalculated rate has deviation due to
+@@ -163,6 +152,19 @@ static unsigned long clk_fracn_gppll_recalc_rate(struct clk_hw *hw, unsigned lon
+ 	if (rate)
+ 		return (unsigned long)rate;
+ 
++	rdiv = rdiv + 1;
++
++	switch (odiv) {
++	case 0:
++		odiv = 2;
++		break;
++	case 1:
++		odiv = 3;
++		break;
++	default:
++		break;
++	}
++
+ 	/* Fvco = Fref * (MFI + MFN / MFD) */
+ 	fvco = fvco * mfi * mfd + fvco * mfn;
+ 	do_div(fvco, mfd * rdiv * odiv);
+-- 
+2.25.1
+

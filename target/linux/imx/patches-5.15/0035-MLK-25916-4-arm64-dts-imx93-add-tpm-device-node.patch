@@ -1,0 +1,40 @@
+From 3e0dceff1edc7aaa96a58cd0e892fcb9811a5d92 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Tue, 24 May 2022 11:13:17 +0800
+Subject: [PATCH 035/274] MLK-25916-4 arm64: dts: imx93: add tpm device node
+
+Add tpm4 support.
+tpm1 and tpm3 clock source can't be switched, tpm1 fix to
+AONMIX bus clock, tpm3 fix to WAKEUP bus clock.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 888279070..eb26e40d9 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -253,6 +253,17 @@ mu2: mailbox@42440000 {
+ 				status = "disabled";
+ 			};
+ 
++			tpm4: pwm@424f0000 {
++				compatible = "fsl,imx7ulp-pwm";
++				reg = <0x424f0000 0x1000>;
++				clocks = <&clk IMX93_CLK_TPM4_GATE>;
++				assigned-clocks = <&clk IMX93_CLK_TPM4>;
++				assigned-clock-parents = <&clk IMX93_CLK_24M>;
++				assigned-clock-rates = <24000000>;
++				#pwm-cells = <3>;
++				status = "disabled";
++			};
++
+ 			lpi2c3: i2c@42530000 {
+ 				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
+ 				reg = <0x42530000 0x10000>;
+-- 
+2.25.1
+

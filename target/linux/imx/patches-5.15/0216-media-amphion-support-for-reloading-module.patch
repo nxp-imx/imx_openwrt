@@ -1,0 +1,51 @@
+From 26c3ab507b373abcb8d8556fe65d76db2b07fb87 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Tue, 17 May 2022 09:01:16 +0100
+Subject: [PATCH 216/274] media: amphion: support for reloading module
+
+As there is no interface to power off vpu core.
+So it need to boot from cold on first load.
+but on the second load, driver need to restore the status
+instead of booting.
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_core.c | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_core.c b/drivers/media/platform/amphion/vpu_core.c
+index 68ad18392..3cca7ae23 100644
+--- a/drivers/media/platform/amphion/vpu_core.c
++++ b/drivers/media/platform/amphion/vpu_core.c
+@@ -257,14 +257,8 @@ static int vpu_core_register(struct device *dev, struct vpu_core *core)
+ 	}
+ 
+ 	list_add_tail(&core->list, &vpu->cores);
+-
+ 	vpu_core_get_vpu(core);
+ 
+-	if (vpu_iface_get_power_state(core))
+-		ret = vpu_core_restore(core);
+-	if (ret)
+-		goto error;
+-
+ 	return 0;
+ error:
+ 	if (core->msg_buffer) {
+@@ -362,7 +356,10 @@ struct vpu_core *vpu_request_core(struct vpu_dev *vpu, enum vpu_core_type type)
+ 	pm_runtime_resume_and_get(core->dev);
+ 
+ 	if (core->state == VPU_CORE_DEINIT) {
+-		ret = vpu_core_boot(core, true);
++		if (vpu_iface_get_power_state(core))
++			ret = vpu_core_restore(core);
++		else
++			ret = vpu_core_boot(core, true);
+ 		if (ret) {
+ 			pm_runtime_put_sync(core->dev);
+ 			mutex_unlock(&core->lock);
+-- 
+2.25.1
+

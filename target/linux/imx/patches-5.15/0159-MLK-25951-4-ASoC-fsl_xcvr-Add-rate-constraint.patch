@@ -1,0 +1,107 @@
+From 5f479e42144c1c2ef12c7b63301f29831f96c0aa Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Fri, 17 Jun 2022 13:31:13 +0800
+Subject: [PATCH 159/274] MLK-25951-4: ASoC: fsl_xcvr: Add rate constraint
+
+On i.MX93, spdif tx clock is used to generate bit clock. It differs
+from previous platform like imx8mp on which phy PLL works. Also,
+there is only one parent audio PLL for spdif, that some sample rate
+can't be supported, so add constraint according to the clock source
+rate.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ sound/soc/fsl/fsl_xcvr.c | 30 ++++++++++++++++++++++++++++--
+ sound/soc/fsl/fsl_xcvr.h |  5 +++++
+ 2 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/sound/soc/fsl/fsl_xcvr.c b/sound/soc/fsl/fsl_xcvr.c
+index 0d7886e39..fb2216cf5 100644
+--- a/sound/soc/fsl/fsl_xcvr.c
++++ b/sound/soc/fsl/fsl_xcvr.c
+@@ -500,7 +500,8 @@ static int fsl_xcvr_startup(struct snd_pcm_substream *substream,
+ {
+ 	struct fsl_xcvr *xcvr = snd_soc_dai_get_drvdata(dai);
+ 	bool tx = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
+-	int ret = 0;
++	int ret = 0, i, j, k = 0;
++	u64 clk_rate[2];
+ 
+ 	if (xcvr->streams & BIT(substream->stream)) {
+ 		dev_err(dai->dev, "%sX busy\n", tx ? "T" : "R");
+@@ -520,8 +521,25 @@ static int fsl_xcvr_startup(struct snd_pcm_substream *substream,
+ 	switch (xcvr->mode) {
+ 	case FSL_XCVR_MODE_SPDIF:
+ 	case FSL_XCVR_MODE_ARC:
++		xcvr->spdif_constr_rates = fsl_xcvr_spdif_rates_constr;
++		if (xcvr->soc_data->spdif_only && tx) {
++			xcvr->spdif_constr_rates.list = xcvr->spdif_constr_rates_list;
++			xcvr->spdif_constr_rates.count = 0;
++			for (i = 0; i < SPDIF_NUM_RATES; i++) {
++				clk_rate[0] = clk_get_rate(xcvr->pll8k_clk);
++				clk_rate[1] = clk_get_rate(xcvr->pll11k_clk);
++				for (j = 0; j < 2; j++) {
++					if (clk_rate[j] != 0 &&
++					    do_div(clk_rate[j], fsl_xcvr_spdif_rates[i]) == 0) {
++						xcvr->spdif_constr_rates_list[k++] =
++						fsl_xcvr_spdif_rates[i];
++						xcvr->spdif_constr_rates.count++;
++					}
++				}
++			}
++		}
+ 		ret = fsl_xcvr_constr(substream, &fsl_xcvr_spdif_channels_constr,
+-				      &fsl_xcvr_spdif_rates_constr);
++				      &xcvr->spdif_constr_rates);
+ 		break;
+ 	case FSL_XCVR_MODE_EARC:
+ 		ret = fsl_xcvr_constr(substream, &fsl_xcvr_earc_channels_constr,
+@@ -1234,6 +1252,14 @@ static int fsl_xcvr_probe(struct platform_device *pdev)
+ 		return PTR_ERR(xcvr->pll_ipg_clk);
+ 	}
+ 
++	xcvr->pll8k_clk = devm_clk_get(dev, "pll8k");
++	if (IS_ERR(xcvr->pll8k_clk))
++		xcvr->pll8k_clk = NULL;
++
++	xcvr->pll11k_clk = devm_clk_get(dev, "pll11k");
++	if (IS_ERR(xcvr->pll11k_clk))
++		xcvr->pll11k_clk = NULL;
++
+ 	xcvr->ram_addr = devm_platform_ioremap_resource_byname(pdev, "ram");
+ 	if (IS_ERR(xcvr->ram_addr))
+ 		return PTR_ERR(xcvr->ram_addr);
+diff --git a/sound/soc/fsl/fsl_xcvr.h b/sound/soc/fsl/fsl_xcvr.h
+index 26c40875b..1b9a5aec8 100644
+--- a/sound/soc/fsl/fsl_xcvr.h
++++ b/sound/soc/fsl/fsl_xcvr.h
+@@ -297,6 +297,7 @@
+ #define FSL_XCVR_CAP_DATA_STR		0x300 /* Capabilities data structure */
+ 
+ #define FSL_XCVR_CAPDS_SIZE	256
++#define SPDIF_NUM_RATES 7
+ 
+ struct fsl_xcvr_soc_data {
+ 	const char *fw_name;
+@@ -312,6 +313,8 @@ struct fsl_xcvr {
+ 	struct clk *pll_ipg_clk;
+ 	struct clk *phy_clk;
+ 	struct clk *spba_clk;
++	struct clk *pll8k_clk;
++	struct clk *pll11k_clk;
+ 	struct reset_control *reset;
+ 	u8 streams;
+ 	u32 mode;
+@@ -322,6 +325,8 @@ struct fsl_xcvr {
+ 	struct snd_aes_iec958 rx_iec958;
+ 	struct snd_aes_iec958 tx_iec958;
+ 	u8 cap_ds[FSL_XCVR_CAPDS_SIZE];
++	struct snd_pcm_hw_constraint_list spdif_constr_rates;
++	u32 spdif_constr_rates_list[SPDIF_NUM_RATES];
+ };
+ 
+ const struct attribute_group *fsl_xcvr_get_attr_grp(void);
+-- 
+2.25.1
+

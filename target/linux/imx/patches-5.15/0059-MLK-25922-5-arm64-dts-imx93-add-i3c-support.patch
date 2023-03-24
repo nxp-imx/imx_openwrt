@@ -1,0 +1,203 @@
+From 9c600a71eba3716eb40f040a6813690da762f400 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Thu, 26 May 2022 17:22:45 +0800
+Subject: [PATCH 059/274] MLK-25922-5 arm64: dts: imx93: add i3c support
+
+Add I3C support.
+Enable I3C1 bus and replace I2C1.
+
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |   3 +-
+ .../dts/freescale/imx93-11x11-evk-i3c.dts     | 103 ++++++++++++++++++
+ .../boot/dts/freescale/imx93-11x11-evk.dts    |   4 +
+ arch/arm64/boot/dts/freescale/imx93.dtsi      |  26 +++++
+ 4 files changed, 135 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 43fea6f9b..d8a134fd8 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -243,6 +243,7 @@ dtb-$(CONFIG_ARCH_MXC) += imx8ulp-evk.dtb imx8ulp-evk-lpspi-slave.dtb \
+ dtb-$(CONFIG_ARCH_MXC) += imx8qm-mek-sof-cs42888.dtb imx8qm-mek-sof-wm8960.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8dxl-evk-root.dtb imx8dxl-evk-inmate.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb imx93-11x11-evk-rpmsg.dtb \
+-			  imx93-11x11-evk-lpspi.dtb imx93-11x11-evk-lpspi-slave.dtb
++			  imx93-11x11-evk-lpspi.dtb imx93-11x11-evk-lpspi-slave.dtb \
++			  imx93-11x11-evk-i3c.dtb
+ dtb-$(CONFIG_ARCH_S32) += s32v234-evb.dtb \
+ 			  s32v234-sbc.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+new file mode 100644
+index 000000000..7e58904af
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++/{
++	aliases {
++		/delete-property/ i2c0;
++	};
++};
++
++/delete-node/&lpi2c1;
++
++/*
++ * When add i2c devices on i3c bus, the reg property should be changed to:
++ *         reg = <0x1a 0x00 0x50>;
++ * The first byte is still the address of the i2c device;
++ * The second byte is always 0x00;
++ * The third byte is the communication speed of this i2c device;
++ *         0x20 means 1MHz(FM+);
++ *         0x50 means 400KHz(FM);
++ * In compatibility mode, I3C will use the slowest setting of all targets
++ * for i2c communication.
++ */
++&i3c1 {
++	pinctrl-names = "default", "sleep";
++	pinctrl-0 = <&pinctrl_i3c1>;
++	pinctrl-1 = <&pinctrl_i3c1>;
++	i2c-scl-hz = <400000>;
++	status = "okay";
++
++	/* i3c device with static i2c address*/
++	lsm6dso_i3c: imu@6a,208006c0000 {
++		reg = <0x6a 0x208 0x6c0000>;
++		assigned-address = <0x6a>;
++	};
++
++	/* i2c device */
++	ptn5110: tcpc@50 {
++		compatible = "nxp,ptn5110";
++		reg = <0x50 0x00 0x50>;
++		interrupt-parent = <&pcal6524>;
++		interrupts = <1 IRQ_TYPE_EDGE_FALLING>;
++		status = "okay";
++
++		port {
++			typec1_dr_sw: endpoint {
++				remote-endpoint = <&usb1_drd_sw>;
++			};
++		};
++
++		typec1_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			power-role = "dual";
++			data-role = "dual";
++			try-power-role = "sink";
++			source-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)
++				     PDO_VAR(5000, 20000, 3000)>;
++			op-sink-microwatt = <15000000>;
++			self-powered;
++		};
++	};
++
++	ptn5110_2: tcpc@51 {
++		compatible = "nxp,ptn5110";
++		reg = <0x51 0x00 0x50>;
++		interrupt-parent = <&pcal6524>;
++		interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
++		status = "okay";
++
++		port {
++			typec2_dr_sw: endpoint {
++				remote-endpoint = <&usb2_drd_sw>;
++			};
++		};
++
++		typec2_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			power-role = "dual";
++			data-role = "dual";
++			try-power-role = "sink";
++			source-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)
++				     PDO_VAR(5000, 20000, 3000)>;
++			op-sink-microwatt = <15000000>;
++			self-powered;
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_i3c1: i3c1grp {
++		fsl,pins = <
++			MX93_PAD_I2C1_SCL__I3C1_SCL	0x4000019e
++			MX93_PAD_I2C1_SDA__I3C1_SDA	0x4000019e
++		>;
++	};
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index ce3dd7f27..567ad908b 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -107,6 +107,10 @@ &flexcan2 {
+ 	status = "okay";
+ };
+ 
++/*
++ * When add, delete or change any target device setting in &lpi2c1,
++ * please synchronize the changes to the &i3c1 bus in imx93-11x11-evk-i3c.dts.
++ */
+ &lpi2c1 {
+ 	#address-cells = <1>;
+ 	#size-cells = <0>;
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 4e3fac0ef..fb7359835 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -144,6 +144,19 @@ system_counter: timer@44290000 {
+ 				no-divider;
+ 			};
+ 
++			i3c1: i3c-master@44330000 {
++				#address-cells = <3>;
++				#size-cells = <0>;
++				compatible = "fsl,imx93-i3c-master", "silvaco,i3c-master";
++				reg = <0x44330000 0x10000>;
++				interrupts = <GIC_SPI 12 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_BUS_AON>,
++					 <&clk IMX93_CLK_I3C1_GATE>,
++					 <&clk IMX93_CLK_DUMMY>;
++				clock-names = "pclk", "fast_clk", "slow_clk";
++				status = "disabled";
++			};
++
+ 			lpi2c1: i2c@44340000 {
+ 				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
+ 				reg = <0x44340000 0x10000>;
+@@ -318,6 +331,19 @@ tpm4: pwm@424f0000 {
+ 				status = "disabled";
+ 			};
+ 
++			i3c2: i3c-master@42520000 {
++				#address-cells = <3>;
++				#size-cells = <0>;
++				compatible = "fsl,imx93-i3c-master", "silvaco,i3c-master";
++				reg = <0x42520000 0x10000>;
++				interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_BUS_WAKEUP>,
++					 <&clk IMX93_CLK_I3C2_GATE>,
++					 <&clk IMX93_CLK_DUMMY>;
++				clock-names = "pclk", "fast_clk", "slow_clk";
++				status = "disabled";
++			};
++
+ 			lpi2c3: i2c@42530000 {
+ 				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
+ 				reg = <0x42530000 0x10000>;
+-- 
+2.25.1
+

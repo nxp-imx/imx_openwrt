@@ -1,0 +1,31 @@
+From 99228c87515a5442c436e1eda3db108fce4a03a3 Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Thu, 21 Apr 2022 09:29:55 +0800
+Subject: [PATCH 008/274] MLK-25892-02 clk: imx: Add more freq config for video
+ pll on imx93
+
+Add the 484MHz & 498MHz frequency support that will be used
+by video subsystem on imx93.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 71c102d95..5b96d5a72 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -67,6 +67,8 @@ static const struct imx_fracn_gppll_rate_table fracn_tbl[] = {
+ 	PLL_FRACN_GP(650000000U, 81, 0, 0, 0, 3),
+ 	PLL_FRACN_GP(594000000U, 198, 0, 0, 0, 8),
+ 	PLL_FRACN_GP(560000000U, 70, 0, 0, 0, 3),
++	PLL_FRACN_GP(498000000U, 83, 0, 0, 0, 4),
++	PLL_FRACN_GP(484000000U, 121, 0, 0, 0, 6),
+ 	PLL_FRACN_GP(400000000U, 50, 0, 0, 0, 3),
+ 	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5)
+ };
+-- 
+2.25.1
+

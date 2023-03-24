@@ -1,0 +1,30 @@
+From d286771cd2eba2cb1ddd0e70dae3c316adf7fab6 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Fri, 27 May 2022 17:43:50 +0800
+Subject: [PATCH 107/274] LF-6244-02: dma: pxp: config block size to 16x16 for
+ fetch and store engine
+
+Config block size to 16x16 for input fetch and store engine in order to
+improve PXP performance
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ drivers/dma/pxp/pxp_dma_v3.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/dma/pxp/pxp_dma_v3.c b/drivers/dma/pxp/pxp_dma_v3.c
+index 9118ceb07..422d9efb9 100644
+--- a/drivers/dma/pxp/pxp_dma_v3.c
++++ b/drivers/dma/pxp/pxp_dma_v3.c
+@@ -1573,6 +1573,7 @@ static uint32_t pxp_store_ctrl_config(struct pxp_pixmap *out, uint8_t mode,
+ 		ctrl.block_en = 1;
+ 
+ 	ctrl.ch_en = 1;
++	ctrl.block_16 = 1;
+ 
+ 	return *(uint32_t *)&ctrl;
+ }
+-- 
+2.25.1
+

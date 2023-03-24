@@ -1,0 +1,116 @@
+From 9b08a4ba66f61bafd6efd27e0afcbb69c317f7a3 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Tue, 31 May 2022 15:07:41 +0800
+Subject: [PATCH 102/274] LF-6266-3 arm64: dts: imx93-11x11-evk: Add BOE
+ EV121WXM-N10-1850 LVDS panel support
+
+This patch adds BOE EV121WXM-N10-1850 LVDS panel support
+on the i.MX93 11x11 EVK platform.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |  3 +-
+ .../imx93-11x11-evk-boe-wxga-lvds-panel.dts   | 76 +++++++++++++++++++
+ 2 files changed, 78 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 4cf060651..f39195b03 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -244,6 +244,7 @@ dtb-$(CONFIG_ARCH_MXC) += imx8qm-mek-sof-cs42888.dtb imx8qm-mek-sof-wm8960.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx8dxl-evk-root.dtb imx8dxl-evk-inmate.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb imx93-11x11-evk-rpmsg.dtb \
+ 			  imx93-11x11-evk-lpspi.dtb imx93-11x11-evk-lpspi-slave.dtb \
+-			  imx93-11x11-evk-i3c.dtb imx93-11x11-evk-rm67199.dtb
++			  imx93-11x11-evk-i3c.dtb imx93-11x11-evk-rm67199.dtb \
++			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb
+ dtb-$(CONFIG_ARCH_S32) += s32v234-evb.dtb \
+ 			  s32v234-sbc.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
+new file mode 100644
+index 000000000..a6c8674f7
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++/ {
++	lvds_backlight: lvds_backlight {
++		compatible = "pwm-backlight";
++		pwms = <&adp5585pwm 0 100000 0>;
++		enable-gpios = <&adp5585gpio 8 GPIO_ACTIVE_HIGH>;
++		status = "okay";
++
++		brightness-levels = < 0  1  2  3  4  5  6  7  8  9
++				     10 11 12 13 14 15 16 17 18 19
++				     20 21 22 23 24 25 26 27 28 29
++				     30 31 32 33 34 35 36 37 38 39
++				     40 41 42 43 44 45 46 47 48 49
++				     50 51 52 53 54 55 56 57 58 59
++				     60 61 62 63 64 65 66 67 68 69
++				     70 71 72 73 74 75 76 77 78 79
++				     80 81 82 83 84 85 86 87 88 89
++				     90 91 92 93 94 95 96 97 98 99
++				    100>;
++		default-brightness-level = <80>;
++	};
++
++	lvds_panel {
++		compatible = "boe,ev121wxm-n10-1850";
++		backlight = <&lvds_backlight>;
++		enable-gpios = <&pcal6524 14 GPIO_ACTIVE_HIGH>;
++
++		port {
++			panel_lvds_in: endpoint {
++				remote-endpoint = <&lvds_out>;
++			};
++		};
++	};
++};
++
++&adv7535 {
++	status = "disabled";
++};
++
++&dphy {
++	status = "disabled";
++};
++
++&dsi {
++	status = "disabled";
++};
++
++&lcdif {
++	assigned-clock-rates = <498000000>, <71142857>, <400000000>, <133333333>;
++};
++
++&ldb {
++	status = "okay";
++
++	lvds-channel@0 {
++		status = "okay";
++
++		port@1 {
++			reg = <1>;
++
++			lvds_out: endpoint {
++				remote-endpoint = <&panel_lvds_in>;
++			};
++		};
++	};
++};
++
++&ldb_phy {
++	status = "okay";
++};
+-- 
+2.25.1
+

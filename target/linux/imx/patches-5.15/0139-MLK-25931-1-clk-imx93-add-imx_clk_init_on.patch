@@ -1,0 +1,74 @@
+From 5f2784f4f5d3944f510d9f49af88503a0d5a3df1 Mon Sep 17 00:00:00 2001
+From: Alice Guo <alice.guo@nxp.com>
+Date: Sat, 7 May 2022 17:35:33 +0800
+Subject: [PATCH 139/274] MLK-25931-1 clk: imx93: add imx_clk_init_on()
+
+When we support dual Linux with jailhouse, it relys on the first Linux
+to configure the clock used by the second Linux because there is no
+clock controller in the inmate cell.
+
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Alice Guo <alice.guo@nxp.com>
+---
+ drivers/clk/imx/clk-imx93.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index cfcd5595c..be58483c1 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -3,6 +3,7 @@
+  * Copyright 2021 NXP.
+  */
+ 
++#include <linux/clk.h>
+ #include <linux/clk-provider.h>
+ #include <linux/err.h>
+ #include <linux/io.h>
+@@ -242,6 +243,34 @@ static const struct imx93_clk_ccgr {
+ static struct clk_hw_onecell_data *clk_hw_data;
+ static struct clk_hw **clks;
+ 
++static int imx_clk_init_on(struct device_node *np,
++				  struct clk_hw * const clks[])
++{
++	u32 *array;
++	int i, ret, elems;
++
++	elems = of_property_count_u32_elems(np, "init-on-array");
++	if (elems < 0)
++		return elems;
++	array = kcalloc(elems, sizeof(elems), GFP_KERNEL);
++	if (!array)
++		return -ENOMEM;
++
++	ret = of_property_read_u32_array(np, "init-on-array", array, elems);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < elems; i++) {
++		ret = clk_prepare_enable(clks[array[i]]->clk);
++		if (ret)
++			pr_err("clk_prepare_enable failed %d\n", array[i]);
++	}
++
++	kfree(array);
++
++	return 0;
++}
++
+ static int imx93_clocks_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -321,6 +350,8 @@ static int imx93_clocks_probe(struct platform_device *pdev)
+ 		goto unregister_hws;
+ 	}
+ 
++	imx_clk_init_on(np, clks);
++
+ 	return 0;
+ 
+ unregister_hws:
+-- 
+2.25.1
+

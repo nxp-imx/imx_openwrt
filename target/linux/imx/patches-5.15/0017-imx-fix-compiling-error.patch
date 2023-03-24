@@ -1,0 +1,191 @@
+From 4f89a254b1f449cecc4620b5a69a81a19ee4016c Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 27 Sep 2022 16:42:20 +0800
+Subject: [PATCH 017/274] imx: fix compiling error
+
+Signed-off-by: Tang Yuantian <andy.tang@nxp.com>
+---
+ include/linux/firmware/imx/s4.h       | 20 +++++++
+ include/linux/firmware/imx/sci.h      | 28 +++++++++-
+ include/linux/firmware/imx/svc/seco.h | 77 +++++++++++++++++++++++++++
+ include/linux/remoteproc.h            |  1 +
+ 4 files changed, 125 insertions(+), 1 deletion(-)
+ create mode 100644 include/linux/firmware/imx/s4.h
+ create mode 100644 include/linux/firmware/imx/svc/seco.h
+
+diff --git a/include/linux/firmware/imx/s4.h b/include/linux/firmware/imx/s4.h
+new file mode 100644
+index 000000000..9e34923ae
+--- /dev/null
++++ b/include/linux/firmware/imx/s4.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2021 NXP
++ *
++ * Header file for the IPC implementation.
++ */
++
++#ifndef _S4_IPC_H
++#define _S4_IPC_H
++
++struct imx_s4_ipc;
++
++struct imx_s4_rpc_msg {
++	uint8_t ver;
++	uint8_t size;
++	uint8_t cmd;
++	uint8_t tag;
++} __packed;
++
++#endif /* _S4_IPC_H */
+diff --git a/include/linux/firmware/imx/sci.h b/include/linux/firmware/imx/sci.h
+index 5cc63fe7e..d45dbbe8f 100644
+--- a/include/linux/firmware/imx/sci.h
++++ b/include/linux/firmware/imx/sci.h
+@@ -1,7 +1,7 @@
+ /* SPDX-License-Identifier: GPL-2.0+ */
+ /*
+  * Copyright (C) 2016 Freescale Semiconductor, Inc.
+- * Copyright 2017~2018 NXP
++ * Copyright 2017~2018,2020 NXP
+  *
+  * Header file containing the public System Controller Interface (SCI)
+  * definitions.
+@@ -15,12 +15,38 @@
+ #include <linux/firmware/imx/svc/misc.h>
+ #include <linux/firmware/imx/svc/pm.h>
+ #include <linux/firmware/imx/svc/rm.h>
++#include <linux/firmware/imx/svc/seco.h>
++
++#define IMX_SC_IRQ_NUM_GROUP            9
++
++#define IMX_SC_IRQ_GROUP_TEMP           0   /* Temp interrupts */
++#define IMX_SC_IRQ_GROUP_WDOG           1   /* Watchdog interrupts */
++#define IMX_SC_IRQ_GROUP_RTC            2   /* RTC interrupts */
++#define IMX_SC_IRQ_GROUP_WAKE           3   /* Wakeup interrupts */
++#define IMX_SC_IRQ_GROUP_SYSCTR         4   /* System counter interrupts */
++#define IMX_SC_IRQ_GROUP_REBOOTED       5   /* Partition reboot complete */
++#define IMX_SC_IRQ_GROUP_REBOOT         6   /* Partition reboot starting */
++#define IMX_SC_IRQ_GROUP_OFFED          7   /* Partition off complete */
++#define IMX_SC_IRQ_GROUP_OFF            8   /* Partition off starting */
++
++#define IMX_SC_IRQ_RTC               BIT(0)    /* RTC interrupt */
++#define IMX_SC_IRQ_WDOG              BIT(0)    /* Watch Dog interrupt */
++#define IMX_SC_IRQ_SYSCTR            BIT(0)    /* System Counter interrupt */
++#define IMX_SC_IRQ_BUTTON            BIT(0)    /* Button interrupt */
++#define IMX_SC_IRQ_PAD               BIT(1)    /* Pad wakeup */
++#define IMX_SC_IRQ_USR1              BIT(2)    /* User defined 1 */
++#define IMX_SC_IRQ_USR2              BIT(3)    /* User defined 2 */
++#define IMX_SC_IRQ_BC_PAD            BIT(4)    /* Pad wakeup (broadcast to all partitions) */
++#define IMX_SC_IRQ_SW_WAKE           BIT(5)    /* Software requested wake */
++#define IMX_SC_IRQ_SECVIO            BIT(6)    /* Security violation */
++#define IMX_SC_IRQ_V2X_RESET         BIT(7)    /* V2X reset */
+ 
+ #if IS_ENABLED(CONFIG_IMX_SCU)
+ int imx_scu_enable_general_irq_channel(struct device *dev);
+ int imx_scu_irq_register_notifier(struct notifier_block *nb);
+ int imx_scu_irq_unregister_notifier(struct notifier_block *nb);
+ int imx_scu_irq_group_enable(u8 group, u32 mask, u8 enable);
++int imx_scu_irq_get_status(u8 group, u32 *irq_status);
+ int imx_scu_soc_init(struct device *dev);
+ #else
+ static inline int imx_scu_soc_init(struct device *dev)
+diff --git a/include/linux/firmware/imx/svc/seco.h b/include/linux/firmware/imx/svc/seco.h
+new file mode 100644
+index 000000000..d0dd803a1
+--- /dev/null
++++ b/include/linux/firmware/imx/svc/seco.h
+@@ -0,0 +1,77 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2020 NXP
++ *
++ * Header file containing the public API for the System Controller (SC)
++ * Security Controller (SECO) function.
++ *
++ * SECO_SVC (SVC) Security Controller Service
++ *
++ * Module for the Security Controller (SECO) service.
++ */
++
++#ifndef _SC_SECO_API_H
++#define _SC_SECO_API_H
++
++#include <linux/errno.h>
++#include <linux/firmware/imx/sci.h>
++
++/*
++ * This type is used to indicate RPC RM function calls.
++ */
++enum imx_sc_seco_func {
++	IMX_SC_SECO_FUNC_UNKNOWN = 0,
++	IMX_SC_SECO_FUNC_BUILD_INFO = 16,
++	IMX_SC_SECO_FUNC_SAB_MSG = 23,
++	IMX_SC_SECO_FUNC_SECVIO_ENABLE = 25,
++	IMX_SC_SECO_FUNC_SECVIO_CONFIG = 26,
++	IMX_SC_SECO_FUNC_SECVIO_DGO_CONFIG = 27,
++};
++
++#if IS_ENABLED(CONFIG_IMX_SCU)
++int imx_sc_seco_build_info(struct imx_sc_ipc *ipc, uint32_t *version,
++			   uint32_t *commit);
++int imx_sc_seco_sab_msg(struct imx_sc_ipc *ipc, u64 smsg_addr);
++int imx_sc_seco_secvio_enable(struct imx_sc_ipc *ipc);
++int imx_sc_seco_secvio_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++			      u32 *data0, u32 *data1, u32 *data2, u32 *data3,
++			      u32 *data4, u8 size);
++int imx_sc_seco_secvio_dgo_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++				  u32 *data);
++#else /* IS_ENABLED(CONFIG_IMX_SCU) */
++static inline
++int imx_sc_seco_build_info(struct imx_sc_ipc *ipc, uint32_t *version,
++			   uint32_t *commit)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_seco_sab_msg(struct imx_sc_ipc *ipc, u64 smsg_addr)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_seco_secvio_enable(struct imx_sc_ipc *ipc)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_seco_secvio_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++			      u32 *data0, u32 *data1, u32 *data2, u32 *data3,
++			      u32 *data4, u8 size)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_seco_secvio_dgo_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++				  u32 *data)
++{
++	return -EOPNOTSUPP;
++}
++#endif /* IS_ENABLED(CONFIG_IMX_SCU) */
++
++#endif /* _SC_SECO_API_H */
+diff --git a/include/linux/remoteproc.h b/include/linux/remoteproc.h
+index 83c09ac36..46efa0f2f 100644
+--- a/include/linux/remoteproc.h
++++ b/include/linux/remoteproc.h
+@@ -568,6 +568,7 @@ struct rproc {
+ 	u16 elf_machine;
+ 	struct cdev cdev;
+ 	bool cdev_put_on_release;
++	bool skip_fw_recovery;
+ };
+ 
+ /**
+-- 
+2.25.1
+

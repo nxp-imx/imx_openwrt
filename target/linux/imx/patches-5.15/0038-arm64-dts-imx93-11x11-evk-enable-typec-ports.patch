@@ -1,0 +1,131 @@
+From fbb916547d9c185074dd39f0d9ada29081f48f6b Mon Sep 17 00:00:00 2001
+From: Li Jun <jun.li@nxp.com>
+Date: Wed, 25 May 2022 15:46:12 +0800
+Subject: [PATCH 038/274] arm64: dts: imx93-11x11-evk: enable typec ports
+
+iMX93-11x11-evk use typec with power delivery on 2 usb ports.
+
+Signed-off-by: Li Jun <jun.li@nxp.com>
+---
+ .../boot/dts/freescale/imx93-11x11-evk.dts    | 91 +++++++++++++++++++
+ 1 file changed, 91 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index fcfbdb07f..dae30a768 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -5,6 +5,7 @@
+ 
+ /dts-v1/;
+ 
++#include <dt-bindings/usb/pd.h>
+ #include "imx93.dtsi"
+ 
+ / {
+@@ -86,6 +87,60 @@ lsm6dsm@6a {
+ 		compatible = "st,lsm6dso";
+ 		reg = <0x6a>;
+ 	};
++
++	ptn5110: tcpc@50 {
++		compatible = "nxp,ptn5110";
++		reg = <0x50>;
++		interrupt-parent = <&pcal6524>;
++		interrupts = <1 IRQ_TYPE_EDGE_FALLING>;
++		status = "okay";
++
++		port {
++			typec1_dr_sw: endpoint {
++				remote-endpoint = <&usb1_drd_sw>;
++			};
++		};
++
++		typec1_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			power-role = "dual";
++			data-role = "dual";
++			try-power-role = "sink";
++			source-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)
++				     PDO_VAR(5000, 20000, 3000)>;
++			op-sink-microwatt = <15000000>;
++			self-powered;
++		};
++	};
++
++	ptn5110_2: tcpc@51 {
++		compatible = "nxp,ptn5110";
++		reg = <0x51>;
++		interrupt-parent = <&pcal6524>;
++		interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
++		status = "okay";
++
++		port {
++			typec2_dr_sw: endpoint {
++				remote-endpoint = <&usb2_drd_sw>;
++			};
++		};
++
++		typec2_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			power-role = "dual";
++			data-role = "dual";
++			try-power-role = "sink";
++			source-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)
++				     PDO_VAR(5000, 20000, 3000)>;
++			op-sink-microwatt = <15000000>;
++			self-powered;
++		};
++	};
+ };
+ 
+ &lpi2c2 {
+@@ -125,6 +180,42 @@ &mu2 {
+ 	status = "okay";
+ };
+ 
++&usbotg1 {
++	dr_mode = "otg";
++	hnp-disable;
++	srp-disable;
++	adp-disable;
++	usb-role-switch;
++	disable-over-current;
++	samsung,picophy-pre-emp-curr-control = <3>;
++	samsung,picophy-dc-vol-level-adjust = <7>;
++	status = "okay";
++
++	port {
++		usb1_drd_sw: endpoint {
++			remote-endpoint = <&typec1_dr_sw>;
++		};
++	};
++};
++
++&usbotg2 {
++	dr_mode = "otg";
++	hnp-disable;
++	srp-disable;
++	adp-disable;
++	usb-role-switch;
++	disable-over-current;
++	samsung,picophy-pre-emp-curr-control = <3>;
++	samsung,picophy-dc-vol-level-adjust = <7>;
++	status = "okay";
++
++	port {
++		usb2_drd_sw: endpoint {
++			remote-endpoint = <&typec2_dr_sw>;
++		};
++	};
++};
++
+ &usdhc1 {
+ 	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+ 	pinctrl-0 = <&pinctrl_usdhc1>;
+-- 
+2.25.1
+

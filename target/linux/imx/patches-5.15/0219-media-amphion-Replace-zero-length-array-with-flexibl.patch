@@ -1,0 +1,49 @@
+From ebd19b075e5fc57cd2b7d5c789af3e59ff067799 Mon Sep 17 00:00:00 2001
+From: Kees Cook <keescook@chromium.org>
+Date: Fri, 27 May 2022 22:29:53 +0100
+Subject: [PATCH 219/274] media: amphion: Replace zero-length array with
+ flexible-array member
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+There is a regular need in the kernel to provide a way to declare
+having a dynamically sized set of trailing elements in a structure.
+Kernel code should always use “flexible array members”[1] for these
+cases. The older style of one-element or zero-length arrays should no
+longer be used[2][3].
+
+[1] https://en.wikipedia.org/wiki/Flexible_array_member
+[2] https://www.kernel.org/doc/html/latest/process/deprecated.html#zero-length-and-one-element-arrays
+[3] https://github.com/KSPP/linux/issues/78
+
+Fixes: 9f599f351e86 ("media: amphion: add vpu core driver")
+Cc: Ming Qian <ming.qian@nxp.com>
+Cc: Shijie Qin <shijie.qin@nxp.com>
+Cc: Zhou Peng <eagle.zhou@nxp.com>
+Signed-off-by: Kees Cook <keescook@chromium.org>
+Reviewed-by: Gustavo A. R. Silva <gustavoars@kernel.org>
+Reviewed-by: ming_qian <ming.qian@nxp.com>
+Reviewed-by: Tommaso Merciai <tommaso.merciai@amarulasolutions.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_dbg.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_dbg.c b/drivers/media/platform/amphion/vpu_dbg.c
+index da62bd718..f72c8a506 100644
+--- a/drivers/media/platform/amphion/vpu_dbg.c
++++ b/drivers/media/platform/amphion/vpu_dbg.c
+@@ -27,7 +27,7 @@ struct print_buf_desc {
+ 	u32 bytes;
+ 	u32 read;
+ 	u32 write;
+-	char buffer[0];
++	char buffer[];
+ };
+ 
+ static char *vb2_stat_name[] = {
+-- 
+2.25.1
+

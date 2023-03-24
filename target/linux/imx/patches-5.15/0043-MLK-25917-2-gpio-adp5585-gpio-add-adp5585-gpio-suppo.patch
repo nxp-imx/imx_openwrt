@@ -1,0 +1,245 @@
+From 7e09f2715146db54b67d43cdc7ca7d8ce2fd40be Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Thu, 3 Mar 2022 17:00:48 +0800
+Subject: [PATCH 043/274] MLK-25917-2 gpio: adp5585-gpio: add adp5585-gpio
+ support
+
+This is gpio function support for MFD adp5585.
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ drivers/gpio/Kconfig        |   7 ++
+ drivers/gpio/Makefile       |   1 +
+ drivers/gpio/gpio-adp5585.c | 189 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 197 insertions(+)
+ create mode 100644 drivers/gpio/gpio-adp5585.c
+
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index 947474f6a..d55d4a35a 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -1107,6 +1107,13 @@ config GPIO_ADP5520
+ 	  This option enables support for on-chip GPIO found
+ 	  on Analog Devices ADP5520 PMICs.
+ 
++config GPIO_ADP5585
++	tristate "GPIO Support for ADP5585"
++	depends on MFD_ADP5585
++	help
++	  This option enables support for on-chip GPIO found
++	  on Analog Devices ADP5585.
++
+ config GPIO_ALTERA_A10SR
+ 	tristate "Altera Arria10 System Resource GPIO"
+ 	depends on MFD_ALTERA_A10SR
+diff --git a/drivers/gpio/Makefile b/drivers/gpio/Makefile
+index fbcda637d..b35d8cd23 100644
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -25,6 +25,7 @@ obj-$(CONFIG_GPIO_74X164)		+= gpio-74x164.o
+ obj-$(CONFIG_GPIO_74XX_MMIO)		+= gpio-74xx-mmio.o
+ obj-$(CONFIG_GPIO_ADNP)			+= gpio-adnp.o
+ obj-$(CONFIG_GPIO_ADP5520)		+= gpio-adp5520.o
++obj-$(CONFIG_GPIO_ADP5585)		+= gpio-adp5585.o
+ obj-$(CONFIG_GPIO_ADP5588)		+= gpio-adp5588.o
+ obj-$(CONFIG_GPIO_AGGREGATOR)		+= gpio-aggregator.o
+ obj-$(CONFIG_GPIO_ALTERA_A10SR)		+= gpio-altera-a10sr.o
+diff --git a/drivers/gpio/gpio-adp5585.c b/drivers/gpio/gpio-adp5585.c
+new file mode 100644
+index 000000000..2c58ccab5
+--- /dev/null
++++ b/drivers/gpio/gpio-adp5585.c
+@@ -0,0 +1,189 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * GPIO driver for Analog Devices ADP5585 MFD
++ *
++ * Copyright 2022 NXP
++ */
++
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/mfd/adp5585.h>
++#include <linux/gpio/driver.h>
++
++#define ADP5585_GPIO_MAX 10
++
++struct adp5585_gpio_dev {
++	struct device *parent;
++	struct gpio_chip gpio_chip;
++	struct mutex lock;
++	u8 dat_out[2];
++	u8 dir[2];
++};
++
++static int adp5585_gpio_reg_read(struct adp5585_gpio_dev *adp5585_gpio, u8 reg, u8 *val)
++{
++	struct adp5585_dev *adp5585;
++	adp5585 = dev_get_drvdata(adp5585_gpio->parent);
++
++	return adp5585->read_reg(adp5585, reg, val);
++}
++
++static int adp5585_gpio_reg_write(struct adp5585_gpio_dev *adp5585_gpio, u8 reg, u8 val)
++{
++	struct adp5585_dev *adp5585;
++	adp5585 = dev_get_drvdata(adp5585_gpio->parent);
++
++	return adp5585->write_reg(adp5585, reg, val);
++}
++
++static int adp5585_gpio_get_value(struct gpio_chip *chip, unsigned int off)
++{
++	struct adp5585_gpio_dev *adp5585_gpio;
++	unsigned int bank, bit;
++	u8 val;
++
++	adp5585_gpio = gpiochip_get_data(chip);
++	bank = ADP5585_BANK(off);
++	bit = ADP5585_BIT(off);
++
++	mutex_lock(&adp5585_gpio->lock);
++	/* There are dedicated registers for GPIO IN/OUT. */
++	if (adp5585_gpio->dir[bank] & bit)
++		val = adp5585_gpio->dat_out[bank];
++	else
++		adp5585_gpio_reg_read(adp5585_gpio, ADP5585_GPI_STATUS_A + bank, &val);
++	mutex_unlock(&adp5585_gpio->lock);
++
++	return !!(val & bit);
++}
++
++static void adp5585_gpio_set_value(struct gpio_chip *chip, unsigned int off, int val)
++{
++	struct adp5585_gpio_dev *adp5585_gpio;
++	unsigned int bank, bit;
++
++	adp5585_gpio = gpiochip_get_data(chip);
++	bank = ADP5585_BANK(off);
++	bit = ADP5585_BIT(off);
++
++	mutex_lock(&adp5585_gpio->lock);
++	if (val)
++		adp5585_gpio->dat_out[bank] |= bit;
++	else
++		adp5585_gpio->dat_out[bank] &= ~bit;
++
++	adp5585_gpio_reg_write(adp5585_gpio, ADP5585_GPO_DATA_OUT_A + bank,
++			       adp5585_gpio->dat_out[bank]);
++	mutex_unlock(&adp5585_gpio->lock);
++}
++
++static int adp5585_gpio_direction_input(struct gpio_chip *chip, unsigned int off)
++{
++	struct adp5585_gpio_dev *adp5585_gpio;
++	unsigned int bank, bit;
++	int ret;
++
++	adp5585_gpio = gpiochip_get_data(chip);
++	bank = ADP5585_BANK(off);
++	bit = ADP5585_BIT(off);
++
++	mutex_lock(&adp5585_gpio->lock);
++	adp5585_gpio->dir[bank] &= ~bit;
++	ret = adp5585_gpio_reg_write(adp5585_gpio, ADP5585_GPIO_DIRECTION_A + bank,
++				     adp5585_gpio->dir[bank]);
++	mutex_unlock(&adp5585_gpio->lock);
++	return ret;
++}
++
++static int adp5585_gpio_direction_output(struct gpio_chip *chip, unsigned int off, int val)
++{
++	struct adp5585_gpio_dev *adp5585_gpio;
++	unsigned int bank, bit;
++	int ret;
++
++	adp5585_gpio = gpiochip_get_data(chip);
++	bank = ADP5585_BANK(off);
++	bit = ADP5585_BIT(off);
++
++	mutex_lock(&adp5585_gpio->lock);
++	adp5585_gpio->dir[bank] |= bit;
++
++	if (val)
++		adp5585_gpio->dat_out[bank] |= bit;
++	else
++		adp5585_gpio->dat_out[bank] &= ~bit;
++
++	ret = adp5585_gpio_reg_write(adp5585_gpio, ADP5585_GPO_DATA_OUT_A + bank,
++				     adp5585_gpio->dat_out[bank]);
++	ret |= adp5585_gpio_reg_write(adp5585_gpio, ADP5585_GPIO_DIRECTION_A + bank,
++				      adp5585_gpio->dir[bank]);
++	mutex_unlock(&adp5585_gpio->lock);
++
++	return ret;
++}
++
++static int adp5585_gpio_probe(struct platform_device *pdev)
++{
++	struct adp5585_gpio_dev *adp5585_gpio;
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct gpio_chip *gc;
++	int i;
++
++	adp5585_gpio = devm_kzalloc(&pdev->dev, sizeof(struct adp5585_gpio_dev), GFP_KERNEL);
++	if (adp5585_gpio == NULL)
++		return -ENOMEM;
++
++	adp5585_gpio->parent = pdev->dev.parent;
++
++	gc = &adp5585_gpio->gpio_chip;
++	gc->of_node = np;
++	gc->parent = dev;
++	gc->direction_input  = adp5585_gpio_direction_input;
++	gc->direction_output = adp5585_gpio_direction_output;
++	gc->get = adp5585_gpio_get_value;
++	gc->set = adp5585_gpio_set_value;
++	gc->can_sleep = true;
++
++	gc->base = -1;
++	gc->ngpio = ADP5585_GPIO_MAX;
++	gc->label = pdev->name;
++	gc->owner = THIS_MODULE;
++
++	mutex_init(&adp5585_gpio->lock);
++
++	for (i = 0; i < 2; i++) {
++		u8 *dat_out, *dir;
++		dat_out = adp5585_gpio->dat_out;
++		dir = adp5585_gpio->dir;
++		adp5585_gpio_reg_read(adp5585_gpio,
++				      ADP5585_GPO_DATA_OUT_A + i, dat_out + i);
++		adp5585_gpio_reg_read(adp5585_gpio,
++				      ADP5585_GPIO_DIRECTION_A + i, dir + i);
++	}
++
++	return devm_gpiochip_add_data(&pdev->dev, &adp5585_gpio->gpio_chip, adp5585_gpio);
++}
++
++static const struct of_device_id adp5585_of_match[] = {
++	{.compatible = "adp5585-gpio", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, adp5585_of_match);
++
++static struct platform_driver adp5585_gpio_driver = {
++	.driver	= {
++		.name	= "adp5585-gpio",
++		.of_match_table = adp5585_of_match,
++	},
++	.probe		= adp5585_gpio_probe,
++};
++
++module_platform_driver(adp5585_gpio_driver);
++
++MODULE_AUTHOR("Haibo Chen <haibo.chen@nxp.com>");
++MODULE_DESCRIPTION("GPIO ADP5585 Driver");
++MODULE_LICENSE("GPL");
+-- 
+2.25.1
+

@@ -1,0 +1,31 @@
+From 2ac1ec25d1ca9cf91e2ad55133797a4f41a696b1 Mon Sep 17 00:00:00 2001
+From: Xu Yang <xu.yang_2@nxp.com>
+Date: Wed, 15 Jun 2022 10:54:23 +0800
+Subject: [PATCH 150/274] MLK-25948-3 usb: typec: tcpci: using shared
+ interrrupt for imx93 platform
+
+The imx93-11x11 board has a rework by connecting typec1&2 and pcal9524
+interrupt line together. Here, using IRQF_SHARED to match this change.
+
+Signed-off-by: Xu Yang <xu.yang_2@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ drivers/usb/typec/tcpm/tcpci.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/usb/typec/tcpm/tcpci.c b/drivers/usb/typec/tcpm/tcpci.c
+index 215104e2e..89235abc9 100644
+--- a/drivers/usb/typec/tcpm/tcpci.c
++++ b/drivers/usb/typec/tcpm/tcpci.c
+@@ -904,7 +904,7 @@ static int tcpci_probe(struct i2c_client *client,
+ 	irq_set_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
+ 	err = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+ 					_tcpci_irq,
+-					IRQF_ONESHOT | IRQF_TRIGGER_LOW,
++					IRQF_SHARED | IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+ 					dev_name(&client->dev), chip);
+ 	if (err < 0) {
+ 		tcpci_unregister_port(chip->tcpci);
+-- 
+2.25.1
+

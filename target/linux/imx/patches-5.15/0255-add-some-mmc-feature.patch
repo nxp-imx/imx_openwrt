@@ -1,0 +1,67 @@
+From 9f861274d173f48bcb6b646359508e42cd57a76c Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Wed, 12 Oct 2022 10:45:05 +0800
+Subject: [PATCH 255/274] add some mmc feature
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/mmc/core/sdio.c  |  2 +-
+ drivers/mmc/host/sdhci.c | 11 +++--------
+ 2 files changed, 4 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/mmc/core/sdio.c b/drivers/mmc/core/sdio.c
+index 5447c4715..8bbf090da 100644
+--- a/drivers/mmc/core/sdio.c
++++ b/drivers/mmc/core/sdio.c
+@@ -1087,7 +1087,7 @@ static int mmc_sdio_resume(struct mmc_host *host)
+ 		if (!(host->caps2 & MMC_CAP2_SDIO_IRQ_NOTHREAD))
+ 			wake_up_process(host->sdio_irq_thread);
+ 		else if (host->caps & MMC_CAP_SDIO_IRQ)
+-			queue_delayed_work(system_wq, &host->sdio_irq_work, 0);
++			queue_delayed_work(system_wq, &host->sdio_irq_work, 1);
+ 	}
+ 
+ out:
+diff --git a/drivers/mmc/host/sdhci.c b/drivers/mmc/host/sdhci.c
+index 7728f26ad..fc637b971 100644
+--- a/drivers/mmc/host/sdhci.c
++++ b/drivers/mmc/host/sdhci.c
+@@ -3687,7 +3687,7 @@ int sdhci_suspend_host(struct sdhci_host *host)
+ 		host->ier = 0;
+ 		sdhci_writel(host, 0, SDHCI_INT_ENABLE);
+ 		sdhci_writel(host, 0, SDHCI_SIGNAL_ENABLE);
+-		free_irq(host->irq, host);
++		disable_irq(host->irq);
+ 	}
+ 
+ 	return 0;
+@@ -3698,7 +3698,6 @@ EXPORT_SYMBOL_GPL(sdhci_suspend_host);
+ int sdhci_resume_host(struct sdhci_host *host)
+ {
+ 	struct mmc_host *mmc = host->mmc;
+-	int ret = 0;
+ 
+ 	if (host->flags & (SDHCI_USE_SDMA | SDHCI_USE_ADMA)) {
+ 		if (host->ops->enable_dma)
+@@ -3719,16 +3718,12 @@ int sdhci_resume_host(struct sdhci_host *host)
+ 	if (host->irq_wake_enabled) {
+ 		sdhci_disable_irq_wakeups(host);
+ 	} else {
+-		ret = request_threaded_irq(host->irq, sdhci_irq,
+-					   sdhci_thread_irq, IRQF_SHARED,
+-					   mmc_hostname(mmc), host);
+-		if (ret)
+-			return ret;
++		enable_irq(host->irq);
+ 	}
+ 
+ 	sdhci_enable_card_detection(host);
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ EXPORT_SYMBOL_GPL(sdhci_resume_host);
+-- 
+2.25.1
+

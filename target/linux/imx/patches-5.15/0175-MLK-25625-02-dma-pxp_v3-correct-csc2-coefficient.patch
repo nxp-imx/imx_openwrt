@@ -1,0 +1,45 @@
+From 3c04fdfc56e9630a679ed8788fccd59759ab0854 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Wed, 2 Mar 2022 13:58:31 +0800
+Subject: [PATCH 175/274] MLK-25625-02: dma: pxp_v3: correct csc2 coefficient
+
+Correct csc2 coefficient due to PXP issue(TKT272216). It apply to PXP
+version after than iMX7D
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Tested-by: Jared Hu <jared.hu@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ drivers/dma/pxp/pxp_dma_v3.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/dma/pxp/pxp_dma_v3.c b/drivers/dma/pxp/pxp_dma_v3.c
+index 77c77e264..c331fb92f 100644
+--- a/drivers/dma/pxp/pxp_dma_v3.c
++++ b/drivers/dma/pxp/pxp_dma_v3.c
+@@ -2763,14 +2763,14 @@ static int pxp_rotation0_config(struct pxp_pixmap *input)
+ static int pxp_csc2_config(struct pxp_pixmap *output)
+ {
+ 	if (is_yuv(output->format)) {
+-		/* RGB -> YUV */
+-		pxp_writel(0x4, HW_PXP_CSC2_CTRL);
+-		pxp_writel(0x0096004D, HW_PXP_CSC2_COEF0);
+-		pxp_writel(0x05DA001D, HW_PXP_CSC2_COEF1);
+-		pxp_writel(0x007005B6, HW_PXP_CSC2_COEF2);
+-		pxp_writel(0x057C009E, HW_PXP_CSC2_COEF3);
+-		pxp_writel(0x000005E6, HW_PXP_CSC2_COEF4);
+-		pxp_writel(0x00000000, HW_PXP_CSC2_COEF5);
++		/* RGB -> YCbCr */
++		pxp_writel(0x6, HW_PXP_CSC2_CTRL);
++		pxp_writel(0x00810042, HW_PXP_CSC2_COEF0);
++		pxp_writel(0x07DA0019, HW_PXP_CSC2_COEF1);
++		pxp_writel(0x007007B6, HW_PXP_CSC2_COEF2);
++		pxp_writel(0x07A20070, HW_PXP_CSC2_COEF3);
++		pxp_writel(0x001007EE, HW_PXP_CSC2_COEF4);
++		pxp_writel(0x00800080, HW_PXP_CSC2_COEF5);
+ 	}
+ 
+ 	pxp_writel(BF_PXP_CTRL_ENABLE_CSC2(1), HW_PXP_CTRL_SET);
+-- 
+2.25.1
+

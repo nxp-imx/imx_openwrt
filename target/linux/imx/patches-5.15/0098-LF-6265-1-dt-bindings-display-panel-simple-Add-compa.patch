@@ -1,0 +1,31 @@
+From c223bb8222f26ff342dca63cfbab2b1ba098e819 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Tue, 31 May 2022 14:45:30 +0800
+Subject: [PATCH 098/274] LF-6265-1 dt-bindings: display: panel-simple: Add
+ compatible for BOE EV121WXM-N10-1850 LVDS panel
+
+This patch adds compatible string for BOE EV121WXM-N10-1850 LVDS panel.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ .../devicetree/bindings/display/panel/panel-simple.yaml         | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/display/panel/panel-simple.yaml b/Documentation/devicetree/bindings/display/panel/panel-simple.yaml
+index 335776c45..a4388d5d9 100644
+--- a/Documentation/devicetree/bindings/display/panel/panel-simple.yaml
++++ b/Documentation/devicetree/bindings/display/panel/panel-simple.yaml
+@@ -75,6 +75,8 @@ properties:
+       - auo,t215hvn01
+         # Shanghai AVIC Optoelectronics 7" 1024x600 color TFT-LCD panel
+       - avic,tm070ddh03
++        # BOE EV121WXM-N10-1850 12.1" WXGA TFT LCD panel
++      - boe,ev121wxm-n10-1850
+         # BOE HV070WSA-100 7.01" WSVGA TFT LCD panel
+       - boe,hv070wsa-100
+         # BOE OPTOELECTRONICS TECHNOLOGY 10.1" WXGA TFT LCD panel
+-- 
+2.25.1
+

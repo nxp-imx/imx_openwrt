@@ -1,0 +1,213 @@
+From a97ac4d88904b0e5dc394aee218ae3df16b25362 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Tue, 24 May 2022 10:49:37 +0800
+Subject: [PATCH 034/274] MLK-25916-3 arm64: dts: imx93: add lpi2c support
+
+Add LPI2C support and enable lpi2c1/2.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ .../boot/dts/freescale/imx93-11x11-evk.dts    | 58 ++++++++++++
+ arch/arm64/boot/dts/freescale/imx93.dtsi      | 88 +++++++++++++++++++
+ 2 files changed, 146 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index ecfb020bd..fcfbdb07f 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -73,6 +73,44 @@ ethphy2: ethernet-phy@2 {
+ 	};
+ };
+ 
++&lpi2c1 {
++	#address-cells = <1>;
++	#size-cells = <0>;
++	clock-frequency = <400000>;
++	pinctrl-names = "default", "sleep";
++	pinctrl-0 = <&pinctrl_lpi2c1>;
++	pinctrl-1 = <&pinctrl_lpi2c1>;
++	status = "okay";
++
++	lsm6dsm@6a {
++		compatible = "st,lsm6dso";
++		reg = <0x6a>;
++	};
++};
++
++&lpi2c2 {
++	#address-cells = <1>;
++	#size-cells = <0>;
++	clock-frequency = <400000>;
++	pinctrl-names = "default", "sleep";
++	pinctrl-0 = <&pinctrl_lpi2c2>;
++	pinctrl-1 = <&pinctrl_lpi2c2>;
++	status = "okay";
++
++	pcal6524: gpio@22 {
++		compatible = "nxp,pcal6524";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_pcal6524>;
++		reg = <0x22>;
++		gpio-controller;
++		#gpio-cells = <2>;
++		interrupt-controller;
++		#interrupt-cells = <2>;
++		interrupt-parent = <&gpio3>;
++		interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
++	};
++};
++
+ &lpuart1 { /* console */
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_uart1>;
+@@ -149,6 +187,26 @@ MX93_PAD_ENET2_TX_CTL__ENET1_RGMII_TX_CTL	0x57e
+ 		>;
+ 	};
+ 
++	pinctrl_lpi2c1: lpi2c1grp {
++		fsl,pins = <
++			MX93_PAD_I2C1_SCL__LPI2C1_SCL			0x40000b9e
++			MX93_PAD_I2C1_SDA__LPI2C1_SDA			0x40000b9e
++		>;
++	};
++
++	pinctrl_lpi2c2: lpi2c2grp {
++		fsl,pins = <
++			MX93_PAD_I2C2_SCL__LPI2C2_SCL			0x40000b9e
++			MX93_PAD_I2C2_SDA__LPI2C2_SDA			0x40000b9e
++		>;
++	};
++
++	pinctrl_pcal6524: pcal6524grp {
++		fsl,pins = <
++			MX93_PAD_CCM_CLKO2__GPIO3_IO27			0x31e
++		>;
++	};
++
+ 	pinctrl_uart1: uart1grp {
+ 		fsl,pins = <
+ 			MX93_PAD_UART1_RXD__LPUART1_RX			0x31e
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 1b65b3b89..888279070 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -19,6 +19,14 @@ / {
+ 	aliases {
+ 		ethernet0 = &fec;
+ 		ethernet1 = &eqos;
++		i2c0 = &lpi2c1;
++		i2c1 = &lpi2c2;
++		i2c2 = &lpi2c3;
++		i2c3 = &lpi2c4;
++		i2c4 = &lpi2c5;
++		i2c5 = &lpi2c6;
++		i2c6 = &lpi2c7;
++		i2c7 = &lpi2c8;
+ 		mmc0 = &usdhc1;
+ 		mmc1 = &usdhc2;
+ 		mmc2 = &usdhc3;
+@@ -132,6 +140,26 @@ system_counter: timer@44290000 {
+ 				no-divider;
+ 			};
+ 
++			lpi2c1: i2c@44340000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x44340000 0x10000>;
++				interrupts = <GIC_SPI 13 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C1_GATE>,
++					 <&clk IMX93_CLK_BUS_AON>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
++			lpi2c2: i2c@44350000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x44350000 0x10000>;
++				interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C2_GATE>,
++					 <&clk IMX93_CLK_BUS_AON>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
+ 			lpuart1: serial@44380000 {
+ 				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x44380000 0x1000>;
+@@ -225,6 +253,26 @@ mu2: mailbox@42440000 {
+ 				status = "disabled";
+ 			};
+ 
++			lpi2c3: i2c@42530000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x42530000 0x10000>;
++				interrupts = <GIC_SPI 62 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C3_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
++			lpi2c4: i2c@42540000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x42540000 0x10000>;
++				interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C4_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
+ 			lpuart3: serial@42570000 {
+ 				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x42570000 0x1000>;
+@@ -278,6 +326,46 @@ lpuart8: serial@426a0000 {
+ 				clock-names = "ipg";
+ 				status = "disabled";
+ 			};
++
++			lpi2c5: i2c@426b0000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x426b0000 0x10000>;
++				interrupts = <GIC_SPI 195 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C5_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
++			lpi2c6: i2c@426c0000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x426c0000 0x10000>;
++				interrupts = <GIC_SPI 196 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C6_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
++			lpi2c7: i2c@426d0000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x426d0000 0x10000>;
++				interrupts = <GIC_SPI 197 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C7_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
++
++			lpi2c8: i2c@426e0000 {
++				compatible = "fsl,imx93-lpi2c", "fsl,imx7ulp-lpi2c";
++				reg = <0x426e0000 0x10000>;
++				interrupts = <GIC_SPI 198 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_LPI2C8_GATE>,
++					 <&clk IMX93_CLK_BUS_WAKEUP>;
++				clock-names = "per", "ipg";
++				status = "disabled";
++			};
+ 		};
+ 
+ 		aips3: bus@42800000 {
+-- 
+2.25.1
+

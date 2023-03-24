@@ -1,0 +1,27 @@
+From 65830852a1aa3b3ba495bbca64c40478767910f2 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Wed, 13 Jul 2022 17:39:07 +0800
+Subject: [PATCH 198/274] arm64: defconfig: amphion: enable vpu driver
+
+Enable the amphion vpu driver for i.MX8QXP and i.MX8QM
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index be98532e9..783cd9962 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -553,6 +553,7 @@ CONFIG_DWC_MIPI_CSI2_HOST=y
+ CONFIG_MXC_CAMERA_OV5640_MIPI_V2=y
+ CONFIG_V4L_MEM2MEM_DRIVERS=y
+ CONFIG_VIDEO_IMX8_JPEG=m
++CONFIG_VIDEO_AMPHION_VPU=y
+ CONFIG_SDR_PLATFORM_DRIVERS=y
+ CONFIG_VIDEO_IMX219=m
+ CONFIG_VIDEO_OV5640=y
+-- 
+2.25.1
+

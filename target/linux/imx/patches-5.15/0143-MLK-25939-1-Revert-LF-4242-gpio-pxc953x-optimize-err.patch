@@ -1,0 +1,189 @@
+From 67146b81582db018242968a67b6d59d204c7e322 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 28 Sep 2022 14:44:32 +0800
+Subject: [PATCH 143/274] MLK-25939-1 Revert "LF-4242 gpio: pxc953x: optimize
+ error path"
+
+Need to revert commit 1681044121fa ("gpio: pca953x: no need to do
+regcache sync without vcc regulator"). So current patch no need any
+more.
+
+This reverts commit 7b513df1623f8add24f681a0d11600ae9a619ed2.
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ drivers/gpio/gpio-pca953x.c | 70 +++++++++++++++++++++++--------------
+ 1 file changed, 43 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpio/gpio-pca953x.c b/drivers/gpio/gpio-pca953x.c
+index 33683295a..238dc2e69 100644
+--- a/drivers/gpio/gpio-pca953x.c
++++ b/drivers/gpio/gpio-pca953x.c
+@@ -20,6 +20,7 @@
+ #include <linux/platform_data/pca953x.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
++#include <linux/reset.h>
+ #include <linux/slab.h>
+ 
+ #include <asm/unaligned.h>
+@@ -762,11 +763,11 @@ static bool pca953x_irq_pending(struct pca953x_chip *chip, unsigned long *pendin
+ 	bitmap_xor(cur_stat, new_stat, old_stat, gc->ngpio);
+ 	bitmap_and(trigger, cur_stat, chip->irq_mask, gc->ngpio);
+ 
+-	bitmap_copy(chip->irq_stat, new_stat, gc->ngpio);
+-
+ 	if (bitmap_empty(trigger, gc->ngpio))
+ 		return false;
+ 
++	bitmap_copy(chip->irq_stat, new_stat, gc->ngpio);
++
+ 	bitmap_and(cur_stat, chip->irq_trig_fall, old_stat, gc->ngpio);
+ 	bitmap_and(old_stat, chip->irq_trig_raise, new_stat, gc->ngpio);
+ 	bitmap_or(new_stat, old_stat, cur_stat, gc->ngpio);
+@@ -982,14 +983,20 @@ static int pca953x_probe(struct i2c_client *client,
+ 
+ 	chip->client = client;
+ 
+-	reg = devm_regulator_get(&client->dev, "vcc");
+-	if (IS_ERR(reg))
+-		return dev_err_probe(&client->dev, PTR_ERR(reg), "reg get err\n");
++	reg = devm_regulator_get_optional(&client->dev, "vcc");
++	if (IS_ERR(reg)) {
++		ret = dev_err_probe(&client->dev, PTR_ERR(reg), "reg get err\n");
++		if (ret == -EPROBE_DEFER)
++			return ret;
++		reg = NULL;
++	}
+ 
+-	ret = regulator_enable(reg);
+-	if (ret) {
+-		dev_err(&client->dev, "reg en err: %d\n", ret);
+-		return ret;
++	if (reg) {
++		ret = regulator_enable(reg);
++		if (ret) {
++			dev_err(&client->dev, "reg en err: %d\n", ret);
++			return ret;
++		}
+ 	}
+ 	chip->regulator = reg;
+ 
+@@ -1047,6 +1054,10 @@ static int pca953x_probe(struct i2c_client *client,
+ 	lockdep_set_subclass(&chip->i2c_lock,
+ 			     i2c_adapter_depth(client->adapter));
+ 
++	ret = device_reset(&client->dev);
++	if (ret == -EPROBE_DEFER)
++		return -EPROBE_DEFER;
++
+ 	/* initialize cached registers from their original values.
+ 	 * we can't share this chip with another i2c master.
+ 	 */
+@@ -1079,7 +1090,8 @@ static int pca953x_probe(struct i2c_client *client,
+ 	return 0;
+ 
+ err_exit:
+-	regulator_disable(chip->regulator);
++	if (chip->regulator)
++		regulator_disable(chip->regulator);
+ 	return ret;
+ }
+ 
+@@ -1098,7 +1110,8 @@ static int pca953x_remove(struct i2c_client *client)
+ 		ret = 0;
+ 	}
+ 
+-	regulator_disable(chip->regulator);
++	if (chip->regulator)
++		regulator_disable(chip->regulator);
+ 
+ 	return ret;
+ }
+@@ -1108,21 +1121,20 @@ static int pca953x_regcache_sync(struct device *dev)
+ {
+ 	struct pca953x_chip *chip = dev_get_drvdata(dev);
+ 	int ret;
+-	u8 regaddr;
+ 
+ 	/*
+ 	 * The ordering between direction and output is important,
+ 	 * sync these registers first and only then sync the rest.
+ 	 */
+-	regaddr = pca953x_recalc_addr(chip, chip->regs->direction, 0);
+-	ret = regcache_sync_region(chip->regmap, regaddr, regaddr + NBANK(chip));
++	ret = regcache_sync_region(chip->regmap, chip->regs->direction,
++				   chip->regs->direction + NBANK(chip));
+ 	if (ret) {
+ 		dev_err(dev, "Failed to sync GPIO dir registers: %d\n", ret);
+ 		return ret;
+ 	}
+ 
+-	regaddr = pca953x_recalc_addr(chip, chip->regs->output, 0);
+-	ret = regcache_sync_region(chip->regmap, regaddr, regaddr + NBANK(chip));
++	ret = regcache_sync_region(chip->regmap, chip->regs->output,
++				   chip->regs->output + NBANK(chip));
+ 	if (ret) {
+ 		dev_err(dev, "Failed to sync GPIO out registers: %d\n", ret);
+ 		return ret;
+@@ -1130,18 +1142,16 @@ static int pca953x_regcache_sync(struct device *dev)
+ 
+ #ifdef CONFIG_GPIO_PCA953X_IRQ
+ 	if (chip->driver_data & PCA_PCAL) {
+-		regaddr = pca953x_recalc_addr(chip, PCAL953X_IN_LATCH, 0);
+-		ret = regcache_sync_region(chip->regmap, regaddr,
+-					   regaddr + NBANK(chip));
++		ret = regcache_sync_region(chip->regmap, PCAL953X_IN_LATCH,
++					   PCAL953X_IN_LATCH + NBANK(chip));
+ 		if (ret) {
+ 			dev_err(dev, "Failed to sync INT latch registers: %d\n",
+ 				ret);
+ 			return ret;
+ 		}
+ 
+-		regaddr = pca953x_recalc_addr(chip, PCAL953X_INT_MASK, 0);
+-		ret = regcache_sync_region(chip->regmap, regaddr,
+-					   regaddr + NBANK(chip));
++		ret = regcache_sync_region(chip->regmap, PCAL953X_INT_MASK,
++					   PCAL953X_INT_MASK + NBANK(chip));
+ 		if (ret) {
+ 			dev_err(dev, "Failed to sync INT mask registers: %d\n",
+ 				ret);
+@@ -1162,7 +1172,8 @@ static int pca953x_suspend(struct device *dev)
+ 	if (atomic_read(&chip->wakeup_path))
+ 		device_set_wakeup_path(dev);
+ 	else
+-		regulator_disable(chip->regulator);
++		if (chip->regulator)
++			regulator_disable(chip->regulator);
+ 
+ 	return 0;
+ }
+@@ -1172,15 +1183,20 @@ static int pca953x_resume(struct device *dev)
+ 	struct pca953x_chip *chip = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	regcache_cache_only(chip->regmap, false);
++
+ 	if (!atomic_read(&chip->wakeup_path)) {
+-		ret = regulator_enable(chip->regulator);
+-		if (ret) {
+-			dev_err(dev, "Failed to enable regulator: %d\n", ret);
++		if (chip->regulator) {
++			ret = regulator_enable(chip->regulator);
++			if (ret) {
++				dev_err(dev, "Failed to enable regulator: %d\n", ret);
++				return 0;
++			}
++		} else {
+ 			return 0;
+ 		}
+ 	}
+ 
+-	regcache_cache_only(chip->regmap, false);
+ 	regcache_mark_dirty(chip->regmap);
+ 	ret = pca953x_regcache_sync(dev);
+ 	if (ret)
+-- 
+2.25.1
+

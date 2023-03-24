@@ -1,0 +1,31 @@
+From cff4477c2d7f551787debce334d5071719fdad68 Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Tue, 24 May 2022 20:25:29 +0800
+Subject: [PATCH 046/274] MLK-25917-5 arm64: dts: imx93: add gpio alises
+
+gpio driver need these gpio alises to config the gpio base.
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 5579523bb..f0cbee282 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -19,6 +19,10 @@ / {
+ 	aliases {
+ 		ethernet0 = &fec;
+ 		ethernet1 = &eqos;
++		gpio0 = &gpio1;
++		gpio1 = &gpio2;
++		gpio2 = &gpio3;
++		gpio3 = &gpio4;
+ 		i2c0 = &lpi2c1;
+ 		i2c1 = &lpi2c2;
+ 		i2c2 = &lpi2c3;
+-- 
+2.25.1
+

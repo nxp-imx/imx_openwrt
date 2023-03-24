@@ -1,0 +1,37 @@
+From 63b842f10084ce215b8dc512454066a969f7a906 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Fri, 29 Apr 2022 10:57:57 +0200
+Subject: [PATCH 214/274] media: amphion: wake up when error occurs
+
+when error occurs, driver set error flag,
+and driver need to wake up the poll wait
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_v4l2.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_v4l2.c b/drivers/media/platform/amphion/vpu_v4l2.c
+index 34ab94146..446f07d09 100644
+--- a/drivers/media/platform/amphion/vpu_v4l2.c
++++ b/drivers/media/platform/amphion/vpu_v4l2.c
+@@ -73,10 +73,10 @@ void vpu_v4l2_set_error(struct vpu_inst *inst)
+ 	if (inst->fh.m2m_ctx) {
+ 		src_q = v4l2_m2m_get_src_vq(inst->fh.m2m_ctx);
+ 		dst_q = v4l2_m2m_get_dst_vq(inst->fh.m2m_ctx);
+-		if (src_q)
+-			src_q->error = 1;
+-		if (dst_q)
+-			dst_q->error = 1;
++		src_q->error = 1;
++		dst_q->error = 1;
++		wake_up(&src_q->done_wq);
++		wake_up(&dst_q->done_wq);
+ 	}
+ 	vpu_inst_unlock(inst);
+ }
+-- 
+2.25.1
+

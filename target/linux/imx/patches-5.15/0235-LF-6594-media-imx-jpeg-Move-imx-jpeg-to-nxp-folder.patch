@@ -1,0 +1,144 @@
+From 2e485002f0ab839e85b8108f2cfaca77b8c19ed3 Mon Sep 17 00:00:00 2001
+From: Mirela Rabulea <mirela.rabulea@oss.nxp.com>
+Date: Tue, 12 Jul 2022 17:21:41 +0300
+Subject: [PATCH 235/274] LF-6594: media: imx-jpeg: Move imx-jpeg to nxp folder
+
+Align with linux-nxp and upstream repos.
+
+Use "git log --folow" to see full history, but be aware
+--follow works only for a single file.
+
+Signed-off-by: Mirela Rabulea <mirela.rabulea@oss.nxp.com>
+Reviewed-by: Ming Qian <ming.qian@nxp.com>
+---
+ MAINTAINERS                                             | 2 +-
+ drivers/media/platform/Kconfig                          | 4 ++--
+ drivers/media/platform/Makefile                         | 2 +-
+ drivers/media/platform/nxp/Kconfig                      | 9 +++++++++
+ drivers/media/platform/nxp/Makefile                     | 3 +++
+ drivers/media/platform/{ => nxp}/imx-jpeg/Kconfig       | 1 +
+ drivers/media/platform/{ => nxp}/imx-jpeg/Makefile      | 0
+ drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg-hw.c | 0
+ drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg-hw.h | 0
+ drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg.c    | 0
+ drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg.h    | 0
+ 11 files changed, 17 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/media/platform/nxp/Kconfig
+ create mode 100644 drivers/media/platform/nxp/Makefile
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/Kconfig (91%)
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/Makefile (100%)
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg-hw.c (100%)
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg-hw.h (100%)
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg.c (100%)
+ rename drivers/media/platform/{ => nxp}/imx-jpeg/mxc-jpeg.h (100%)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 59da61213..16ffdba8b 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -13554,7 +13554,7 @@ R:	NXP Linux Team <linux-imx@nxp.com>
+ L:	linux-media@vger.kernel.org
+ S:	Maintained
+ F:	Documentation/devicetree/bindings/media/imx8-jpeg.yaml
+-F:	drivers/media/platform/imx-jpeg
++F:	drivers/media/platform/nxp/imx-jpeg
+ 
+ NZXT-KRAKEN2 HARDWARE MONITORING DRIVER
+ M:	Jonas Malaco <jonas@protocubo.io>
+diff --git a/drivers/media/platform/Kconfig b/drivers/media/platform/Kconfig
+index d07e6513c..c68d03f98 100644
+--- a/drivers/media/platform/Kconfig
++++ b/drivers/media/platform/Kconfig
+@@ -10,6 +10,8 @@ menuconfig V4L_PLATFORM_DRIVERS
+ 
+ if V4L_PLATFORM_DRIVERS
+ 
++source "drivers/media/platform/nxp/Kconfig"
++
+ source "drivers/media/platform/marvell-ccic/Kconfig"
+ 
+ config VIDEO_VIA_CAMERA
+@@ -254,8 +256,6 @@ config VIDEO_IMX_PXP
+ 	  The i.MX Pixel Pipeline is a memory-to-memory engine for scaling,
+ 	  color space conversion, and rotation.
+ 
+-source "drivers/media/platform/imx-jpeg/Kconfig"
+-
+ config VIDEO_MEDIATEK_JPEG
+ 	tristate "Mediatek JPEG Codec driver"
+ 	depends on MTK_IOMMU_V1 || MTK_IOMMU || COMPILE_TEST
+diff --git a/drivers/media/platform/Makefile b/drivers/media/platform/Makefile
+index 116797484..44d569842 100644
+--- a/drivers/media/platform/Makefile
++++ b/drivers/media/platform/Makefile
+@@ -21,7 +21,7 @@ obj-$(CONFIG_VIDEO_MX2_EMMAPRP)		+= mx2_emmaprp.o
+ obj-$(CONFIG_VIDEO_CODA)		+= coda/
+ 
+ obj-$(CONFIG_VIDEO_IMX_PXP)		+= imx-pxp.o
+-obj-$(CONFIG_VIDEO_IMX8_JPEG)		+= imx-jpeg/
++obj-y					+= nxp/
+ 
+ obj-$(CONFIG_VIDEO_MEM2MEM_DEINTERLACE)	+= m2m-deinterlace.o
+ 
+diff --git a/drivers/media/platform/nxp/Kconfig b/drivers/media/platform/nxp/Kconfig
+new file mode 100644
+index 000000000..7746cb918
+--- /dev/null
++++ b/drivers/media/platform/nxp/Kconfig
+@@ -0,0 +1,9 @@
++# SPDX-License-Identifier: GPL-2.0-only
++
++# V4L drivers
++
++comment "NXP media platform drivers"
++
++# mem2mem drivers
++
++source "drivers/media/platform/nxp/imx-jpeg/Kconfig"
+diff --git a/drivers/media/platform/nxp/Makefile b/drivers/media/platform/nxp/Makefile
+new file mode 100644
+index 000000000..be9fa8328
+--- /dev/null
++++ b/drivers/media/platform/nxp/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0-only
++
++obj-y += imx-jpeg/
+diff --git a/drivers/media/platform/imx-jpeg/Kconfig b/drivers/media/platform/nxp/imx-jpeg/Kconfig
+similarity index 91%
+rename from drivers/media/platform/imx-jpeg/Kconfig
+rename to drivers/media/platform/nxp/imx-jpeg/Kconfig
+index 2fdd648cd..cbf6101a8 100644
+--- a/drivers/media/platform/imx-jpeg/Kconfig
++++ b/drivers/media/platform/nxp/imx-jpeg/Kconfig
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ config VIDEO_IMX8_JPEG
+ 	tristate "IMX8 JPEG Encoder/Decoder"
++	depends on V4L_MEM2MEM_DRIVERS
+ 	depends on ARCH_MXC || COMPILE_TEST
+ 	depends on VIDEO_DEV && VIDEO_V4L2
+ 	select VIDEOBUF2_DMA_CONTIG
+diff --git a/drivers/media/platform/imx-jpeg/Makefile b/drivers/media/platform/nxp/imx-jpeg/Makefile
+similarity index 100%
+rename from drivers/media/platform/imx-jpeg/Makefile
+rename to drivers/media/platform/nxp/imx-jpeg/Makefile
+diff --git a/drivers/media/platform/imx-jpeg/mxc-jpeg-hw.c b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg-hw.c
+similarity index 100%
+rename from drivers/media/platform/imx-jpeg/mxc-jpeg-hw.c
+rename to drivers/media/platform/nxp/imx-jpeg/mxc-jpeg-hw.c
+diff --git a/drivers/media/platform/imx-jpeg/mxc-jpeg-hw.h b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg-hw.h
+similarity index 100%
+rename from drivers/media/platform/imx-jpeg/mxc-jpeg-hw.h
+rename to drivers/media/platform/nxp/imx-jpeg/mxc-jpeg-hw.h
+diff --git a/drivers/media/platform/imx-jpeg/mxc-jpeg.c b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c
+similarity index 100%
+rename from drivers/media/platform/imx-jpeg/mxc-jpeg.c
+rename to drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c
+diff --git a/drivers/media/platform/imx-jpeg/mxc-jpeg.h b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.h
+similarity index 100%
+rename from drivers/media/platform/imx-jpeg/mxc-jpeg.h
+rename to drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.h
+-- 
+2.25.1
+

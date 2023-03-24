@@ -1,0 +1,33 @@
+From d39b619dc9362560c702b3c8a799d3c0cff1fb5e Mon Sep 17 00:00:00 2001
+From: Xu Yang <xu.yang_2@nxp.com>
+Date: Tue, 24 May 2022 14:25:01 +0800
+Subject: [PATCH 040/274] MLK-25920-2 arm64: dts: imx93: enable ddr perfmon
+
+Enable ddr perfmon.
+
+Signed-off-by: Xu Yang <xu.yang_2@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 982db3b47..5579523bb 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -580,6 +580,12 @@ media_blk_ctrl: blk-ctrl@4ac10000 {
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		ddr-pmu@4e300dc0 {
++			compatible = "fsl,imx93-ddr-pmu";
++			reg = <0x4e300dc0 0x200>;
++			interrupts = <GIC_SPI 90 IRQ_TYPE_LEVEL_HIGH>;
++		};
++
+ 		usbphynop1: usbphynop1 {
+ 			compatible = "usb-nop-xceiv";
+ 			clocks = <&clk IMX93_CLK_USB_PHY_BURUNIN>;
+-- 
+2.25.1
+

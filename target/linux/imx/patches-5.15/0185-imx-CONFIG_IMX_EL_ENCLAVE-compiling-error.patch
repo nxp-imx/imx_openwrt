@@ -1,0 +1,3400 @@
+From 6fb6a93e6af30a95f90eba0bc3343799ff7bab98 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 28 Sep 2022 15:42:56 +0800
+Subject: [PATCH 185/274] imx: CONFIG_IMX_EL_ENCLAVE compiling error
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ arch/arm64/include/asm/tlbflush.h          |   44 +-
+ arch/arm64/kernel/cpufeature.c             |   13 +
+ arch/arm64/kernel/traps.c                  |   28 +-
+ drivers/firmware/imx/Kconfig               |   22 +
+ drivers/firmware/imx/Makefile              |    5 +-
+ drivers/firmware/imx/ele_mu.c              |  918 +++++++++++++++
+ drivers/firmware/imx/ele_mu.h              |  139 +++
+ drivers/firmware/imx/imx-scu-soc.c         |   21 +-
+ drivers/firmware/imx/imx-scu.c             |   76 +-
+ drivers/firmware/imx/misc.c                |   25 +
+ drivers/firmware/imx/rm.c                  |  162 +++
+ drivers/firmware/imx/scu-pd.c              |    0
+ drivers/firmware/imx/seco.c                |  249 ++++
+ drivers/firmware/imx/seco_mu.c             | 1210 ++++++++++++++++++++
+ include/linux/firmware/imx/ele_mu_ioctl.h  |   51 +
+ include/linux/firmware/imx/ipc.h           |    4 +-
+ include/linux/firmware/imx/seco_mu_ioctl.h |   50 +
+ include/linux/firmware/imx/svc/misc.h      |    9 +
+ include/linux/firmware/imx/svc/rm.h        |   39 +
+ 19 files changed, 3019 insertions(+), 46 deletions(-)
+ create mode 100644 drivers/firmware/imx/ele_mu.c
+ create mode 100644 drivers/firmware/imx/ele_mu.h
+ mode change 100644 => 100755 drivers/firmware/imx/scu-pd.c
+ create mode 100644 drivers/firmware/imx/seco.c
+ create mode 100644 drivers/firmware/imx/seco_mu.c
+ create mode 100644 include/linux/firmware/imx/ele_mu_ioctl.h
+ create mode 100644 include/linux/firmware/imx/seco_mu_ioctl.h
+
+diff --git a/arch/arm64/include/asm/tlbflush.h b/arch/arm64/include/asm/tlbflush.h
+index 412a3b9a3..952e90443 100644
+--- a/arch/arm64/include/asm/tlbflush.h
++++ b/arch/arm64/include/asm/tlbflush.h
+@@ -16,6 +16,8 @@
+ #include <asm/cputype.h>
+ #include <asm/mmu.h>
+ 
++extern bool TKT340553_SW_WORKAROUND;
++
+ /*
+  * Raw TLBI operations.
+  *
+@@ -249,9 +251,16 @@ static inline void flush_tlb_mm(struct mm_struct *mm)
+ 
+ 	dsb(ishst);
+ 	asid = __TLBI_VADDR(0, ASID(mm));
+-	__tlbi(aside1is, asid);
+-	__tlbi_user(aside1is, asid);
+-	dsb(ish);
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++	} else {
++		__tlbi(aside1is, asid);
++		__tlbi_user(aside1is, asid);
++		dsb(ish);
++	}
+ }
+ 
+ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
+@@ -261,8 +270,15 @@ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
+ 
+ 	dsb(ishst);
+ 	addr = __TLBI_VADDR(uaddr, ASID(vma->vm_mm));
+-	__tlbi(vale1is, addr);
+-	__tlbi_user(vale1is, addr);
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++	} else {
++		__tlbi(vale1is, addr);
++		__tlbi_user(vale1is, addr);
++	}
+ }
+ 
+ static inline void flush_tlb_page(struct vm_area_struct *vma,
+@@ -307,6 +323,14 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
+ 	dsb(ishst);
+ 	asid = ASID(vma->vm_mm);
+ 
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB and exit */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++		return;
++	}
++
+ 	/*
+ 	 * When the CPU does not support TLB range operations, flush the TLB
+ 	 * entries one by one at the granularity of 'stride'. If the TLB
+@@ -357,6 +381,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
+ 		}
+ 		scale++;
+ 	}
++
+ 	dsb(ish);
+ }
+ 
+@@ -375,7 +400,8 @@ static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end
+ {
+ 	unsigned long addr;
+ 
+-	if ((end - start) > (MAX_TLBI_OPS * PAGE_SIZE)) {
++	if (((end - start) > (MAX_TLBI_OPS * PAGE_SIZE))
++	    || (TKT340553_SW_WORKAROUND)) {
+ 		flush_tlb_all();
+ 		return;
+ 	}
+@@ -399,7 +425,11 @@ static inline void __flush_tlb_kernel_pgtable(unsigned long kaddr)
+ 	unsigned long addr = __TLBI_VADDR(kaddr, 0);
+ 
+ 	dsb(ishst);
+-	__tlbi(vaae1is, addr);
++	if (TKT340553_SW_WORKAROUND)
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++	else
++		__tlbi(vaae1is, addr);
+ 	dsb(ish);
+ 	isb();
+ }
+diff --git a/arch/arm64/kernel/cpufeature.c b/arch/arm64/kernel/cpufeature.c
+index e71c9cfb4..1e6f01667 100644
+--- a/arch/arm64/kernel/cpufeature.c
++++ b/arch/arm64/kernel/cpufeature.c
+@@ -901,9 +901,22 @@ init_cpu_hwcaps_indirect_list_from_array(const struct arm64_cpu_capabilities *ca
+ 	}
+ }
+ 
++bool TKT340553_SW_WORKAROUND;
+ static void __init init_cpu_hwcaps_indirect_list(void)
+ {
+ 	init_cpu_hwcaps_indirect_list_from_array(arm64_features);
++#ifdef CONFIG_ARM64_WORKAROUND_CLEAN_CACHE
++#if	defined(CONFIG_ARM64_ERRATUM_826319) || \
++	defined(CONFIG_ARM64_ERRATUM_827319) || \
++	defined(CONFIG_ARM64_ERRATUM_824069)
++	if (TKT340553_SW_WORKAROUND) {
++		struct midr_range *midr_range_list =
++			(struct midr_range *)(arm64_errata[0].midr_range_list);
++
++		midr_range_list[0].rv_max = MIDR_CPU_VAR_REV(0, 4);
++	}
++#endif
++#endif
+ 	init_cpu_hwcaps_indirect_list_from_array(arm64_errata);
+ }
+ 
+diff --git a/arch/arm64/kernel/traps.c b/arch/arm64/kernel/traps.c
+index fe0cd0568..449ef72f4 100644
+--- a/arch/arm64/kernel/traps.c
++++ b/arch/arm64/kernel/traps.c
+@@ -538,6 +538,29 @@ NOKPROBE_SYMBOL(do_ptrauth_fault);
+ 		uaccess_ttbr0_disable();			\
+ 	}
+ 
++#define __user_cache_maint_ivau(insn, address, res)			\
++	do {								\
++		if (address >= user_addr_max()) {			\
++			res = -EFAULT;					\
++		} else {						\
++			uaccess_ttbr0_enable();				\
++			asm volatile (					\
++				"1:	" insn "\n"			\
++				"	mov	%w0, #0\n"		\
++				"2:\n"					\
++				"	.pushsection .fixup,\"ax\"\n"	\
++				"	.align	2\n"			\
++				"3:	mov	%w0, %w2\n"		\
++				"	b	2b\n"			\
++				"	.popsection\n"			\
++				_ASM_EXTABLE(1b, 3b)			\
++				: "=r" (res)				\
++				: "r" (address), "i" (-EFAULT));	\
++			uaccess_ttbr0_disable();			\
++		}							\
++	} while (0)
++
++extern bool TKT340553_SW_WORKAROUND;
+ static void user_cache_maint_handler(unsigned int esr, struct pt_regs *regs)
+ {
+ 	unsigned long tagged_address, address;
+@@ -565,7 +588,10 @@ static void user_cache_maint_handler(unsigned int esr, struct pt_regs *regs)
+ 		__user_cache_maint("dc civac", address, ret);
+ 		break;
+ 	case ESR_ELx_SYS64_ISS_CRM_IC_IVAU:	/* IC IVAU */
+-		__user_cache_maint("ic ivau", address, ret);
++		if (TKT340553_SW_WORKAROUND)
++			__user_cache_maint_ivau("ic ialluis", address, ret);
++		else
++			__user_cache_maint("ic ivau", address, ret);
+ 		break;
+ 	default:
+ 		force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
+diff --git a/drivers/firmware/imx/Kconfig b/drivers/firmware/imx/Kconfig
+index c027d99f2..43f043c51 100644
+--- a/drivers/firmware/imx/Kconfig
++++ b/drivers/firmware/imx/Kconfig
+@@ -28,3 +28,25 @@ config IMX_SCU_PD
+ 	depends on IMX_SCU
+ 	help
+ 	  The System Controller Firmware (SCFW) based power domain driver.
++
++config IMX_SECO_MU
++	tristate "i.MX Security Controller (SECO) support"
++	depends on IMX_MBOX
++	default y if IMX_SCU
++
++	help
++	  It is possible to use APIs exposed by the SECO like HSM and SHE using the
++	  SAB protocol via the shared Messaging Unit. This driver exposes these
++	  interfaces via a set of file descriptors allowing to configure shared
++	  memory, send and receive messages.
++
++config IMX_EL_ENCLAVE
++	tristate "i.MX Embedded EdgeLock Enclave support."
++	depends on IMX_MBOX
++	default y if ARM64
++
++	help
++	  It is possible to use APIs exposed by the iMX EdgeLock Enclave like base, HSM &
++	  SHE using the SAB protocol via the shared Messaging Unit. This driver exposes
++	  these interfaces via a set of file descriptors allowing to configure shared
++	  memory, send and receive messages.
+diff --git a/drivers/firmware/imx/Makefile b/drivers/firmware/imx/Makefile
+index b76acbade..f73720edd 100644
+--- a/drivers/firmware/imx/Makefile
++++ b/drivers/firmware/imx/Makefile
+@@ -1,4 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_IMX_DSP)		+= imx-dsp.o
+-obj-$(CONFIG_IMX_SCU)		+= imx-scu.o misc.o imx-scu-irq.o rm.o imx-scu-soc.o
++obj-$(CONFIG_IMX_SCU)		+= imx-scu.o misc.o imx-scu-irq.o rm.o imx-scu-soc.o seco.o
+ obj-$(CONFIG_IMX_SCU_PD)	+= scu-pd.o
++obj-${CONFIG_IMX_SECO_MU}	+= seco_mu.o
++el_enclave-objs			= ele_mu.o ele_base_msg.o
++obj-${CONFIG_IMX_EL_ENCLAVE}	+= el_enclave.o
+diff --git a/drivers/firmware/imx/ele_mu.c b/drivers/firmware/imx/ele_mu.c
+new file mode 100644
+index 000000000..ad05abed5
+--- /dev/null
++++ b/drivers/firmware/imx/ele_mu.c
+@@ -0,0 +1,918 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2021 NXP
++ * Author: Alice Guo <alice.guo@nxp.com>
++ * Author: Pankaj Gupta <pankaj.gupta@nxp.com>
++ */
++
++#include <linux/dma-mapping.h>
++#include <linux/completion.h>
++#include <linux/dev_printk.h>
++#include <linux/errno.h>
++#include <linux/export.h>
++#include <linux/firmware/imx/ele_base_msg.h>
++#include <linux/firmware/imx/ele_mu_ioctl.h>
++#include <linux/io.h>
++#include <linux/init.h>
++#include <linux/mailbox_client.h>
++#include <linux/miscdevice.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/sys_soc.h>
++
++#include "ele_mu.h"
++
++struct ele_mu_priv *ele_priv_export;
++
++int get_ele_mu_priv(struct ele_mu_priv **export)
++{
++	if (!ele_priv_export)
++		return -EPROBE_DEFER;
++
++	*export = ele_priv_export;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(get_ele_mu_priv);
++
++
++/*
++ * Callback called by mailbox FW when data are received
++ */
++static void ele_mu_rx_callback(struct mbox_client *c, void *msg)
++{
++	struct device *dev = c->dev;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	struct ele_mu_device_ctx *dev_ctx;
++	bool is_response = false;
++	int msg_size;
++	struct mu_hdr header;
++
++	dev_dbg(dev, "Message received on mailbox\n");
++
++	/* The function can be called with NULL msg */
++	if (!msg) {
++		dev_err(dev, "Message is invalid\n");
++		return;
++	}
++
++	if (IS_ERR(msg)) {
++		dev_err(dev, "Error during reception of message: %ld\n",
++				PTR_ERR(msg));
++		return;
++	}
++
++	header.tag = ((u8 *)msg)[3];
++	header.command = ((u8 *)msg)[2];
++	header.size = ((u8 *)msg)[1];
++	header.ver = ((u8 *)msg)[0];
++
++	dev_dbg(dev, "Selecting device\n");
++
++	/* Incoming command: wake up the receiver if any. */
++	if (header.tag == priv->cmd_tag) {
++		dev_dbg(dev, "Selecting cmd receiver\n");
++		dev_ctx = priv->cmd_receiver_dev;
++	} else if (header.tag == priv->rsp_tag) {
++		if (priv->waiting_rsp_dev) {
++			dev_dbg(dev, "Selecting rsp waiter\n");
++			dev_ctx = priv->waiting_rsp_dev;
++			is_response = true;
++		} else {
++			/* Reading the EdgeLock Enclave response
++			 * to the command sent by other
++			 * linux kernel services.
++			 */
++			spin_lock(&priv->lock);
++			priv->rx_msg = *(struct ele_api_msg *)msg;
++			complete(&priv->done);
++			spin_unlock(&priv->lock);
++			mutex_unlock(&priv->mu_cmd_lock);
++			return;
++		}
++	} else {
++		dev_err(dev, "Failed to select a device for message: %.8x\n",
++				*((u32 *) &header));
++		return;
++	}
++
++	if (!dev_ctx) {
++		dev_err(dev, "No device context selected for message: %.8x\n",
++				*((u32 *)&header));
++		return;
++	}
++	/* Init reception */
++	msg_size = header.size;
++	if (msg_size > MAX_RECV_SIZE) {
++		devctx_err(dev_ctx, "Message is too big (%d > %d)", msg_size,
++				MAX_RECV_SIZE);
++		return;
++	}
++
++	memcpy(dev_ctx->temp_resp, msg, msg_size * sizeof(u32));
++	dev_ctx->temp_resp_size = msg_size;
++
++	/* Allow user to read */
++	dev_ctx->pending_hdr = dev_ctx->temp_resp[0];
++	wake_up_interruptible(&dev_ctx->wq);
++
++	if (is_response) {
++		/* Allow user to send new command */
++		mutex_unlock(&priv->mu_cmd_lock);
++	}
++}
++
++struct device *imx_soc_device_register(void)
++{
++	struct soc_device_attribute *attr;
++	struct soc_device *dev;
++	u32 v[4];
++	int err;
++
++	err = read_common_fuse(OTP_UNIQ_ID, v);
++	if (err)
++		return NULL;
++
++	attr = kzalloc(sizeof(*attr), GFP_KERNEL);
++	if (!attr)
++		return NULL;
++
++	err = of_property_read_string(of_root, "model", &attr->machine);
++	if (err) {
++		kfree(attr);
++		return NULL;
++	}
++	attr->family = kasprintf(GFP_KERNEL, "Freescale i.MX");
++	attr->revision = kasprintf(GFP_KERNEL, "1.0");
++	attr->serial_number = kasprintf(GFP_KERNEL, "%016llX", (u64)v[3] << 32 | v[0]);
++	attr->soc_id = kasprintf(GFP_KERNEL, "i.MX8ULP");
++
++	dev = soc_device_register(attr);
++	if (IS_ERR(dev)) {
++		kfree(attr->soc_id);
++		kfree(attr->serial_number);
++		kfree(attr->revision);
++		kfree(attr->family);
++		kfree(attr->machine);
++		kfree(attr);
++		return ERR_CAST(dev);
++	}
++
++	return soc_device_to_device(dev);
++}
++
++/*
++ * File operations for user-space
++ */
++
++/* Write a message to the MU. */
++static ssize_t ele_mu_fops_write(struct file *fp, const char __user *buf,
++				    size_t size, loff_t *ppos)
++{
++	struct ele_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					   struct ele_mu_device_ctx, miscdev);
++	struct ele_mu_priv *ele_mu_priv = dev_ctx->priv;
++	u32 nb_words = 0;
++	struct mu_hdr header;
++	int err;
++
++	devctx_dbg(dev_ctx, "write from buf (%p)%ld, ppos=%lld\n", buf, size,
++		   ((ppos) ? *ppos : 0));
++
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	if (dev_ctx->status != MU_OPENED) {
++		err = -EINVAL;
++		goto exit;
++	}
++
++	if (size < 4) {//sizeof(struct she_mu_hdr)) {
++		devctx_err(dev_ctx, "User buffer too small(%ld < %x)\n", size, 0x4);
++		//devctx_err(dev_ctx, "User buffer too small(%ld < %lu)\n", size, ()0x4);
++			  // sizeof(struct she_mu_hdr));
++		err = -ENOSPC;
++		goto exit;
++	}
++
++	if (size > MAX_MESSAGE_SIZE_BYTES) {
++		devctx_err(dev_ctx, "User buffer too big(%ld > %lu)\n", size,
++			   MAX_MESSAGE_SIZE_BYTES);
++		err = -ENOSPC;
++		goto exit;
++	}
++
++	/* Copy data to buffer */
++	err = (int)copy_from_user(dev_ctx->temp_cmd, buf, size);
++	if (err) {
++		err = -EFAULT;
++		devctx_err(dev_ctx, "Fail copy message from user\n");
++		goto exit;
++	}
++
++	print_hex_dump_debug("from user ", DUMP_PREFIX_OFFSET, 4, 4,
++			     dev_ctx->temp_cmd, size, false);
++
++	header = *((struct mu_hdr *) (&dev_ctx->temp_cmd[0]));
++
++	/* Check the message is valid according to tags */
++	if (header.tag == ele_mu_priv->cmd_tag) {
++		/*
++		 * unlocked in ele_mu_receive_work_handler when the
++		 * response to this command is received.
++		 */
++		mutex_lock(&ele_mu_priv->mu_cmd_lock);
++		ele_mu_priv->waiting_rsp_dev = dev_ctx;
++	} else if (header.tag == ele_mu_priv->rsp_tag) {
++		/* Check the device context can send the command */
++		if (dev_ctx != ele_mu_priv->cmd_receiver_dev) {
++			devctx_err(dev_ctx,
++				   "This channel is not configured to send response to SECO\n");
++			err = -EPERM;
++			goto exit;
++		}
++	} else {
++		devctx_err(dev_ctx, "The message does not have a valid TAG\n");
++		err = -EINVAL;
++		goto exit;
++	}
++
++	/*
++	 * Check that the size passed as argument matches the size
++	 * carried in the message.
++	 */
++	nb_words = header.size;
++	if (nb_words * sizeof(u32) != size) {
++		devctx_err(dev_ctx, "User buffer too small\n");
++		goto exit;
++	}
++
++	mutex_lock(&ele_mu_priv->mu_lock);
++
++	/* Send message */
++	devctx_dbg(dev_ctx, "sending message\n");
++	err = mbox_send_message(ele_mu_priv->tx_chan, dev_ctx->temp_cmd);
++	if (err < 0) {
++		devctx_err(dev_ctx, "Failed to send message\n");
++		goto unlock;
++	}
++
++	err = nb_words * (u32)sizeof(u32);
++
++unlock:
++	mutex_unlock(&ele_mu_priv->mu_lock);
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/*
++ * Read a message from the MU.
++ * Blocking until a message is available.
++ */
++static ssize_t ele_mu_fops_read(struct file *fp, char __user *buf,
++				 size_t size, loff_t *ppos)
++{
++	struct ele_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					   struct ele_mu_device_ctx, miscdev);
++	u32 data_size = 0, size_to_copy = 0;
++	struct ele_obuf_desc *b_desc;
++	int err;
++
++	devctx_dbg(dev_ctx, "read to buf %p(%ld), ppos=%lld\n", buf, size,
++		   ((ppos) ? *ppos : 0));
++
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	if (dev_ctx->status != MU_OPENED) {
++		err = -EINVAL;
++		goto exit;
++	}
++
++	/* Wait until the complete message is received on the MU. */
++	err = wait_event_interruptible(dev_ctx->wq, dev_ctx->pending_hdr != 0);
++	if (err) {
++		devctx_err(dev_ctx, "Err[0x%x]:Interrupted by signal.\n", err);
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx, "%s %s\n", __func__,
++		   "message received, start transmit to user");
++
++	/* Check that the size passed as argument is larger than
++	 * the one carried in the message.
++	 */
++	data_size = dev_ctx->temp_resp_size * sizeof(u32);
++	size_to_copy = data_size;
++	if (size_to_copy > size) {
++		devctx_dbg(dev_ctx, "User buffer too small (%ld < %d)\n",
++			   size, size_to_copy);
++		size_to_copy = size;
++	}
++
++	/* We may need to copy the output data to user before
++	 * delivering the completion message.
++	 */
++	while (!list_empty(&dev_ctx->pending_out)) {
++		b_desc = list_first_entry_or_null(&dev_ctx->pending_out,
++						  struct ele_obuf_desc,
++						  link);
++		if (b_desc->out_usr_ptr && b_desc->out_ptr) {
++			devctx_dbg(dev_ctx, "Copy output data to user\n");
++			err = (int)copy_to_user(b_desc->out_usr_ptr,
++						b_desc->out_ptr,
++						b_desc->out_size);
++			if (err) {
++				devctx_err(dev_ctx,
++					   "Failed to copy output data to user\n");
++				err = -EFAULT;
++				goto exit;
++			}
++		}
++		__list_del_entry(&b_desc->link);
++		devm_kfree(dev_ctx->dev, b_desc);
++	}
++
++	/* Copy data from the buffer */
++	print_hex_dump_debug("to user ", DUMP_PREFIX_OFFSET, 4, 4,
++			     dev_ctx->temp_resp, size_to_copy, false);
++	err = (int)copy_to_user(buf, dev_ctx->temp_resp, size_to_copy);
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	err = size_to_copy;
++
++	/* free memory allocated on the shared buffers. */
++	dev_ctx->secure_mem.pos = 0;
++	dev_ctx->non_secure_mem.pos = 0;
++
++	dev_ctx->pending_hdr = 0;
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/* Give access to EdgeLock Enclave, to the memory we want to share */
++static int ele_mu_setup_ele_mem_access(struct ele_mu_device_ctx *dev_ctx,
++					     u64 addr, u32 len)
++{
++	/* Assuming EdgeLock Enclave has access to all the memory regions */
++	int ret = 0;
++
++	if (ret) {
++		devctx_err(dev_ctx, "Fail find memreg\n");
++		goto exit;
++	}
++
++	if (ret) {
++		devctx_err(dev_ctx, "Fail set permission for resource\n");
++		goto exit;
++	}
++
++exit:
++	return ret;
++}
++
++static int ele_mu_ioctl_get_mu_info(struct ele_mu_device_ctx *dev_ctx,
++				  unsigned long arg)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev_ctx->dev);
++	struct ele_mu_ioctl_get_mu_info info;
++	int err = -EINVAL;
++
++	info.ele_mu_id = (u8)priv->ele_mu_id;
++	info.interrupt_idx = 0;
++	info.tz = 0;
++	info.did = 0x7;
++
++	devctx_dbg(dev_ctx,
++		   "info [mu_idx: %d, irq_idx: %d, tz: 0x%x, did: 0x%x]\n",
++		   info.ele_mu_id, info.interrupt_idx, info.tz, info.did);
++
++	err = (int)copy_to_user((u8 *)arg, &info,
++		sizeof(info));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy mu info to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
++/*
++ * Copy a buffer of daa to/from the user and return the address to use in
++ * messages
++ */
++static int ele_mu_ioctl_setup_iobuf_handler(struct ele_mu_device_ctx *dev_ctx,
++					       unsigned long arg)
++{
++	struct ele_obuf_desc *out_buf_desc;
++	struct ele_mu_ioctl_setup_iobuf io = {0};
++	struct ele_shared_mem *shared_mem;
++	int err = -EINVAL;
++	u32 pos;
++
++	err = (int)copy_from_user(&io,
++		(u8 *)arg,
++		sizeof(io));
++	if (err) {
++		devctx_err(dev_ctx, "Failed copy iobuf config from user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx, "io [buf: %p(%d) flag: %x]\n",
++		   io.user_buf, io.length, io.flags);
++
++	if (io.length == 0 || !io.user_buf) {
++		/*
++		 * Accept NULL pointers since some buffers are optional
++		 * in SECO commands. In this case we should return 0 as
++		 * pointer to be embedded into the message.
++		 * Skip all data copy part of code below.
++		 */
++		io.ele_addr = 0;
++		goto copy;
++	}
++
++	/* Select the shared memory to be used for this buffer. */
++	if (io.flags & SECO_MU_IO_FLAGS_USE_SEC_MEM) {
++		/* App requires to use secure memory for this buffer.*/
++		devctx_err(dev_ctx, "Failed allocate SEC MEM memory\n");
++		err = -EFAULT;
++		goto exit;
++	} else {
++		/* No specific requirement for this buffer. */
++		shared_mem = &dev_ctx->non_secure_mem;
++	}
++
++	/* Check there is enough space in the shared memory. */
++	if (io.length >= shared_mem->size - shared_mem->pos) {
++		devctx_err(dev_ctx, "Not enough space in shared memory\n");
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	/* Allocate space in shared memory. 8 bytes aligned. */
++	pos = shared_mem->pos;
++	shared_mem->pos += round_up(io.length, 8u);
++	io.ele_addr = (u64)shared_mem->dma_addr + pos;
++
++	if ((io.flags & SECO_MU_IO_FLAGS_USE_SEC_MEM) &&
++	    !(io.flags & SECO_MU_IO_FLAGS_USE_SHORT_ADDR)) {
++		/*Add base address to get full address.*/
++		devctx_err(dev_ctx, "Failed allocate SEC MEM memory\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	if (io.flags & SECO_MU_IO_FLAGS_IS_INPUT) {
++		/*
++		 * buffer is input:
++		 * copy data from user space to this allocated buffer.
++		 */
++		err = (int)copy_from_user(shared_mem->ptr + pos, io.user_buf,
++					  io.length);
++		if (err) {
++			devctx_err(dev_ctx,
++				   "Failed copy data to shared memory\n");
++			err = -EFAULT;
++			goto exit;
++		}
++	} else {
++		/*
++		 * buffer is output:
++		 * add an entry in the "pending buffers" list so data
++		 * can be copied to user space when receiving SECO
++		 * response.
++		 */
++		out_buf_desc = devm_kmalloc(dev_ctx->dev, sizeof(*out_buf_desc),
++					    GFP_KERNEL);
++		if (!out_buf_desc) {
++			err = -ENOMEM;
++			devctx_err(dev_ctx,
++				   "Failed allocating mem for pending buffer\n"
++				   );
++			goto exit;
++		}
++
++		out_buf_desc->out_ptr = shared_mem->ptr + pos;
++		out_buf_desc->out_usr_ptr = io.user_buf;
++		out_buf_desc->out_size = io.length;
++		list_add_tail(&out_buf_desc->link, &dev_ctx->pending_out);
++	}
++
++copy:
++	/* Provide the EdgeLock Enclave address to user space only if success. */
++	err = (int)copy_to_user((u8 *)arg, &io,
++		sizeof(io));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy iobuff setup to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++exit:
++	return err;
++}
++
++
++
++/* Open a char device. */
++static int ele_mu_fops_open(struct inode *nd, struct file *fp)
++{
++	struct ele_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++							    struct ele_mu_device_ctx,
++							    miscdev);
++	int err;
++
++	/* Avoid race if opened at the same time */
++	if (down_trylock(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	/* Authorize only 1 instance. */
++	if (dev_ctx->status != MU_FREE) {
++		err = -EBUSY;
++		goto exit;
++	}
++
++	/*
++	 * Allocate some memory for data exchanges with S40x.
++	 * This will be used for data not requiring secure memory.
++	 */
++	dev_ctx->non_secure_mem.ptr = dmam_alloc_coherent(dev_ctx->dev,
++					MAX_DATA_SIZE_PER_USER,
++					&dev_ctx->non_secure_mem.dma_addr,
++					GFP_KERNEL);
++	if (!dev_ctx->non_secure_mem.ptr) {
++		err = -ENOMEM;
++		devctx_err(dev_ctx, "Failed to map shared memory with S40x\n");
++		goto exit;
++	}
++
++	err = ele_mu_setup_ele_mem_access(dev_ctx,
++						dev_ctx->non_secure_mem.dma_addr,
++						MAX_DATA_SIZE_PER_USER);
++	if (err) {
++		err = -EPERM;
++		devctx_err(dev_ctx,
++			   "Failed to share access to shared memory\n");
++		goto free_coherent;
++	}
++
++	dev_ctx->non_secure_mem.size = MAX_DATA_SIZE_PER_USER;
++	dev_ctx->non_secure_mem.pos = 0;
++	dev_ctx->status = MU_OPENED;
++
++	dev_ctx->pending_hdr = 0;
++
++	goto exit;
++
++free_coherent:
++	dmam_free_coherent(dev_ctx->priv->dev, MAX_DATA_SIZE_PER_USER,
++			   dev_ctx->non_secure_mem.ptr,
++			   dev_ctx->non_secure_mem.dma_addr);
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/* Close a char device. */
++static int ele_mu_fops_close(struct inode *nd, struct file *fp)
++{
++	struct ele_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct ele_mu_device_ctx, miscdev);
++	struct ele_mu_priv *priv = dev_ctx->priv;
++	struct ele_obuf_desc *out_buf_desc;
++
++	/* Avoid race if closed at the same time */
++	if (down_trylock(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	/* The device context has not been opened */
++	if (dev_ctx->status != MU_OPENED)
++		goto exit;
++
++	/* check if this device was registered as command receiver. */
++	if (priv->cmd_receiver_dev == dev_ctx)
++		priv->cmd_receiver_dev = NULL;
++
++	/* check if this device was registered as waiting response. */
++	if (priv->waiting_rsp_dev == dev_ctx) {
++		priv->waiting_rsp_dev = NULL;
++		mutex_unlock(&priv->mu_cmd_lock);
++	}
++
++	/* Unmap secure memory shared buffer. */
++	if (dev_ctx->secure_mem.ptr)
++		devm_iounmap(dev_ctx->dev, dev_ctx->secure_mem.ptr);
++
++	dev_ctx->secure_mem.ptr = NULL;
++	dev_ctx->secure_mem.dma_addr = 0;
++	dev_ctx->secure_mem.size = 0;
++	dev_ctx->secure_mem.pos = 0;
++
++	/* Free non-secure shared buffer. */
++	dmam_free_coherent(dev_ctx->priv->dev, MAX_DATA_SIZE_PER_USER,
++			   dev_ctx->non_secure_mem.ptr,
++			   dev_ctx->non_secure_mem.dma_addr);
++
++	dev_ctx->non_secure_mem.ptr = NULL;
++	dev_ctx->non_secure_mem.dma_addr = 0;
++	dev_ctx->non_secure_mem.size = 0;
++	dev_ctx->non_secure_mem.pos = 0;
++
++	while (!list_empty(&dev_ctx->pending_out)) {
++		out_buf_desc = list_first_entry_or_null(&dev_ctx->pending_out,
++						struct ele_obuf_desc,
++						link);
++		__list_del_entry(&out_buf_desc->link);
++		devm_kfree(dev_ctx->dev, out_buf_desc);
++	}
++
++	dev_ctx->status = MU_FREE;
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return 0;
++}
++
++/* IOCTL entry point of a char device */
++static long ele_mu_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
++{
++	struct ele_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++							    struct ele_mu_device_ctx,
++							    miscdev);
++	struct ele_mu_priv *ele_mu_priv = dev_ctx->priv;
++	int err = -EINVAL;
++
++	/* Prevent race during change of device context */
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	switch (cmd) {
++	case ELE_MU_IOCTL_ENABLE_CMD_RCV:
++		if (!ele_mu_priv->cmd_receiver_dev) {
++			ele_mu_priv->cmd_receiver_dev = dev_ctx;
++			err = 0;
++		};
++		break;
++	case ELE_MU_IOCTL_GET_MU_INFO:
++		err = ele_mu_ioctl_get_mu_info(dev_ctx, arg);
++		break;
++	case ELE_MU_IOCTL_SHARED_BUF_CFG:
++		devctx_err(dev_ctx, "ELE_MU_IOCTL_SHARED_BUF_CFG not supported [0x%x].\n", err);
++		break;
++	case ELE_MU_IOCTL_SETUP_IOBUF:
++		err = ele_mu_ioctl_setup_iobuf_handler(dev_ctx, arg);
++		break;
++	case ELE_MU_IOCTL_SIGNED_MESSAGE:
++		devctx_err(dev_ctx, "ELE_MU_IOCTL_SIGNED_MESSAGE not supported [0x%x].\n", err);
++		break;
++	default:
++		err = -EINVAL;
++		devctx_dbg(dev_ctx, "IOCTL %.8x not supported\n", cmd);
++	}
++
++	up(&dev_ctx->fops_lock);
++	return (long)err;
++}
++
++/* Char driver setup */
++static const struct file_operations ele_mu_fops = {
++	.open		= ele_mu_fops_open,
++	.owner		= THIS_MODULE,
++	.release	= ele_mu_fops_close,
++	.unlocked_ioctl = ele_mu_ioctl,
++	.read		= ele_mu_fops_read,
++	.write		= ele_mu_fops_write,
++};
++
++/* interface for managed res to free a mailbox channel */
++static void if_mbox_free_channel(void *mbox_chan)
++{
++	mbox_free_channel(mbox_chan);
++}
++
++/* interface for managed res to unregister a char device */
++static void if_misc_deregister(void *miscdevice)
++{
++	misc_deregister(miscdevice);
++}
++
++static int ele_mu_request_channel(struct device *dev,
++				 struct mbox_chan **chan,
++				 struct mbox_client *cl,
++				 const char *name)
++{
++	struct mbox_chan *t_chan;
++	int ret = 0;
++
++	t_chan = mbox_request_channel_byname(cl, name);
++	if (IS_ERR(t_chan)) {
++		ret = PTR_ERR(t_chan);
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev,
++				"Failed to request chan %s ret %d\n", name,
++				ret);
++		goto exit;
++	}
++
++	ret = devm_add_action(dev, if_mbox_free_channel, t_chan);
++	if (ret) {
++		dev_err(dev, "failed to add devm removal of mbox %s\n", name);
++		goto exit;
++	}
++
++	*chan = t_chan;
++
++exit:
++	return ret;
++}
++
++static int ele_mu_probe(struct platform_device *pdev)
++{
++	struct ele_mu_device_ctx *dev_ctx;
++	struct device *dev = &pdev->dev;
++	struct ele_mu_priv *priv;
++	struct device_node *np;
++	int max_nb_users = 0;
++	char *devname;
++	struct device *soc;
++	int ret;
++	int i;
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv) {
++		ret = -ENOMEM;
++		dev_err(dev, "Fail allocate mem for private data\n");
++		goto exit;
++	}
++	priv->dev = dev;
++	dev_set_drvdata(dev, priv);
++
++	/*
++	 * Get the address of MU to be used for communication with the SCU
++	 */
++	np = pdev->dev.of_node;
++	if (!np) {
++		dev_err(dev, "Cannot find MU User entry in device tree\n");
++		ret = -ENOTSUPP;
++		goto exit;
++	}
++
++	/* Initialize the mutex. */
++	mutex_init(&priv->mu_cmd_lock);
++	mutex_init(&priv->mu_lock);
++
++	/* TBD */
++	priv->cmd_receiver_dev = NULL;
++	priv->waiting_rsp_dev = NULL;
++
++	ret = of_property_read_u32(np, "fsl,ele_mu_id", &priv->ele_mu_id);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read mu_id", __func__);
++		priv->ele_mu_id = S4_DEFAULT_MUAP_INDEX;
++	}
++
++	ret = of_property_read_u32(np, "fsl,ele_mu_max_users", &max_nb_users);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read mu_max_user", __func__);
++		max_nb_users = S4_MUAP_DEFAULT_MAX_USERS;
++	}
++
++	ret = of_property_read_u8(np, "fsl,cmd_tag", &priv->cmd_tag);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read cmd_tag", __func__);
++		priv->cmd_tag = DEFAULT_MESSAGING_TAG_COMMAND;
++	}
++
++	ret = of_property_read_u8(np, "fsl,rsp_tag", &priv->rsp_tag);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read rsp_tag", __func__);
++		priv->rsp_tag = DEFAULT_MESSAGING_TAG_RESPONSE;
++	}
++
++	/* Mailbox client configuration */
++	priv->ele_mb_cl.dev		= dev;
++	priv->ele_mb_cl.tx_block	= false;
++	priv->ele_mb_cl.knows_txdone	= true;
++	priv->ele_mb_cl.rx_callback	= ele_mu_rx_callback;
++
++	ret = ele_mu_request_channel(dev, &priv->tx_chan, &priv->ele_mb_cl, "tx");
++	if (ret) {
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev, "Failed to request tx channel\n");
++
++		goto exit;
++	}
++
++	ret = ele_mu_request_channel(dev, &priv->rx_chan, &priv->ele_mb_cl, "rx");
++	if (ret) {
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev, "Failed to request rx channel\n");
++
++		goto exit;
++	}
++
++	/* Create users */
++	for (i = 0; i < max_nb_users; i++) {
++		dev_ctx = devm_kzalloc(dev, sizeof(*dev_ctx), GFP_KERNEL);
++		if (!dev_ctx) {
++			ret = -ENOMEM;
++			dev_err(dev,
++				"Fail to allocate memory for device context\n");
++			goto exit;
++		}
++
++		dev_ctx->dev = dev;
++		dev_ctx->status = MU_FREE;
++		dev_ctx->priv = priv;
++		/* Default value invalid for an header. */
++		init_waitqueue_head(&dev_ctx->wq);
++
++		INIT_LIST_HEAD(&dev_ctx->pending_out);
++		sema_init(&dev_ctx->fops_lock, 1);
++
++		devname = devm_kasprintf(dev, GFP_KERNEL, "ele_mu%d_ch%d",
++					 priv->ele_mu_id, i);
++		if (!devname) {
++			ret = -ENOMEM;
++			dev_err(dev,
++				"Fail to allocate memory for misc dev name\n");
++			goto exit;
++		}
++
++		dev_ctx->miscdev.name = devname;
++		dev_ctx->miscdev.minor = MISC_DYNAMIC_MINOR;
++		dev_ctx->miscdev.fops = &ele_mu_fops;
++		dev_ctx->miscdev.parent = dev;
++		ret = misc_register(&dev_ctx->miscdev);
++		if (ret) {
++			dev_err(dev, "failed to register misc device %d\n",
++				ret);
++			goto exit;
++		}
++
++		ret = devm_add_action(dev, if_misc_deregister,
++				      &dev_ctx->miscdev);
++
++	}
++
++	init_completion(&priv->done);
++	spin_lock_init(&priv->lock);
++
++	ele_priv_export = priv;
++
++	soc = imx_soc_device_register();
++	if (IS_ERR(soc)) {
++		pr_err("failed to register SoC device: %ld\n", PTR_ERR(soc));
++		return PTR_ERR(soc);
++	}
++
++	dev_set_drvdata(dev, priv);
++	return devm_of_platform_populate(dev);
++
++exit:
++	return ret;
++}
++
++static int ele_mu_remove(struct platform_device *pdev)
++{
++	struct ele_mu_priv *priv;
++
++	priv = dev_get_drvdata(&pdev->dev);
++	mbox_free_channel(priv->tx_chan);
++	mbox_free_channel(priv->rx_chan);
++
++	return 0;
++}
++
++static const struct of_device_id ele_mu_match[] = {
++	{ .compatible = "fsl,imx-ele", },
++	{},
++};
++
++static struct platform_driver ele_mu_driver = {
++	.driver = {
++		.name = "fsl-ele-mu",
++		.of_match_table = ele_mu_match,
++	},
++	.probe = ele_mu_probe,
++	.remove = ele_mu_remove,
++};
++module_platform_driver(ele_mu_driver);
++
++MODULE_AUTHOR("Pankaj Gupta <pankaj.gupta@nxp.com>");
++MODULE_DESCRIPTION("iMX Secure Enclave MU Driver.");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/firmware/imx/ele_mu.h b/drivers/firmware/imx/ele_mu.h
+new file mode 100644
+index 000000000..ef0133f30
+--- /dev/null
++++ b/drivers/firmware/imx/ele_mu.h
+@@ -0,0 +1,139 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2021 NXP
++ */
++
++#ifndef ELE_MU_H
++#define ELE_MU_H
++
++#include <linux/miscdevice.h>
++#include <linux/semaphore.h>
++
++/* macro to log operation of a misc device */
++#define miscdev_dbg(p_miscdev, fmt, va_args...)                                \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_dbg((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name,  \
++		##va_args);                                                    \
++	})
++
++#define miscdev_info(p_miscdev, fmt, va_args...)                               \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_info((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name, \
++		##va_args);                                                    \
++	})
++
++#define miscdev_err(p_miscdev, fmt, va_args...)                                \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_err((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name,  \
++		##va_args);                                                    \
++	})
++/* macro to log operation of a device context */
++#define devctx_dbg(p_devctx, fmt, va_args...) \
++	miscdev_dbg(&((p_devctx)->miscdev), fmt, ##va_args)
++#define devctx_info(p_devctx, fmt, va_args...) \
++	miscdev_info(&((p_devctx)->miscdev), fmt, ##va_args)
++#define devctx_err(p_devctx, fmt, va_args...) \
++	miscdev_err((&(p_devctx)->miscdev), fmt, ##va_args)
++
++#define MSG_TAG(x)			(((x) & 0xff000000) >> 24)
++#define MSG_COMMAND(x)			(((x) & 0x00ff0000) >> 16)
++#define MSG_SIZE(x)			(((x) & 0x0000ff00) >> 8)
++#define MSG_VER(x)			((x) & 0x000000ff)
++#define RES_STATUS(x)			((x) & 0x000000ff)
++#define MAX_DATA_SIZE_PER_USER		(65 * 1024)
++#define S4_DEFAULT_MUAP_INDEX		(2)
++#define S4_MUAP_DEFAULT_MAX_USERS	(4)
++
++#define DEFAULT_MESSAGING_TAG_COMMAND           (0x17u)
++#define DEFAULT_MESSAGING_TAG_RESPONSE          (0xe1u)
++
++#define SECO_MU_IO_FLAGS_IS_INPUT	(0x01u)
++#define SECO_MU_IO_FLAGS_USE_SEC_MEM	(0x02u)
++#define SECO_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
++
++struct ele_obuf_desc {
++	u8 *out_ptr;
++	u8 *out_usr_ptr;
++	u32 out_size;
++	struct list_head link;
++};
++
++/* Status of a char device */
++enum mu_device_status_t {
++	MU_FREE,
++	MU_OPENED
++};
++
++struct ele_shared_mem {
++	dma_addr_t dma_addr;
++	u32 size;
++	u32 pos;
++	u8 *ptr;
++};
++
++/* Private struct for each char device instance. */
++struct ele_mu_device_ctx {
++	struct device *dev;
++	struct ele_mu_priv *priv;
++	struct miscdevice miscdev;
++
++	enum mu_device_status_t status;
++	wait_queue_head_t wq;
++	struct semaphore fops_lock;
++
++	u32 pending_hdr;
++	struct list_head pending_out;
++
++	struct ele_shared_mem secure_mem;
++	struct ele_shared_mem non_secure_mem;
++
++	u32 temp_cmd[MAX_MESSAGE_SIZE];
++	u32 temp_resp[MAX_RECV_SIZE];
++	u32 temp_resp_size;
++	struct notifier_block ele_notify;
++};
++
++/* Header of the messages exchange with the EdgeLock Enclave */
++struct mu_hdr {
++	u8 ver;
++	u8 size;
++	u8 command;
++	u8 tag;
++}  __packed;
++
++struct ele_api_msg {
++	u32 header; /* u8 Tag; u8 Command; u8 Size; u8 Ver; */
++	u32 data[ELE_MSG_DATA_NUM];
++};
++
++struct ele_mu_priv {
++	struct ele_mu_device_ctx *cmd_receiver_dev;
++	struct ele_mu_device_ctx *waiting_rsp_dev;
++	/*
++	 * prevent parallel access to the MU registers
++	 * e.g. a user trying to send a command while the other one is
++	 * sending a response.
++	 */
++	struct mutex mu_lock;
++	/*
++	 * prevent a command to be sent on the MU while another one is still
++	 * processing. (response to a command is allowed)
++	 */
++	struct mutex mu_cmd_lock;
++	struct device *dev;
++	u32 ele_mu_id;
++	u8 cmd_tag;
++	u8 rsp_tag;
++
++	struct mbox_client ele_mb_cl;
++	struct mbox_chan *tx_chan, *rx_chan;
++	struct ele_api_msg tx_msg, rx_msg;
++	struct completion done;
++	spinlock_t lock;
++};
++
++int get_ele_mu_priv(struct ele_mu_priv **export);
++#endif
+diff --git a/drivers/firmware/imx/imx-scu-soc.c b/drivers/firmware/imx/imx-scu-soc.c
+index 2f32353de..c8d14315d 100644
+--- a/drivers/firmware/imx/imx-scu-soc.c
++++ b/drivers/firmware/imx/imx-scu-soc.c
+@@ -12,6 +12,8 @@
+ 
+ static struct imx_sc_ipc *imx_sc_soc_ipc_handle;
+ 
++extern bool TKT340553_SW_WORKAROUND;
++
+ struct imx_sc_msg_misc_get_soc_id {
+ 	struct imx_sc_rpc_msg hdr;
+ 	union {
+@@ -35,18 +37,15 @@ static int imx_scu_soc_uid(u64 *soc_uid)
+ {
+ 	struct imx_sc_msg_misc_get_soc_uid msg;
+ 	struct imx_sc_rpc_msg *hdr = &msg.hdr;
+-	int ret;
++
++	memset(&msg, 0, sizeof(msg));
+ 
+ 	hdr->ver = IMX_SC_RPC_VERSION;
+ 	hdr->svc = IMX_SC_RPC_SVC_MISC;
+ 	hdr->func = IMX_SC_MISC_FUNC_UNIQUE_ID;
+ 	hdr->size = 1;
+ 
+-	ret = imx_scu_call_rpc(imx_sc_soc_ipc_handle, &msg, true);
+-	if (ret) {
+-		pr_err("%s: get soc uid failed, ret %d\n", __func__, ret);
+-		return ret;
+-	}
++	imx_scu_call_rpc(imx_sc_soc_ipc_handle, &msg, true);
+ 
+ 	*soc_uid = msg.uid_high;
+ 	*soc_uid <<= 32;
+@@ -113,9 +112,13 @@ int imx_scu_soc_init(struct device *dev)
+ 
+ 	/* format soc_id value passed from SCU firmware */
+ 	val = id & 0x1f;
+-	soc_dev_attr->soc_id = devm_kasprintf(dev, GFP_KERNEL, "0x%x", val);
+-	if (!soc_dev_attr->soc_id)
+-		return -ENOMEM;
++	if (of_machine_is_compatible("fsl,imx8qm")) {
++		soc_dev_attr->soc_id = "i.MX8QM";
++		TKT340553_SW_WORKAROUND = true;
++	} else if (of_machine_is_compatible("fsl,imx8qxp"))
++		soc_dev_attr->soc_id = "i.MX8QXP";
++	else if (of_machine_is_compatible("fsl,imx8dxl"))
++		soc_dev_attr->soc_id = "i.MX8DXL";
+ 
+ 	/* format revision value passed from SCU firmware */
+ 	val = (id >> 5) & 0xf;
+diff --git a/drivers/firmware/imx/imx-scu.c b/drivers/firmware/imx/imx-scu.c
+index dca79cacc..fd6de5771 100644
+--- a/drivers/firmware/imx/imx-scu.c
++++ b/drivers/firmware/imx/imx-scu.c
+@@ -7,6 +7,7 @@
+  *
+  */
+ 
++#include <linux/arm-smccc.h>
+ #include <linux/err.h>
+ #include <linux/firmware/imx/ipc.h>
+ #include <linux/firmware/imx/sci.h>
+@@ -19,8 +20,11 @@
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ 
++#include <xen/xen.h>
++
++#define FSL_HVC_SC                      0xC6000000
+ #define SCU_MU_CHAN_NUM		8
+-#define MAX_RX_TIMEOUT		(msecs_to_jiffies(30))
++#define MAX_RX_TIMEOUT		(msecs_to_jiffies(3000))
+ 
+ struct imx_sc_chan {
+ 	struct imx_sc_ipc *sc_ipc;
+@@ -204,6 +208,7 @@ int imx_scu_call_rpc(struct imx_sc_ipc *sc_ipc, void *msg, bool have_resp)
+ {
+ 	uint8_t saved_svc, saved_func;
+ 	struct imx_sc_rpc_msg *hdr;
++	struct arm_smccc_res res;
+ 	int ret;
+ 
+ 	if (WARN_ON(!sc_ipc || !msg))
+@@ -218,33 +223,45 @@ int imx_scu_call_rpc(struct imx_sc_ipc *sc_ipc, void *msg, bool have_resp)
+ 		saved_func = ((struct imx_sc_rpc_msg *)msg)->func;
+ 	}
+ 	sc_ipc->count = 0;
+-	ret = imx_scu_ipc_write(sc_ipc, msg);
+-	if (ret < 0) {
+-		dev_err(sc_ipc->dev, "RPC send msg failed: %d\n", ret);
+-		goto out;
+-	}
+-
+-	if (have_resp) {
+-		if (!wait_for_completion_timeout(&sc_ipc->done,
+-						 MAX_RX_TIMEOUT)) {
+-			dev_err(sc_ipc->dev, "RPC send msg timeout\n");
+-			mutex_unlock(&sc_ipc->lock);
+-			return -ETIMEDOUT;
++	sc_ipc->rx_size = 0;
++	if (xen_initial_domain()) {
++		arm_smccc_hvc(FSL_HVC_SC, (uint64_t)msg, !have_resp, 0, 0, 0,
++			      0, 0, &res);
++		if (res.a0)
++			printk("Error FSL_HVC_SC %ld\n", res.a0);
++
++		ret = res.a0;
++
++	} else {
++		ret = imx_scu_ipc_write(sc_ipc, msg);
++		if (ret < 0) {
++			dev_err(sc_ipc->dev, "RPC send msg failed: %d\n", ret);
++			goto out;
+ 		}
+ 
+-		/* response status is stored in hdr->func field */
+-		hdr = msg;
+-		ret = hdr->func;
+-		/*
+-		 * Some special SCU firmware APIs do NOT have return value
+-		 * in hdr->func, but they do have response data, those special
+-		 * APIs are defined as void function in SCU firmware, so they
+-		 * should be treated as return success always.
+-		 */
+-		if ((saved_svc == IMX_SC_RPC_SVC_MISC) &&
+-			(saved_func == IMX_SC_MISC_FUNC_UNIQUE_ID ||
+-			 saved_func == IMX_SC_MISC_FUNC_GET_BUTTON_STATUS))
+-			ret = 0;
++		if (have_resp) {
++			if (!wait_for_completion_timeout(&sc_ipc->done,
++							 MAX_RX_TIMEOUT)) {
++				dev_err(sc_ipc->dev, "RPC send msg timeout\n");
++				mutex_unlock(&sc_ipc->lock);
++				return -ETIMEDOUT;
++			}
++
++			/* response status is stored in hdr->func field */
++			hdr = msg;
++			ret = hdr->func;
++
++			/*
++			 * Some special SCU firmware APIs do NOT have return value
++			 * in hdr->func, but they do have response data, those special
++			 * APIs are defined as void function in SCU firmware, so they
++			 * should be treated as return success always.
++			 */
++			if ((saved_svc == IMX_SC_RPC_SVC_MISC) &&
++				(saved_func == IMX_SC_MISC_FUNC_UNIQUE_ID ||
++				 saved_func == IMX_SC_MISC_FUNC_GET_BUTTON_STATUS))
++				ret = 0;
++		}
+ 	}
+ 
+ out:
+@@ -354,7 +371,12 @@ static struct platform_driver imx_scu_driver = {
+ 	},
+ 	.probe = imx_scu_probe,
+ };
+-builtin_platform_driver(imx_scu_driver);
++
++static int __init imx_scu_driver_init(void)
++{
++	return platform_driver_register(&imx_scu_driver);
++}
++subsys_initcall_sync(imx_scu_driver_init);
+ 
+ MODULE_AUTHOR("Dong Aisheng <aisheng.dong@nxp.com>");
+ MODULE_DESCRIPTION("IMX SCU firmware protocol driver");
+diff --git a/drivers/firmware/imx/misc.c b/drivers/firmware/imx/misc.c
+index d073cb3ce..01878451d 100644
+--- a/drivers/firmware/imx/misc.c
++++ b/drivers/firmware/imx/misc.c
+@@ -18,6 +18,13 @@ struct imx_sc_msg_req_misc_set_ctrl {
+ 	u16 resource;
+ } __packed __aligned(4);
+ 
++
++struct imx_sc_msg_req_misc_set_dma_group {
++	struct imx_sc_rpc_msg hdr;
++	u16 resource;
++	u8 val;
++} __packed __aligned(4);
++
+ struct imx_sc_msg_req_cpu_start {
+ 	struct imx_sc_rpc_msg hdr;
+ 	u32 address_hi;
+@@ -67,6 +74,24 @@ int imx_sc_misc_set_control(struct imx_sc_ipc *ipc, u32 resource,
+ }
+ EXPORT_SYMBOL(imx_sc_misc_set_control);
+ 
++int imx_sc_misc_set_dma_group(struct imx_sc_ipc *ipc, u32 resource,
++			    u32 val)
++{
++	struct imx_sc_msg_req_misc_set_dma_group msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = (uint8_t)IMX_SC_RPC_SVC_MISC;
++	hdr->func = (uint8_t)IMX_SC_MISC_FUNC_SET_DMA_GROUP;
++	hdr->size = 2;
++
++	msg.val = val;
++	msg.resource = resource;
++
++	return imx_scu_call_rpc(ipc, &msg, true);
++}
++EXPORT_SYMBOL(imx_sc_misc_set_dma_group);
++
+ /*
+  * This function gets a miscellaneous control value.
+  *
+diff --git a/drivers/firmware/imx/rm.c b/drivers/firmware/imx/rm.c
+index a12db6ff3..6dd4db386 100644
+--- a/drivers/firmware/imx/rm.c
++++ b/drivers/firmware/imx/rm.c
+@@ -13,6 +13,11 @@ struct imx_sc_msg_rm_rsrc_owned {
+ 	u16 resource;
+ } __packed __aligned(4);
+ 
++struct imx_sc_msg_rm_pt {
++	struct imx_sc_rpc_msg hdr;
++	u8 val;
++} __packed __aligned(4);
++
+ /*
+  * This function check @resource is owned by current partition or not
+  *
+@@ -43,3 +48,160 @@ bool imx_sc_rm_is_resource_owned(struct imx_sc_ipc *ipc, u16 resource)
+ 	return hdr->func;
+ }
+ EXPORT_SYMBOL(imx_sc_rm_is_resource_owned);
++
++/*
++ * This function returns the current partition number
++ *
++ * @param[in]     ipc         IPC handle
++ * @param[out]    pt          holding the partition number
++ *
++ * @return Returns 0 for success and < 0 for errors.
++ */
++int imx_sc_rm_get_partition(struct imx_sc_ipc *ipc, u8 *pt)
++{
++	struct imx_sc_msg_rm_pt msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_GET_PARTITION;
++	hdr->size = 1;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	if (pt != NULL)
++		*pt = msg.val;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_rm_get_partition);
++
++struct imx_sc_msg_rm_find_memreg {
++	struct imx_sc_rpc_msg hdr;
++	union {
++		struct {
++			u32 add_start_hi;
++			u32 add_start_lo;
++			u32 add_end_hi;
++			u32 add_end_lo;
++		} req;
++		struct {
++			u8 val;
++		} resp;
++	} data;
++}  __packed __aligned(4);
++
++int imx_sc_rm_find_memreg(struct imx_sc_ipc *ipc, u8 *mr, u64 addr_start,
++			  u64 addr_end)
++{
++	struct imx_sc_msg_rm_find_memreg msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_FIND_MEMREG;
++	hdr->size = 5;
++
++	msg.data.req.add_start_hi = addr_start >> 32;
++	msg.data.req.add_start_lo = addr_start;
++	msg.data.req.add_end_hi = addr_end >> 32;
++	msg.data.req.add_end_lo = addr_end;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	if (mr)
++		*mr = msg.data.resp.val;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_rm_find_memreg);
++
++struct imx_sc_msg_rm_get_resource_owner {
++	struct imx_sc_rpc_msg hdr;
++	union {
++		struct {
++			u16 resource;
++		} req;
++		struct {
++			u8 val;
++		} resp;
++	} data;
++} __packed __aligned(4);
++
++int imx_sc_rm_get_resource_owner(struct imx_sc_ipc *ipc, u16 resource, u8 *pt)
++{
++	struct imx_sc_msg_rm_get_resource_owner msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_GET_RESOURCE_OWNER;
++	hdr->size = 2;
++
++	msg.data.req.resource = resource;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	if (pt)
++		*pt = msg.data.resp.val;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_rm_get_resource_owner);
++
++struct imx_sc_msg_set_memreg_permissions {
++	struct imx_sc_rpc_msg hdr;
++	u8 mr;
++	u8 pt;
++	u8 perm;
++} __packed __aligned(4);
++
++int imx_sc_rm_set_memreg_permissions(struct imx_sc_ipc *ipc, u8 mr,
++				     u8 pt, u8 perm)
++{
++	struct imx_sc_msg_set_memreg_permissions msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_SET_MEMREG_PERMISSIONS;
++	hdr->size = 2;
++
++	msg.mr = mr;
++	msg.pt = pt;
++	msg.perm = perm;
++
++	return imx_scu_call_rpc(ipc, &msg, true);
++}
++EXPORT_SYMBOL(imx_sc_rm_set_memreg_permissions);
++
++int imx_sc_rm_get_did(struct imx_sc_ipc *ipc, u8 *did)
++{
++	struct imx_sc_rpc_msg msg;
++	struct imx_sc_rpc_msg *hdr = &msg;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_GET_DID;
++	hdr->size = 1;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret < 0)
++		return ret;
++
++	if (did)
++		*did = msg.func;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_rm_get_did);
+diff --git a/drivers/firmware/imx/scu-pd.c b/drivers/firmware/imx/scu-pd.c
+old mode 100644
+new mode 100755
+diff --git a/drivers/firmware/imx/seco.c b/drivers/firmware/imx/seco.c
+new file mode 100644
+index 000000000..18232c700
+--- /dev/null
++++ b/drivers/firmware/imx/seco.c
+@@ -0,0 +1,249 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2020 NXP
++ *
++ * File containing client-side RPC functions for the SECO service. These
++ * function are ported to clients that communicate to the SC.
++ */
++
++#include <linux/firmware/imx/sci.h>
++
++struct imx_sc_msg_seco_get_build_id {
++	struct imx_sc_rpc_msg hdr;
++	u32 version;
++	u32 commit;
++} __packed __aligned(4);
++
++int imx_sc_seco_build_info(struct imx_sc_ipc *ipc, uint32_t *version,
++			   uint32_t *commit)
++{
++	struct imx_sc_msg_seco_get_build_id msg = {0};
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_SECO;
++	hdr->func = IMX_SC_SECO_FUNC_BUILD_INFO;
++	hdr->size = 1;
++
++	imx_scu_call_rpc(ipc, &msg, true);
++
++	if (version)
++		*version = msg.version;
++	if (commit)
++		*commit = msg.commit;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_seco_build_info);
++
++struct imx_sc_msg_seco_sab_msg {
++	struct imx_sc_rpc_msg hdr;
++	u32 smsg_addr_hi;
++	u32 smsg_addr_lo;
++} __packed __aligned(4);
++
++int imx_sc_seco_sab_msg(struct imx_sc_ipc *ipc, u64 smsg_addr)
++{
++	struct imx_sc_msg_seco_sab_msg msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_SECO;
++	hdr->func = IMX_SC_SECO_FUNC_SAB_MSG;
++	hdr->size = 3;
++
++	msg.smsg_addr_hi = smsg_addr >> 32;
++	msg.smsg_addr_lo = smsg_addr;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	return ret;
++}
++EXPORT_SYMBOL(imx_sc_seco_sab_msg);
++
++int imx_sc_seco_secvio_enable(struct imx_sc_ipc *ipc)
++{
++	struct imx_sc_rpc_msg msg;
++	struct imx_sc_rpc_msg *hdr = &msg;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = (uint8_t)IMX_SC_RPC_SVC_SECO;
++	hdr->func = (uint8_t)IMX_SC_SECO_FUNC_SECVIO_ENABLE;
++	hdr->size = 1;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_seco_secvio_enable);
++
++struct imx_sc_msg_req_seco_config {
++	struct imx_sc_rpc_msg hdr;
++	u32 data0;
++	u32 data1;
++	u32 data2;
++	u32 data3;
++	u32 data4;
++	u8 id;
++	u8 access;
++	u8 size;
++} __packed __aligned(4);
++
++struct imx_sc_msg_resp_seco_config {
++	struct imx_sc_rpc_msg hdr;
++	u32 data0;
++	u32 data1;
++	u32 data2;
++	u32 data3;
++	u32 data4;
++} __packed __aligned(4);
++
++int imx_sc_seco_secvio_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++			      u32 *data0, u32 *data1, u32 *data2, u32 *data3,
++			      u32 *data4, u8 size)
++{
++	struct imx_sc_msg_req_seco_config msg;
++	struct imx_sc_msg_resp_seco_config *resp;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	if (!ipc)
++		return -EINVAL;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = (uint8_t)IMX_SC_RPC_SVC_SECO;
++	hdr->func = (uint8_t)IMX_SC_SECO_FUNC_SECVIO_CONFIG;
++	hdr->size = 7;
++
++	/* Check the pointers on data are valid and set it if doing a write */
++	switch (size) {
++	case 5:
++		if (data4) {
++			if (access)
++				msg.data4 = *data4;
++		} else {
++			return -EINVAL;
++		}
++		fallthrough;
++	case 4:
++		if (data3) {
++			if (access)
++				msg.data3 = *data3;
++		} else {
++			return -EINVAL;
++		}
++		fallthrough;
++	case 3:
++		if (data2) {
++			if (access)
++				msg.data2 = *data2;
++		} else {
++			return -EINVAL;
++		}
++		fallthrough;
++	case 2:
++		if (data1) {
++			if (access)
++				msg.data1 = *data1;
++		} else {
++			return -EINVAL;
++		}
++		fallthrough;
++	case 1:
++		if (data0) {
++			if (access)
++				msg.data0 = *data0;
++		} else {
++			return -EINVAL;
++		}
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	msg.id = id;
++	msg.access = access;
++	msg.size = size;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	resp = (struct imx_sc_msg_resp_seco_config *)&msg;
++
++	/* Pointers already checked so we just copy the data if reading */
++	if (!access)
++		switch (size) {
++		case 5:
++			*data4 = resp->data4;
++		fallthrough;
++		case 4:
++			*data3 = resp->data3;
++		fallthrough;
++		case 3:
++			*data2 = resp->data2;
++		fallthrough;
++		case 2:
++			*data1 = resp->data1;
++		fallthrough;
++		case 1:
++			*data0 = resp->data0;
++		}
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_seco_secvio_config);
++
++struct imx_sc_msg_req_seco_dgo_config {
++	struct imx_sc_rpc_msg hdr;
++	u32 data;
++	u8 id;
++	u8 access;
++} __packed __aligned(4);
++
++struct imx_sc_msg_resp_seco_dgo_config {
++	struct imx_sc_rpc_msg hdr;
++	u32 data;
++} __packed __aligned(4);
++
++int imx_sc_seco_secvio_dgo_config(struct imx_sc_ipc *ipc, u8 id, u8 access,
++				  u32 *data)
++{
++	struct imx_sc_msg_req_seco_dgo_config msg;
++	struct imx_sc_msg_resp_seco_dgo_config *resp;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	if (!ipc)
++		return -EINVAL;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = (uint8_t)IMX_SC_RPC_SVC_SECO;
++	hdr->func = (uint8_t)IMX_SC_SECO_FUNC_SECVIO_DGO_CONFIG;
++	hdr->size = 3;
++
++	if (access) {
++		if (data)
++			msg.data = *data;
++		else
++			return -EINVAL;
++	}
++
++	msg.access = access;
++	msg.id = id;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	resp = (struct imx_sc_msg_resp_seco_dgo_config *)&msg;
++
++	if (!access && data)
++		*data = resp->data;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_seco_secvio_dgo_config);
+diff --git a/drivers/firmware/imx/seco_mu.c b/drivers/firmware/imx/seco_mu.c
+new file mode 100644
+index 000000000..02f4295f8
+--- /dev/null
++++ b/drivers/firmware/imx/seco_mu.c
+@@ -0,0 +1,1210 @@
++// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
++/*
++ * Copyright 2019-2020 NXP
++ */
++
++/*
++ * This driver allows to send messages to the SECO using a shared mailbox. The
++ * messages must follow the protocol defined.
++ */
++
++/*
++ * Architecture of the driver:
++ *
++ *                                     Non-Secure           +   Secure
++ *                                                          |
++ *                                                          |
++ *                   +---------+      +-------------+       |
++ *                   |seco_mu.c+<---->+imx-mailbox.c|       |
++ *                   |         |      |  mailbox.c  +<-->+------+    +------+
++ *                   +---+-----+      +-------------+    | MU X +<-->+ SECO |
++ *                       |                               +------+    +------+
++ *                       +----------------+                 |
++ *                       |                |                 |
++ *                       v                v                 |
++ *                   logical           logical              |
++ *                   receiver          waiter               |
++ *                      +                 +                 |
++ *                      |                 |                 |
++ *                      |                 |                 |
++ *                      |            +----+------+          |
++ *                      |            |           |          |
++ *                      |            |           |          |
++ *               device_ctx     device_ctx     device_ctx   |
++ *                                                          |
++ *                 User 0        User 1       User Y        |
++ *                 +------+      +------+     +------+      |
++ *                 |misc.c|      |misc.c|     |misc.c|      |
++ * kernel space    +------+      +------+     +------+      |
++ *                                                          |
++ *  +------------------------------------------------------ |
++ *                     |             |           |          |
++ * userspace     /dev/seco_muXch0    |           |          |
++ *                          /dev/seco_muXch1     |          |
++ *                                        /dev/seco_muXchY  |
++ *                                                          |
++ *
++ * When a user sends a command to the seco, it registers its device_ctx as
++ * waiter of a response from SECO
++ *
++ * A user can be registered as receiver of command by the SECO.
++ *
++ * When a message is received, the driver select the device_ctx receiving the
++ * message depending on the tag in the message. It selects the device_ctx
++ * accordingly.
++ */
++
++#include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
++#include <linux/miscdevice.h>
++#include <linux/mm.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/of_device.h>
++#include <linux/of_irq.h>
++#include <linux/uaccess.h>
++#include <linux/firmware/imx/sci.h>
++#include <dt-bindings/firmware/imx/rsrc.h>
++#include <linux/firmware/imx/seco_mu_ioctl.h>
++#include <linux/mailbox_client.h>
++
++#define MAX_RECV_SIZE 31
++#define MAX_RECV_SIZE_BYTES (MAX_RECV_SIZE * sizeof(u32))
++#define MAX_MESSAGE_SIZE 31
++#define MAX_MESSAGE_SIZE_BYTES (MAX_MESSAGE_SIZE * sizeof(u32))
++#define MESSAGE_SIZE(hdr) (((struct she_mu_hdr *)(&(hdr)))->size)
++#define MESSAGE_TAG(hdr) (((struct she_mu_hdr *)(&(hdr)))->tag)
++
++#define DEFAULT_MESSAGING_TAG_COMMAND           (0x17u)
++#define DEFAULT_MESSAGING_TAG_RESPONSE          (0xe1u)
++
++#define SECURE_RAM_BASE_ADDRESS	(0x31800000ULL)
++#define SECURE_RAM_BASE_ADDRESS_SCU	(0x20800000u)
++#define SECURE_RAM_SIZE	(0x10000ULL)
++
++#define SECO_MU_DEFAULT_MAX_USERS 4
++
++#define SECO_MU_INTERRUPT_INDEX	(0u)
++#define SECO_DEFAULT_MU_INDEX	(1u)
++#define SECO_DEFAULT_TZ		(0u)
++#define DEFAULT_DID		(0u)
++
++#define MAX_DATA_SIZE_PER_USER  (65 * 1024)
++
++/* Header of the messages exchange with the SECO */
++struct she_mu_hdr {
++	u8 ver;
++	u8 size;
++	u8 command;
++	u8 tag;
++}  __packed;
++
++/* Status of a char device */
++enum mu_device_status_t {
++	MU_FREE,
++	MU_OPENED
++};
++
++struct seco_shared_mem {
++	dma_addr_t dma_addr;
++	u32 size;
++	u32 pos;
++	u8 *ptr;
++};
++
++struct seco_out_buffer_desc {
++	u8 *out_ptr;
++	u8 *out_usr_ptr;
++	u32 out_size;
++	struct list_head link;
++};
++
++/* Private struct for each char device instance. */
++struct seco_mu_device_ctx {
++	struct device *dev;
++	struct seco_mu_priv *mu_priv;
++	struct miscdevice miscdev;
++
++	enum mu_device_status_t status;
++	wait_queue_head_t wq;
++	struct semaphore fops_lock;
++
++	u32 pending_hdr;
++	struct list_head pending_out;
++
++	struct seco_shared_mem secure_mem;
++	struct seco_shared_mem non_secure_mem;
++
++	u32 temp_cmd[MAX_MESSAGE_SIZE];
++	u32 temp_resp[MAX_RECV_SIZE];
++	u32 temp_resp_size;
++	struct notifier_block scu_notify;
++	bool v2x_reset;
++};
++
++/* Private struct for seco MU driver. */
++struct seco_mu_priv {
++	struct seco_mu_device_ctx *cmd_receiver_dev;
++	struct seco_mu_device_ctx *waiting_rsp_dev;
++	/*
++	 * prevent parallel access to the MU registers
++	 * e.g. a user trying to send a command while the other one is
++	 * sending a response.
++	 */
++	struct mutex mu_lock;
++	/*
++	 * prevent a command to be sent on the MU while another one is still
++	 * processing. (response to a command is allowed)
++	 */
++	struct mutex mu_cmd_lock;
++	struct device *dev;
++	u32 seco_mu_id;
++	u8 cmd_tag;
++	u8 rsp_tag;
++
++	struct mbox_client cl;
++	struct mbox_chan *tx_chan;
++	struct mbox_chan *rx_chan;
++
++	struct imx_sc_ipc *ipc_scu;
++	u8 seco_part_owner;
++};
++
++/* macro to log operation of a misc device */
++#define miscdev_dbg(p_miscdev, fmt, va_args...)                                \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_dbg((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name,  \
++		##va_args);                                                    \
++	})
++
++#define miscdev_info(p_miscdev, fmt, va_args...)                               \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_info((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name, \
++		##va_args);                                                    \
++	})
++
++#define miscdev_err(p_miscdev, fmt, va_args...)                                \
++	({                                                                     \
++		struct miscdevice *_p_miscdev = p_miscdev;                     \
++		dev_err((_p_miscdev)->parent, "%s: " fmt, (_p_miscdev)->name,  \
++		##va_args);                                                    \
++	})
++
++/* macro to log operation of a device context */
++#define devctx_dbg(p_devctx, fmt, va_args...) \
++	miscdev_dbg(&((p_devctx)->miscdev), fmt, ##va_args)
++#define devctx_info(p_devctx, fmt, va_args...) \
++	miscdev_info(&((p_devctx)->miscdev), fmt, ##va_args)
++#define devctx_err(p_devctx, fmt, va_args...) \
++	miscdev_err((&(p_devctx)->miscdev), fmt, ##va_args)
++
++#define IMX_SC_RM_PERM_FULL         7U	/* Full access */
++
++/* Give access to SECU to the memory we want to share */
++static int seco_mu_setup_seco_memory_access(struct seco_mu_device_ctx *dev_ctx,
++					    u64 addr, u32 len)
++{
++	struct seco_mu_priv *priv = dev_get_drvdata(dev_ctx->dev);
++	int ret;
++	u8 mr;
++
++	ret = imx_sc_rm_find_memreg(priv->ipc_scu, &mr, addr, addr + len);
++	if (ret) {
++		devctx_err(dev_ctx, "Fail find memreg\n");
++		goto exit;
++	}
++
++	ret = imx_sc_rm_set_memreg_permissions(priv->ipc_scu, mr,
++					       priv->seco_part_owner,
++					       IMX_SC_RM_PERM_FULL);
++	if (ret) {
++		devctx_err(dev_ctx, "Fail set permission for resource\n");
++		goto exit;
++	}
++
++exit:
++	return ret;
++}
++
++/*
++ * File operations for user-space
++ */
++/* Open a char device. */
++static int seco_mu_fops_open(struct inode *nd, struct file *fp)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct seco_mu_device_ctx, miscdev);
++	int err;
++
++	/* Avoid race if opened at the same time */
++	if (down_trylock(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	/* Authorize only 1 instance. */
++	if (dev_ctx->status != MU_FREE) {
++		err = -EBUSY;
++		goto exit;
++	}
++
++	/*
++	 * Allocate some memory for data exchanges with SECO.
++	 * This will be used for data not requiring secure memory.
++	 */
++	dev_ctx->non_secure_mem.ptr = dmam_alloc_coherent(dev_ctx->dev,
++					MAX_DATA_SIZE_PER_USER,
++					&dev_ctx->non_secure_mem.dma_addr,
++					GFP_KERNEL);
++	if (!dev_ctx->non_secure_mem.ptr) {
++		err = -ENOMEM;
++		devctx_err(dev_ctx, "Failed to map shared memory with SECO\n");
++		goto exit;
++	}
++
++	err = seco_mu_setup_seco_memory_access(dev_ctx,
++					       dev_ctx->non_secure_mem.dma_addr,
++					       MAX_DATA_SIZE_PER_USER);
++	if (err) {
++		err = -EPERM;
++		devctx_err(dev_ctx,
++			   "Failed to share access to shared memory\n");
++		goto free_coherent;
++	}
++
++	dev_ctx->non_secure_mem.size = MAX_DATA_SIZE_PER_USER;
++	dev_ctx->non_secure_mem.pos = 0;
++	dev_ctx->status = MU_OPENED;
++
++	dev_ctx->pending_hdr = 0;
++	dev_ctx->v2x_reset = 0;
++
++	goto exit;
++
++free_coherent:
++	dmam_free_coherent(dev_ctx->mu_priv->dev, MAX_DATA_SIZE_PER_USER,
++			   dev_ctx->non_secure_mem.ptr,
++			   dev_ctx->non_secure_mem.dma_addr);
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/* Close a char device. */
++static int seco_mu_fops_close(struct inode *nd, struct file *fp)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct seco_mu_device_ctx, miscdev);
++	struct seco_mu_priv *mu_priv = dev_ctx->mu_priv;
++	struct seco_out_buffer_desc *out_buf_desc;
++
++	/* Avoid race if closed at the same time */
++	if (down_trylock(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	/* The device context has not been opened */
++	if (dev_ctx->status != MU_OPENED)
++		goto exit;
++
++	/* check if this device was registered as command receiver. */
++	if (mu_priv->cmd_receiver_dev == dev_ctx)
++		mu_priv->cmd_receiver_dev = NULL;
++
++	/* check if this device was registered as waiting response. */
++	if (mu_priv->waiting_rsp_dev == dev_ctx) {
++		mu_priv->waiting_rsp_dev = NULL;
++		mutex_unlock(&mu_priv->mu_cmd_lock);
++	}
++
++	/* Unmap secure memory shared buffer. */
++	if (dev_ctx->secure_mem.ptr)
++		devm_iounmap(dev_ctx->dev, dev_ctx->secure_mem.ptr);
++
++	dev_ctx->secure_mem.ptr = NULL;
++	dev_ctx->secure_mem.dma_addr = 0;
++	dev_ctx->secure_mem.size = 0;
++	dev_ctx->secure_mem.pos = 0;
++
++	/* Free non-secure shared buffer. */
++	dmam_free_coherent(dev_ctx->mu_priv->dev, MAX_DATA_SIZE_PER_USER,
++			   dev_ctx->non_secure_mem.ptr,
++			   dev_ctx->non_secure_mem.dma_addr);
++
++	dev_ctx->non_secure_mem.ptr = NULL;
++	dev_ctx->non_secure_mem.dma_addr = 0;
++	dev_ctx->non_secure_mem.size = 0;
++	dev_ctx->non_secure_mem.pos = 0;
++
++	while (!list_empty(&dev_ctx->pending_out)) {
++		out_buf_desc = list_first_entry_or_null(&dev_ctx->pending_out,
++						struct seco_out_buffer_desc,
++						link);
++		__list_del_entry(&out_buf_desc->link);
++		devm_kfree(dev_ctx->dev, out_buf_desc);
++	}
++
++	dev_ctx->status = MU_FREE;
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return 0;
++}
++
++/* Write a message to the MU. */
++static ssize_t seco_mu_fops_write(struct file *fp, const char __user *buf,
++				  size_t size, loff_t *ppos)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct seco_mu_device_ctx, miscdev);
++	struct seco_mu_priv *mu_priv = dev_ctx->mu_priv;
++	u32 nb_words = 0, header;
++	int err;
++
++	devctx_dbg(dev_ctx, "write from buf (%p)%ld, ppos=%lld\n", buf, size,
++		   ((ppos) ? *ppos : 0));
++
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	if (dev_ctx->status != MU_OPENED) {
++		err = -EINVAL;
++		goto exit;
++	}
++
++	if (size < sizeof(struct she_mu_hdr)) {
++		devctx_err(dev_ctx, "User buffer too small(%ld < %lu)\n", size,
++			   sizeof(struct she_mu_hdr));
++		err = -ENOSPC;
++		goto exit;
++	}
++
++	if (size > MAX_MESSAGE_SIZE_BYTES) {
++		devctx_err(dev_ctx, "User buffer too big(%ld > %lu)\n", size,
++			   MAX_MESSAGE_SIZE_BYTES);
++		err = -ENOSPC;
++		goto exit;
++	}
++
++	/* Copy data to buffer */
++	err = (int)copy_from_user(dev_ctx->temp_cmd, buf, size);
++	if (err) {
++		err = -EFAULT;
++		devctx_err(dev_ctx, "Fail copy message from user\n");
++		goto exit;
++	}
++
++	print_hex_dump_debug("from user ", DUMP_PREFIX_OFFSET, 4, 4,
++			     dev_ctx->temp_cmd, size, false);
++
++	header = dev_ctx->temp_cmd[0];
++
++	/* Check the message is valid according to tags */
++	if (MESSAGE_TAG(header) == mu_priv->cmd_tag) {
++		/*
++		 * unlocked in seco_mu_receive_work_handler when the
++		 * response to this command is received.
++		 */
++		mutex_lock(&mu_priv->mu_cmd_lock);
++		mu_priv->waiting_rsp_dev = dev_ctx;
++	} else if (MESSAGE_TAG(header) == mu_priv->rsp_tag) {
++		/* Check the device context can send the command */
++		if (dev_ctx != mu_priv->cmd_receiver_dev) {
++			devctx_err(dev_ctx,
++				   "This channel is not configured to send response to SECO\n");
++			err = -EPERM;
++			goto exit;
++		}
++	} else {
++		devctx_err(dev_ctx, "The message does not have a valid TAG\n");
++		err = -EINVAL;
++		goto exit;
++	}
++
++	/*
++	 * Check that the size passed as argument matches the size
++	 * carried in the message.
++	 */
++	nb_words = MESSAGE_SIZE(header);
++	if (nb_words * sizeof(u32) != size) {
++		devctx_err(dev_ctx, "User buffer too small\n");
++		goto exit;
++	}
++
++	mutex_lock(&mu_priv->mu_lock);
++
++	/* Send message */
++	devctx_dbg(dev_ctx, "sending message\n");
++	err = mbox_send_message(mu_priv->tx_chan, dev_ctx->temp_cmd);
++	if (err < 0) {
++		devctx_err(dev_ctx, "Failed to send message\n");
++		goto unlock;
++	}
++
++	err = nb_words * (u32)sizeof(u32);
++
++unlock:
++	mutex_unlock(&mu_priv->mu_lock);
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/*
++ * Read a message from the MU.
++ * Blocking until a message is available.
++ */
++static ssize_t seco_mu_fops_read(struct file *fp, char __user *buf,
++				 size_t size, loff_t *ppos)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct seco_mu_device_ctx, miscdev);
++	u32 data_size = 0, size_to_copy = 0;
++	struct seco_out_buffer_desc *b_desc;
++	int err;
++
++	devctx_dbg(dev_ctx, "read to buf %p(%ld), ppos=%lld\n", buf, size,
++		   ((ppos) ? *ppos : 0));
++
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	if (dev_ctx->status != MU_OPENED) {
++		err = -EINVAL;
++		goto exit;
++	}
++
++	if (dev_ctx->v2x_reset) {
++		err = -EINVAL;
++		goto exit;
++	}
++
++	/* Wait until the complete message is received on the MU. */
++	err = wait_event_interruptible(dev_ctx->wq, dev_ctx->pending_hdr != 0);
++	if (err) {
++		devctx_err(dev_ctx, "Interrupted by signal\n");
++		goto exit;
++	}
++
++	if (dev_ctx->v2x_reset) {
++		err = -EINVAL;
++		dev_ctx->v2x_reset = 0;
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx, "%s %s\n", __func__,
++		   "message received, start transmit to user");
++
++	/* Check that the size passed as argument is larger than
++	 * the one carried in the message.
++	 */
++	data_size = dev_ctx->temp_resp_size * sizeof(u32);
++	size_to_copy = data_size;
++	if (size_to_copy > size) {
++		devctx_dbg(dev_ctx, "User buffer too small (%ld < %d)\n",
++			   size, size_to_copy);
++		size_to_copy = size;
++	}
++
++	/* We may need to copy the output data to user before
++	 * delivering the completion message.
++	 */
++	while (!list_empty(&dev_ctx->pending_out)) {
++		b_desc = list_first_entry_or_null(&dev_ctx->pending_out,
++						  struct seco_out_buffer_desc,
++						  link);
++		if (b_desc->out_usr_ptr && b_desc->out_ptr) {
++			devctx_dbg(dev_ctx, "Copy output data to user\n");
++			err = (int)copy_to_user(b_desc->out_usr_ptr,
++						b_desc->out_ptr,
++						b_desc->out_size);
++			if (err) {
++				devctx_err(dev_ctx,
++					   "Failed to copy output data to user\n");
++				err = -EFAULT;
++				goto exit;
++			}
++		}
++		__list_del_entry(&b_desc->link);
++		devm_kfree(dev_ctx->dev, b_desc);
++	}
++
++	/* Copy data from the buffer */
++	print_hex_dump_debug("to user ", DUMP_PREFIX_OFFSET, 4, 4,
++			     dev_ctx->temp_resp, size_to_copy, false);
++	err = (int)copy_to_user(buf, dev_ctx->temp_resp, size_to_copy);
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	err = size_to_copy;
++
++	/* free memory allocated on the shared buffers. */
++	dev_ctx->secure_mem.pos = 0;
++	dev_ctx->non_secure_mem.pos = 0;
++
++	dev_ctx->pending_hdr = 0;
++
++exit:
++	up(&dev_ctx->fops_lock);
++	return err;
++}
++
++/* Configure the shared memory according to user config */
++static int
++seco_mu_ioctl_shared_mem_cfg_handler(struct seco_mu_device_ctx *dev_ctx,
++				     unsigned long arg)
++{
++	struct seco_mu_ioctl_shared_mem_cfg cfg;
++	int err = -EINVAL;
++	u64 high_boundary;
++
++	/* Check if not already configured. */
++	if (dev_ctx->secure_mem.dma_addr != 0u) {
++		devctx_err(dev_ctx, "Shared memory not configured\n");
++		goto exit;
++	}
++
++	err = (int)copy_from_user(&cfg, (u8 *)arg,
++		sizeof(cfg));
++	if (err) {
++		devctx_err(dev_ctx, "Fail copy shared memory config to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx, "cfg offset: %u(%d)\n", cfg.base_offset, cfg.size);
++
++	high_boundary = cfg.base_offset;
++	if (high_boundary > SECURE_RAM_SIZE) {
++		devctx_err(dev_ctx, "base offset is over secure memory\n");
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	high_boundary += cfg.size;
++	if (high_boundary > SECURE_RAM_SIZE) {
++		devctx_err(dev_ctx, "total memory is over secure memory\n");
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	dev_ctx->secure_mem.dma_addr = (dma_addr_t)cfg.base_offset;
++	dev_ctx->secure_mem.size = cfg.size;
++	dev_ctx->secure_mem.pos = 0;
++	dev_ctx->secure_mem.ptr = devm_ioremap(dev_ctx->dev,
++					(phys_addr_t)(SECURE_RAM_BASE_ADDRESS +
++					(u64)dev_ctx->secure_mem.dma_addr),
++					dev_ctx->secure_mem.size);
++	if (!dev_ctx->secure_mem.ptr) {
++		devctx_err(dev_ctx, "Failed to map secure memory\n");
++		err = -ENOMEM;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
++/*
++ * Copy a buffer of daa to/from the user and return the address to use in
++ * messages
++ */
++static int seco_mu_ioctl_setup_iobuf_handler(struct seco_mu_device_ctx *dev_ctx,
++					     unsigned long arg)
++{
++	struct seco_out_buffer_desc *out_buf_desc;
++	struct seco_mu_ioctl_setup_iobuf io;
++	struct seco_shared_mem *shared_mem;
++	int err = -EINVAL;
++	u32 pos;
++
++	err = (int)copy_from_user(&io,
++		(u8 *)arg,
++		sizeof(io));
++	if (err) {
++		devctx_err(dev_ctx, "Failed copy iobuf config from user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx, "io [buf: %p(%d) flag: %x]\n",
++		   io.user_buf, io.length, io.flags);
++
++	if (io.length == 0 || !io.user_buf) {
++		/*
++		 * Accept NULL pointers since some buffers are optional
++		 * in SECO commands. In this case we should return 0 as
++		 * pointer to be embedded into the message.
++		 * Skip all data copy part of code below.
++		 */
++		io.seco_addr = 0;
++		goto copy;
++	}
++
++	/* Select the shared memory to be used for this buffer. */
++	if (io.flags & SECO_MU_IO_FLAGS_USE_SEC_MEM) {
++		/* App requires to use secure memory for this buffer.*/
++		shared_mem = &dev_ctx->secure_mem;
++	} else {
++		/* No specific requirement for this buffer. */
++		shared_mem = &dev_ctx->non_secure_mem;
++	}
++
++	/* Check there is enough space in the shared memory. */
++	if (io.length >= shared_mem->size - shared_mem->pos) {
++		devctx_err(dev_ctx, "Not enough space in shared memory\n");
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	/* Allocate space in shared memory. 8 bytes aligned. */
++	pos = shared_mem->pos;
++	shared_mem->pos += round_up(io.length, 8u);
++	io.seco_addr = (u64)shared_mem->dma_addr + pos;
++
++	if ((io.flags & SECO_MU_IO_FLAGS_USE_SEC_MEM) &&
++	    !(io.flags & SECO_MU_IO_FLAGS_USE_SHORT_ADDR))
++		/*Add base address to get full address.*/
++		io.seco_addr += SECURE_RAM_BASE_ADDRESS_SCU;
++
++	if (io.flags & SECO_MU_IO_FLAGS_IS_INPUT) {
++		/*
++		 * buffer is input:
++		 * copy data from user space to this allocated buffer.
++		 */
++		err = (int)copy_from_user(shared_mem->ptr + pos, io.user_buf,
++					  io.length);
++		if (err) {
++			devctx_err(dev_ctx,
++				   "Failed copy data to shared memory\n");
++			err = -EFAULT;
++			goto exit;
++		}
++	} else {
++		/*
++		 * buffer is output:
++		 * add an entry in the "pending buffers" list so data
++		 * can be copied to user space when receiving SECO
++		 * response.
++		 */
++		out_buf_desc = devm_kmalloc(dev_ctx->dev, sizeof(*out_buf_desc),
++					    GFP_KERNEL);
++		if (!out_buf_desc) {
++			err = -ENOMEM;
++			devctx_err(dev_ctx,
++				   "Failed allocating mem for pending buffer\n"
++				   );
++			goto exit;
++		}
++
++		out_buf_desc->out_ptr = shared_mem->ptr + pos;
++		out_buf_desc->out_usr_ptr = io.user_buf;
++		out_buf_desc->out_size = io.length;
++		list_add_tail(&out_buf_desc->link, &dev_ctx->pending_out);
++	}
++
++copy:
++	/* Provide the seco address to user space only if success. */
++	err = (int)copy_to_user((u8 *)arg, &io,
++		sizeof(io));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy iobuff setup to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
++/* Retrieve info about the MU */
++static int seco_mu_ioctl_get_mu_info_handler(struct seco_mu_device_ctx *dev_ctx,
++					     unsigned long arg)
++{
++	struct seco_mu_priv *priv = dev_get_drvdata(dev_ctx->dev);
++	struct seco_mu_ioctl_get_mu_info info;
++	int err = -EINVAL;
++
++	info.seco_mu_idx = (u8)priv->seco_mu_id;
++	info.interrupt_idx = SECO_MU_INTERRUPT_INDEX;
++	info.tz = SECO_DEFAULT_TZ;
++
++	err = imx_sc_rm_get_did(priv->ipc_scu, &info.did);
++	if (err) {
++		devctx_err(dev_ctx, "Get did failed\n");
++		goto exit;
++	}
++
++	devctx_dbg(dev_ctx,
++		   "info [mu_idx: %d, irq_idx: %d, tz: 0x%x, did: 0x%x]\n",
++		   info.seco_mu_idx, info.interrupt_idx, info.tz, info.did);
++
++	err = (int)copy_to_user((u8 *)arg, &info,
++		sizeof(info));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy mu info to user\n");
++		err = -EFAULT;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
++static int seco_mu_ioctl_signed_msg_handler(struct seco_mu_device_ctx *dev_ctx,
++					    unsigned long arg)
++{
++	struct seco_shared_mem *shared_mem = &dev_ctx->non_secure_mem;
++	struct seco_mu_priv *priv = dev_get_drvdata(dev_ctx->dev);
++	struct seco_mu_ioctl_signed_message msg;
++	int err = -EINVAL;
++	u64 addr;
++	u32 pos;
++
++	err = (int)copy_from_user(&msg,
++		(u8 *)arg,
++		sizeof(msg));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy from user: %d\n", err);
++		err = -EFAULT;
++		goto exit;
++	}
++
++	/* Check there is enough space in the shared memory. */
++	if (msg.msg_size >= shared_mem->size - shared_mem->pos) {
++		devctx_err(dev_ctx, "Not enough mem: %d left, %d required\n",
++			   shared_mem->size - shared_mem->pos, msg.msg_size);
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	/* Allocate space in shared memory. 8 bytes aligned. */
++	pos = shared_mem->pos;
++
++	/* get physical address from the pos */
++	addr = (u64)shared_mem->dma_addr + pos;
++
++	/* copy signed message from user space to this allocated buffer */
++	err = (int)copy_from_user(shared_mem->ptr + pos, msg.message,
++				  msg.msg_size);
++	if (err) {
++		devctx_err(dev_ctx, "Failed to signed message from user: %d\n",
++			   err);
++		err = -EFAULT;
++		goto exit;
++	}
++
++	/* Send the message to SECO through SCU */
++	msg.error_code = imx_sc_seco_sab_msg(priv->ipc_scu, addr);
++
++	err = (int)copy_to_user((u8 *)arg, &msg,
++		sizeof(msg));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy to user: %d\n", err);
++		err = -EFAULT;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
++/* IOCTL entry point of a char device */
++static long seco_mu_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(fp->private_data,
++					struct seco_mu_device_ctx, miscdev);
++	struct seco_mu_priv *mu_priv = dev_ctx->mu_priv;
++	int err = -EINVAL;
++
++	/* Prevent race during change of device context */
++	if (down_interruptible(&dev_ctx->fops_lock))
++		return -EBUSY;
++
++	switch (cmd) {
++	case SECO_MU_IOCTL_ENABLE_CMD_RCV:
++		if (!mu_priv->cmd_receiver_dev) {
++			devctx_dbg(dev_ctx, "setting as receiver\n");
++			mu_priv->cmd_receiver_dev = dev_ctx;
++			err = 0;
++		};
++		break;
++	case SECO_MU_IOCTL_SHARED_BUF_CFG:
++		err = seco_mu_ioctl_shared_mem_cfg_handler(dev_ctx, arg);
++		break;
++	case SECO_MU_IOCTL_SETUP_IOBUF:
++		err = seco_mu_ioctl_setup_iobuf_handler(dev_ctx, arg);
++		break;
++	case SECO_MU_IOCTL_GET_MU_INFO:
++		err = seco_mu_ioctl_get_mu_info_handler(dev_ctx, arg);
++		break;
++	case SECO_MU_IOCTL_SIGNED_MESSAGE:
++		err = seco_mu_ioctl_signed_msg_handler(dev_ctx, arg);
++		break;
++	default:
++		err = -EINVAL;
++		devctx_dbg(dev_ctx, "IOCTL %.8x not supported\n", cmd);
++	}
++
++	up(&dev_ctx->fops_lock);
++	return (long)err;
++}
++
++/*
++ * Callback called by mailbox FW when data are received
++ */
++static void seco_mu_rx_callback(struct mbox_client *c, void *msg)
++{
++	struct device *dev = c->dev;
++	struct seco_mu_priv *priv = dev_get_drvdata(dev);
++	struct seco_mu_device_ctx *dev_ctx;
++	bool is_response = false;
++	int msg_size;
++	u32 header;
++
++	dev_dbg(dev, "Message received on mailbox\n");
++
++	/* The function can be called with NULL msg */
++	if (!msg) {
++		dev_err(dev, "Message is invalid\n");
++		return;
++	}
++
++	if (IS_ERR(msg)) {
++		dev_err(dev, "Error during reception of message: %ld\n",
++			PTR_ERR(msg));
++		return;
++	}
++
++	header = *(u32 *)msg;
++
++	dev_dbg(dev, "Selecting device\n");
++
++	/* Incoming command: wake up the receiver if any. */
++	if (MESSAGE_TAG(header) == priv->cmd_tag) {
++		dev_dbg(dev, "Selecting cmd receiver\n");
++		dev_ctx = priv->cmd_receiver_dev;
++	} else if (MESSAGE_TAG(header) == priv->rsp_tag) {
++		dev_dbg(dev, "Selecting rsp waiter\n");
++		dev_ctx = priv->waiting_rsp_dev;
++		is_response = true;
++	} else {
++		dev_err(dev, "Failed to select a device for message: %.8x\n",
++			header);
++		return;
++	}
++
++	if (!dev_ctx) {
++		dev_err(dev, "No device context selected for message: %.8x\n",
++			header);
++		return;
++	}
++
++	/* Init reception */
++	msg_size = MESSAGE_SIZE(header);
++	if (msg_size > MAX_RECV_SIZE) {
++		devctx_err(dev_ctx, "Message is too big (%d > %d)", msg_size,
++			   MAX_RECV_SIZE);
++		return;
++	}
++
++	memcpy(dev_ctx->temp_resp, msg, msg_size * sizeof(u32));
++	dev_ctx->temp_resp_size = msg_size;
++
++	/* Allow user to read */
++	dev_ctx->pending_hdr = dev_ctx->temp_resp[0];
++	wake_up_interruptible(&dev_ctx->wq);
++
++	if (is_response) {
++		/* Allow user to send new command */
++		mutex_unlock(&priv->mu_cmd_lock);
++	}
++}
++
++#define SECO_FW_VER_FEAT_MASK		(0x0000FFF0u)
++#define SECO_FW_VER_FEAT_SHIFT		(0x04u)
++#define SECO_FW_VER_FEAT_MIN_ALL_MU	(0x04u)
++
++/*
++ * Get SECO FW version and check if it supports receiving commands on all MUs
++ * The version is retrieved through SCU since this is the only communication
++ * channel to SECO always present.
++ */
++static int seco_mu_check_all_mu_supported(struct device *dev)
++{
++	struct seco_mu_priv *priv = dev_get_drvdata(dev);
++	u32 seco_ver;
++	int ret;
++
++	ret = imx_sc_seco_build_info(priv->ipc_scu, &seco_ver, NULL);
++	if (ret) {
++		dev_err(dev, "failed to retrieve SECO build info\n");
++		goto exit;
++	}
++
++	if (((seco_ver & SECO_FW_VER_FEAT_MASK) >> SECO_FW_VER_FEAT_SHIFT)
++		< SECO_FW_VER_FEAT_MIN_ALL_MU) {
++		dev_err(dev, "current SECO FW do not support MU with Linux\n");
++		ret = -ENOTSUPP;
++		goto exit;
++	}
++
++exit:
++	return ret;
++}
++
++/* Char driver setup */
++static const struct file_operations seco_mu_fops = {
++	.open		= seco_mu_fops_open,
++	.owner		= THIS_MODULE,
++	.read		= seco_mu_fops_read,
++	.release	= seco_mu_fops_close,
++	.write		= seco_mu_fops_write,
++	.unlocked_ioctl = seco_mu_ioctl,
++};
++
++/* interface for managed res to free a mailbox channel */
++static void if_mbox_free_channel(void *mbox_chan)
++{
++	mbox_free_channel(mbox_chan);
++}
++
++/* interface for managed res to unregister a char device */
++static void if_misc_deregister(void *miscdevice)
++{
++	misc_deregister(miscdevice);
++}
++
++static int seco_mu_request_channel(struct device *dev,
++				   struct mbox_chan **chan,
++				   const char *name)
++{
++	struct seco_mu_priv *priv = dev_get_drvdata(dev);
++	struct mbox_chan *t_chan;
++	int ret = 0;
++
++	t_chan = mbox_request_channel_byname(&priv->cl, name);
++	if (IS_ERR(t_chan)) {
++		ret = PTR_ERR(t_chan);
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev,
++				"Failed to request chan %s ret %d\n", name,
++				ret);
++		goto exit;
++	}
++
++	ret = devm_add_action(dev, if_mbox_free_channel, t_chan);
++	if (ret) {
++		dev_err(dev, "failed to add devm removal of mbox %s\n", name);
++		goto exit;
++	}
++
++	*chan = t_chan;
++
++exit:
++	return ret;
++}
++
++static int imx_sc_v2x_reset_notify(struct notifier_block *nb,
++                                      unsigned long event, void *group)
++{
++	struct seco_mu_device_ctx *dev_ctx = container_of(nb,
++					struct seco_mu_device_ctx, scu_notify);
++
++	if (!(event & IMX_SC_IRQ_V2X_RESET))
++		return 0;
++
++	dev_ctx->v2x_reset = true;
++
++	wake_up_interruptible(&dev_ctx->wq);
++	return 0;
++}
++/* Driver probe.*/
++static int seco_mu_probe(struct platform_device *pdev)
++{
++	struct seco_mu_device_ctx *dev_ctx;
++	struct device *dev = &pdev->dev;
++	struct seco_mu_priv *priv;
++	struct device_node *np;
++	int max_nb_users = 0;
++	char *devname;
++	int ret;
++	int i;
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv) {
++		ret = -ENOMEM;
++		dev_err(dev, "Fail allocate mem for private data\n");
++		goto exit;
++	}
++	priv->dev = dev;
++	dev_set_drvdata(dev, priv);
++
++	/*
++	 * Get the address of MU to be used for communication with the SCU
++	 */
++	np = pdev->dev.of_node;
++	if (!np) {
++		dev_err(dev, "Cannot find MU User entry in device tree\n");
++		ret = -ENOTSUPP;
++		goto exit;
++	}
++
++	ret = imx_scu_get_handle(&priv->ipc_scu);
++	if (ret) {
++		dev_err(dev, "Fail to retrieve IPC handle\n");
++		goto exit;
++	}
++
++	ret = imx_sc_rm_get_resource_owner(priv->ipc_scu, IMX_SC_R_SECO,
++					   &priv->seco_part_owner);
++	if (ret) {
++		dev_err(dev, "Fail get owner of SECO resource\n");
++		goto exit;
++	}
++
++	ret = seco_mu_check_all_mu_supported(dev);
++	if (ret) {
++		dev_err(dev, "Fail seco_mu_check_all_mu_supported\n");
++		goto exit;
++	}
++
++	/* Initialize the mutex. */
++	mutex_init(&priv->mu_cmd_lock);
++	mutex_init(&priv->mu_lock);
++
++	priv->cmd_receiver_dev = NULL;
++	priv->waiting_rsp_dev = NULL;
++
++	ret = of_property_read_u32(np, "fsl,seco_mu_id", &priv->seco_mu_id);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read mu_id", __func__);
++		priv->seco_mu_id = SECO_DEFAULT_MU_INDEX;
++	}
++
++	ret = of_property_read_u32(np, "fsl,seco_max_users", &max_nb_users);
++	if (ret) {
++		dev_warn(dev, "%s: Not able to read mu_max_user", __func__);
++		max_nb_users = SECO_MU_DEFAULT_MAX_USERS;
++	}
++
++	ret = of_property_read_u8(np, "fsl,cmd_tag", &priv->cmd_tag);
++	if (ret)
++		priv->cmd_tag = DEFAULT_MESSAGING_TAG_COMMAND;
++
++	ret = of_property_read_u8(np, "fsl,rsp_tag", &priv->rsp_tag);
++	if (ret)
++		priv->rsp_tag = DEFAULT_MESSAGING_TAG_RESPONSE;
++
++	/* Mailbox client configuration */
++	priv->cl.dev = dev;
++	priv->cl.knows_txdone = true;
++	priv->cl.rx_callback = seco_mu_rx_callback;
++
++	ret = seco_mu_request_channel(dev, &priv->tx_chan, "txdb");
++	if (ret) {
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev, "Failed to request txdb channel\n");
++
++		goto exit;
++	}
++
++	ret = seco_mu_request_channel(dev, &priv->rx_chan, "rxdb");
++	if (ret) {
++		if (ret != -EPROBE_DEFER)
++			dev_err(dev, "Failed to request rxdb channel\n");
++
++		goto exit;
++	}
++
++	/* Create users */
++	for (i = 0; i < max_nb_users; i++) {
++		dev_ctx = devm_kzalloc(dev, sizeof(*dev_ctx), GFP_KERNEL);
++		if (!dev_ctx) {
++			ret = -ENOMEM;
++			dev_err(dev,
++				"Fail to allocate memory for device context\n");
++			goto exit;
++		}
++
++		dev_ctx->dev = dev;
++		dev_ctx->status = MU_FREE;
++		dev_ctx->mu_priv = priv;
++		/* Default value invalid for an header. */
++		init_waitqueue_head(&dev_ctx->wq);
++
++		INIT_LIST_HEAD(&dev_ctx->pending_out);
++		sema_init(&dev_ctx->fops_lock, 1);
++
++		devname = devm_kasprintf(dev, GFP_KERNEL, "seco_mu%d_ch%d",
++					 priv->seco_mu_id, i);
++		if (!devname) {
++			ret = -ENOMEM;
++			dev_err(dev,
++				"Fail to allocate memory for misc dev name\n");
++			goto exit;
++		}
++
++		dev_ctx->miscdev.name = devname;
++		dev_ctx->miscdev.minor	= MISC_DYNAMIC_MINOR;
++		dev_ctx->miscdev.fops = &seco_mu_fops;
++		dev_ctx->miscdev.parent = dev;
++		ret = misc_register(&dev_ctx->miscdev);
++		if (ret) {
++			dev_err(dev, "failed to register misc device %d\n",
++				ret);
++			goto exit;
++		}
++
++		ret = devm_add_action(dev, if_misc_deregister,
++				      &dev_ctx->miscdev);
++
++		dev_ctx->scu_notify.notifier_call = imx_sc_v2x_reset_notify;
++
++		ret = imx_scu_irq_register_notifier(&dev_ctx->scu_notify);
++		if (ret) {
++			dev_err(&pdev->dev, "v2x reqister scu notifier failed.\n");
++			return ret;
++		}
++
++		if (ret)
++			dev_warn(dev,
++				 "failed to add managed removal of miscdev\n");
++	}
++
++	ret = imx_scu_irq_group_enable(IMX_SC_IRQ_GROUP_WAKE,
++					IMX_SC_IRQ_V2X_RESET, true);
++	if (ret) {
++		dev_warn(&pdev->dev, "v2x Enable irq failed.\n");
++		return ret;
++	}
++
++exit:
++	return ret;
++}
++
++static const struct of_device_id seco_mu_match[] = {
++	{
++		.compatible = "fsl,imx-seco-mu",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, seco_mu_match);
++
++static struct platform_driver seco_mu_driver = {
++	.driver = {
++		.name = "seco_mu",
++		.of_match_table = seco_mu_match,
++	},
++	.probe       = seco_mu_probe,
++};
++
++module_platform_driver(seco_mu_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("IMX Seco MU");
++MODULE_AUTHOR("NXP");
+diff --git a/include/linux/firmware/imx/ele_mu_ioctl.h b/include/linux/firmware/imx/ele_mu_ioctl.h
+new file mode 100644
+index 000000000..74190d1f5
+--- /dev/null
++++ b/include/linux/firmware/imx/ele_mu_ioctl.h
+@@ -0,0 +1,51 @@
++/* SPDX-License-Identifier: (GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause*/
++/*
++ * Copyright 2019-2022 NXP
++ */
++
++#ifndef ELE_MU_IOCTL_H
++#define ELE_MU_IOCTL_H
++
++/* IOCTL definitions. */
++
++struct ele_mu_ioctl_setup_iobuf {
++	u8 *user_buf;
++	u32 length;
++	u32 flags;
++	u64 ele_addr;
++};
++
++struct ele_mu_ioctl_shared_mem_cfg {
++	u32 base_offset;
++	u32 size;
++};
++
++struct ele_mu_ioctl_get_mu_info {
++	u8 ele_mu_id;
++	u8 interrupt_idx;
++	u8 tz;
++	u8 did;
++};
++
++struct ele_mu_ioctl_signed_message {
++	u8 *message;
++	u32 msg_size;
++	u32 error_code;
++};
++
++#define ELE_MU_IO_FLAGS_IS_INTPUT		(0x01u)
++#define ELE_MU_IO_FLAGS_USE_SEC_MEM		(0x02u)
++#define ELE_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
++
++#define ELE_MU_IOCTL			0x0A /* like MISC_MAJOR. */
++#define ELE_MU_IOCTL_ENABLE_CMD_RCV	_IO(ELE_MU_IOCTL, 0x01)
++#define ELE_MU_IOCTL_SHARED_BUF_CFG	_IOW(ELE_MU_IOCTL, 0x02, \
++					struct ele_mu_ioctl_shared_mem_cfg)
++#define ELE_MU_IOCTL_SETUP_IOBUF	_IOWR(ELE_MU_IOCTL, 0x03, \
++					struct ele_mu_ioctl_setup_iobuf)
++#define ELE_MU_IOCTL_GET_MU_INFO	_IOR(ELE_MU_IOCTL, 0x04, \
++					struct ele_mu_ioctl_get_mu_info)
++#define ELE_MU_IOCTL_SIGNED_MESSAGE	_IOWR(ELE_MU_IOCTL, 0x05, \
++					struct ele_mu_ioctl_signed_message)
++
++#endif
+diff --git a/include/linux/firmware/imx/ipc.h b/include/linux/firmware/imx/ipc.h
+index 0b4643571..6e60322bc 100644
+--- a/include/linux/firmware/imx/ipc.h
++++ b/include/linux/firmware/imx/ipc.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: GPL-2.0+ */
+ /*
+- * Copyright 2018 NXP
++ * Copyright 2018,2020 NXP
+  *
+  * Header file for the IPC implementation.
+  */
+@@ -25,6 +25,8 @@ enum imx_sc_rpc_svc {
+ 	IMX_SC_RPC_SVC_PAD = 6,
+ 	IMX_SC_RPC_SVC_MISC = 7,
+ 	IMX_SC_RPC_SVC_IRQ = 8,
++	IMX_SC_RPC_SVC_SECO = 9,
++	IMX_SC_RPC_SVC_ABORT = 10,
+ };
+ 
+ struct imx_sc_rpc_msg {
+diff --git a/include/linux/firmware/imx/seco_mu_ioctl.h b/include/linux/firmware/imx/seco_mu_ioctl.h
+new file mode 100644
+index 000000000..bd8402b47
+--- /dev/null
++++ b/include/linux/firmware/imx/seco_mu_ioctl.h
+@@ -0,0 +1,50 @@
++/* SPDX-License-Identifier: (GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause*/
++/*
++ * Copyright 2019-2020 NXP
++ */
++
++#ifndef SECO_MU_IOCTL_H
++#define SECO_MU_IOCTL_H
++
++/* IOCTL definitions. */
++struct seco_mu_ioctl_setup_iobuf {
++	u8 *user_buf;
++	u32 length;
++	u32 flags;
++	u64 seco_addr;
++};
++
++struct seco_mu_ioctl_shared_mem_cfg {
++	u32 base_offset;
++	u32 size;
++};
++
++struct seco_mu_ioctl_get_mu_info {
++	u8 seco_mu_idx;
++	u8 interrupt_idx;
++	u8 tz;
++	u8 did;
++};
++
++struct seco_mu_ioctl_signed_message {
++	u8 *message;
++	u32 msg_size;
++	u32 error_code;
++};
++
++#define SECO_MU_IO_FLAGS_IS_INPUT	(0x01u)
++#define SECO_MU_IO_FLAGS_USE_SEC_MEM	(0x02u)
++#define SECO_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
++
++#define SECO_MU_IOCTL			0x0A /* like MISC_MAJOR. */
++#define SECO_MU_IOCTL_ENABLE_CMD_RCV	_IO(SECO_MU_IOCTL, 0x01)
++#define SECO_MU_IOCTL_SHARED_BUF_CFG	_IOW(SECO_MU_IOCTL, 0x02, \
++			struct seco_mu_ioctl_shared_mem_cfg)
++#define SECO_MU_IOCTL_SETUP_IOBUF	_IOWR(SECO_MU_IOCTL, 0x03, \
++			struct seco_mu_ioctl_setup_iobuf)
++#define SECO_MU_IOCTL_GET_MU_INFO	_IOR(SECO_MU_IOCTL, 0x04, \
++			struct seco_mu_ioctl_get_mu_info)
++#define SECO_MU_IOCTL_SIGNED_MESSAGE	_IOWR(SECO_MU_IOCTL, 0x05, \
++			struct seco_mu_ioctl_signed_message)
++
++#endif
+diff --git a/include/linux/firmware/imx/svc/misc.h b/include/linux/firmware/imx/svc/misc.h
+index 760db08a6..8fb0fe2df 100644
+--- a/include/linux/firmware/imx/svc/misc.h
++++ b/include/linux/firmware/imx/svc/misc.h
+@@ -50,6 +50,9 @@ enum imx_misc_func {
+ int imx_sc_misc_set_control(struct imx_sc_ipc *ipc, u32 resource,
+ 			    u8 ctrl, u32 val);
+ 
++int imx_sc_misc_set_dma_group(struct imx_sc_ipc *ipc, u32 resource,
++			    u32 val);
++
+ int imx_sc_misc_get_control(struct imx_sc_ipc *ipc, u32 resource,
+ 			    u8 ctrl, u32 *val);
+ 
+@@ -67,6 +70,12 @@ static inline int imx_sc_misc_get_control(struct imx_sc_ipc *ipc,
+ {
+ 	return -ENOTSUPP;
+ }
++static inline int
++imx_sc_misc_set_dma_group(struct imx_sc_ipc *ipc, u32 resource,
++			    u32 val)
++{
++	return -EIO;
++}
+ 
+ static inline int imx_sc_pm_cpu_start(struct imx_sc_ipc *ipc, u32 resource,
+ 				      bool enable, u64 phys_addr)
+diff --git a/include/linux/firmware/imx/svc/rm.h b/include/linux/firmware/imx/svc/rm.h
+index 456b6a59d..64aabcba8 100644
+--- a/include/linux/firmware/imx/svc/rm.h
++++ b/include/linux/firmware/imx/svc/rm.h
+@@ -59,11 +59,50 @@ enum imx_sc_rm_func {
+ 
+ #if IS_ENABLED(CONFIG_IMX_SCU)
+ bool imx_sc_rm_is_resource_owned(struct imx_sc_ipc *ipc, u16 resource);
++int imx_sc_rm_get_partition(struct imx_sc_ipc *ipc, u8 *pt);
++int imx_sc_rm_find_memreg(struct imx_sc_ipc *ipc, u8 *mr, u64 addr_start,
++			  u64 addr_end);
++int imx_sc_rm_get_resource_owner(struct imx_sc_ipc *ipc, u16 resource, u8 *pt);
++int imx_sc_rm_set_memreg_permissions(struct imx_sc_ipc *ipc, u8 mr,
++				     u8 pt, u8 perm);
++int imx_sc_rm_get_did(struct imx_sc_ipc *ipc, u8 *did);
+ #else
+ static inline bool
+ imx_sc_rm_is_resource_owned(struct imx_sc_ipc *ipc, u16 resource)
+ {
+ 	return true;
+ }
++
++static inline int imx_sc_rm_get_partition(struct imx_sc_ipc *ipc, u8 *pt)
++{
++	return -ENOENT;
++}
++
++static inline
++int imx_sc_rm_find_memreg(struct imx_sc_ipc *ipc, u8 *mr, u64 addr_start,
++			  u64 addr_end)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_rm_get_resource_owner(struct imx_sc_ipc *ipc, u16 resource, u8 *pt)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_rm_set_memreg_permissions(struct imx_sc_ipc *ipc, u8 mr,
++				     u8 pt, u8 perm)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline
++int imx_sc_rm_get_did(struct imx_sc_ipc *ipc, u8 *did)
++{
++	return -EOPNOTSUPP;
++}
+ #endif
++
+ #endif
+-- 
+2.25.1
+

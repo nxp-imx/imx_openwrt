@@ -1,0 +1,49 @@
+From df7a74e6c33affb83ceb7d6f062d2f50a2454e96 Mon Sep 17 00:00:00 2001
+From: Laurentiu Palcu <laurentiu.palcu@oss.nxp.com>
+Date: Thu, 16 Jun 2022 11:27:16 +0000
+Subject: [PATCH 165/274] MLK-25952: drm/imx/mhdp: fix random SError when
+ running modetest on 8QM
+
+When running the following test on an 8QM using HDMI:
+
+systemctl stop weston; dmesg -n 1; while true; do (sleep 5; echo) |
+modetest -M imx-drm -s 148:1024x768-60.00@XR24; sleep 2; done
+
+the following synchronous external abort will be randomly thrown,
+resulting in the board freezing up:
+---
+ drivers/gpu/drm/imx/mhdp/cdns-mhdp-imx8qm.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/imx/mhdp/cdns-mhdp-imx8qm.c b/drivers/gpu/drm/imx/mhdp/cdns-mhdp-imx8qm.c
+index 2689e9eee..4fca888c3 100644
+--- a/drivers/gpu/drm/imx/mhdp/cdns-mhdp-imx8qm.c
++++ b/drivers/gpu/drm/imx/mhdp/cdns-mhdp-imx8qm.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright 2019-2021 NXP
++ * Copyright 2019-2022 NXP
+  *
+  * this program is free software; you can redistribute it and/or modify
+  * it under the terms of the gnu general public license version 2 as
+@@ -512,6 +512,8 @@ void cdns_mhdp_pclk_rate_imx8qm(struct cdns_mhdp_device *mhdp)
+ 	struct imx_mhdp_device *imx_mhdp =
+ 				container_of(mhdp, struct imx_mhdp_device, mhdp);
+ 
++	mutex_lock(&mhdp->iolock);
++
+ 	/* set pixel clock before video mode setup */
+ 	imx8qm_pixel_clk_disable(imx_mhdp);
+ 
+@@ -519,6 +521,8 @@ void cdns_mhdp_pclk_rate_imx8qm(struct cdns_mhdp_device *mhdp)
+ 
+ 	imx8qm_pixel_clk_enable(imx_mhdp);
+ 
++	mutex_unlock(&mhdp->iolock);
++
+ 	/* Config pixel link mux */
+ 	imx8qm_pixel_link_mux(imx_mhdp);
+ }
+-- 
+2.25.1
+

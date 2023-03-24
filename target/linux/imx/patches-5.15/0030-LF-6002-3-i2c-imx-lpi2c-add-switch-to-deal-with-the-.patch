@@ -1,0 +1,91 @@
+From b0994e6de7e98fb0cd81494cb8a7d0a5a1fc3b3e Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Fri, 6 May 2022 18:25:34 +0800
+Subject: [PATCH 030/274] LF-6002-3 i2c: imx-lpi2c: add switch to deal with the
+ result of dma xfer
+
+There is a special case that can cause problems.
+When the message num that needs to be sent by DMA in an I2C message queue
+is greater than 1, the previous code will cause only one message to be
+sent and then the sending will be ended.
+
+Add a switch to handle the result of dma xfer.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ drivers/i2c/busses/i2c-imx-lpi2c.c | 43 +++++++++++++++++++-----------
+ 1 file changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-imx-lpi2c.c b/drivers/i2c/busses/i2c-imx-lpi2c.c
+index 340dee3d3..8dee0bd82 100644
+--- a/drivers/i2c/busses/i2c-imx-lpi2c.c
++++ b/drivers/i2c/busses/i2c-imx-lpi2c.c
+@@ -621,11 +621,6 @@ static int lpi2c_dma_xfer(struct lpi2c_imx_struct *lpi2c_imx,
+ 		return result;
+ 	}
+ 
+-	/* DMA xfer failed, try to use PIO, clean up dma things */
+-	i2c_put_dma_safe_msg_buf(lpi2c_imx->dma_buf, lpi2c_imx->msg,
+-				 lpi2c_imx->xferred);
+-	lpi2c_cleanup_dma(lpi2c_imx);
+-
+ 	return I2C_USE_PIO;
+ }
+ 
+@@ -667,9 +662,32 @@ static int lpi2c_imx_xfer(struct i2c_adapter *adapter,
+ 
+ 				/* Disable I2C DMA function */
+ 				writel(0, lpi2c_imx->base + LPI2C_MDER);
+-
+-				if (result != I2C_USE_PIO)
+-					goto stop;
++				i2c_put_dma_safe_msg_buf(lpi2c_imx->dma_buf,
++							 lpi2c_imx->msg,
++							 lpi2c_imx->xferred);
++
++				switch (result) {
++				/* transfer success */
++				case 0:
++					if (!(msgs[i].flags & I2C_M_RD)) {
++						result = lpi2c_imx_txfifo_empty(lpi2c_imx);
++						if (result)
++							goto stop;
++					}
++					continue;
++				/* transfer failed, use pio */
++				case I2C_USE_PIO:
++					lpi2c_cleanup_dma(lpi2c_imx);
++					break;
++				/*
++				 * transfer failed, cannot use pio.
++				 * Send stop, and then return error.
++				 */
++				default:
++					lpi2c_cleanup_dma(lpi2c_imx);
++					writel(GEN_STOP << 8, lpi2c_imx->base + LPI2C_MTDR);
++					goto check_ndf;
++				}
+ 			}
+ 		}
+ 
+@@ -697,15 +715,8 @@ static int lpi2c_imx_xfer(struct i2c_adapter *adapter,
+ stop:
+ 	if (!lpi2c_imx->using_dma)
+ 		lpi2c_imx_stop(lpi2c_imx);
+-	else {
+-		i2c_put_dma_safe_msg_buf(lpi2c_imx->dma_buf, lpi2c_imx->msg,
+-					 lpi2c_imx->xferred);
+-		if (result) {
+-			lpi2c_cleanup_dma(lpi2c_imx);
+-			writel(GEN_STOP << 8, lpi2c_imx->base + LPI2C_MTDR);
+-		}
+-	}
+ 
++check_ndf:
+ 	temp = readl(lpi2c_imx->base + LPI2C_MSR);
+ 	if ((temp & MSR_NDF) && !result)
+ 		result = -EIO;
+-- 
+2.25.1
+

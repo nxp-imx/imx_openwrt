@@ -1,0 +1,60 @@
+From cf4d6fab0c311f74837035896e6b95f59d663fa3 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 12:48:29 +0800
+Subject: [PATCH 113/274] LF-6257-02: arm64: dtsi: add ISI device node for
+ iMX93 platform
+
+Add ISI device node for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 25 ++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index fe52c2558..d45296b18 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -42,6 +42,7 @@ aliases {
+ 		serial5 = &lpuart6;
+ 		serial6 = &lpuart7;
+ 		serial7 = &lpuart8;
++		isi0 = &isi_0;
+ 	};
+ 
+ 	cpus {
+@@ -878,6 +879,30 @@ cameradev: camera {
+ 				#size-cells = <1>;
+ 				ranges;
+ 				status = "disabled";
++
++				isi_0: isi@4ae40000{
++					compatible = "fsl,imx93-isi", "fsl,imx8-isi";
++					reg = <0x4ae40000 0x10000>;
++					interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_HIGH>;
++					clocks = <&clk IMX93_CLK_ISI_GATE>,
++						 <&clk IMX93_CLK_MEDIA_AXI>;
++					clock-names = "per", "axi";
++					assigned-clocks = <&clk IMX93_CLK_MEDIA_AXI>,
++							  <&clk IMX93_CLK_MEDIA_APB>;
++					assigned-clock-parents = <&clk IMX93_CLK_SYS_PLL_PFD1>,
++								 <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>;
++					assigned-clock-rates = <400000000>, <133333333>;
++					interface = <2 0 2>;
++					no-reset-control;
++					power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_ISI>;
++					gasket = <&media_blk_ctrl>;
++					status = "disabled";
++
++					cap_device {
++						compatible = "imx-isi-capture";
++						status = "disabled";
++					};
++				};
+ 			};
+ 		};
+ 
+-- 
+2.25.1
+

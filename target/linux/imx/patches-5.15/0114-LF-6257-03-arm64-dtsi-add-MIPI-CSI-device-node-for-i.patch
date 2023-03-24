@@ -1,0 +1,54 @@
+From f4bdbaaf686f7995b4fba12b362c565bc2f67efb Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 12:50:55 +0800
+Subject: [PATCH 114/274] LF-6257-03: arm64: dtsi: add MIPI CSI device node for
+ iMX93 platform
+
+Add Synopsys DWC MIPI CSI device node for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index d45296b18..514b1ab9c 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -43,6 +43,7 @@ aliases {
+ 		serial6 = &lpuart7;
+ 		serial7 = &lpuart8;
+ 		isi0 = &isi_0;
++		csi0 = &mipi_csi;
+ 	};
+ 
+ 	cpus {
+@@ -903,6 +904,24 @@ cap_device {
+ 						status = "disabled";
+ 					};
+ 				};
++
++				mipi_csi: csi@4ae00000 {
++					compatible = "fsl,dwc-mipi-csi2-host";
++					reg = <0x4ae00000 0x10000>;
++					interrupts = <GIC_SPI 175 IRQ_TYPE_LEVEL_HIGH>;
++					clocks = <&clk IMX93_CLK_MIPI_CSI_GATE>,
++						 <&clk IMX93_CLK_CAM_PIX>,
++						 <&clk IMX93_CLK_MIPI_PHY_CFG>;
++					clock-names = "clk_core", "clk_pixel", "phy_cfg";
++					assigned-clocks = <&clk IMX93_CLK_CAM_PIX>,
++							  <&clk IMX93_CLK_MIPI_PHY_CFG>;
++					assigned-clock-parents = <&clk IMX93_CLK_VIDEO_PLL>,
++								 <&clk IMX93_CLK_24M>;
++					assigned-clock-rates = <140000000>, <24000000>;
++					gasket = <&media_blk_ctrl>;
++					power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_MIPI_CSI>;
++					status = "disabled";
++				};
+ 			};
+ 		};
+ 
+-- 
+2.25.1
+

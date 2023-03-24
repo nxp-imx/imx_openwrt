@@ -1,0 +1,28 @@
+From 724a94334cd8a87d02d24c633e6c664768b5bb6e Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Tue, 31 May 2022 17:24:33 +0800
+Subject: [PATCH 110/274] LF-6244-05: arm64: dts: enable PXP for iMX93 platform
+
+Enable PXP for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 7392eb2df..c483e9d7d 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -588,3 +588,7 @@ MX93_PAD_CCM_CLKO1__GPIO3_IO26			0x31e
+ 		>;
+ 	};
+ };
++
++&epxp {
++	status = "okay";
++};
+-- 
+2.25.1
+

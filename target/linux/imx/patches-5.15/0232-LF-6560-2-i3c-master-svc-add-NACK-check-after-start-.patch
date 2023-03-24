@@ -1,0 +1,43 @@
+From 4906db051d90eb6571c1546a2d5ea1871ce07454 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Tue, 12 Jul 2022 11:50:59 +0800
+Subject: [PATCH 232/274] LF-6560-2 i3c: master: svc: add NACK check after
+ start byte sent
+
+Add NACK check after start byte is sent.
+It is possible to detect early that a device is not on the bus
+and avoid invalid transmissions thereafter.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ drivers/i3c/master/svc-i3c-master.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/i3c/master/svc-i3c-master.c b/drivers/i3c/master/svc-i3c-master.c
+index 696eeec5b..4011fae20 100644
+--- a/drivers/i3c/master/svc-i3c-master.c
++++ b/drivers/i3c/master/svc-i3c-master.c
+@@ -92,6 +92,7 @@
+ #define SVC_I3C_MINTCLR      0x094
+ #define SVC_I3C_MINTMASKED   0x098
+ #define SVC_I3C_MERRWARN     0x09C
++#define   SVC_I3C_MERRWARN_NACK BIT(2)
+ #define SVC_I3C_MDMACTRL     0x0A0
+ #define SVC_I3C_MDATACTRL    0x0AC
+ #define   SVC_I3C_MDATACTRL_FLUSHTB BIT(0)
+@@ -1014,6 +1015,11 @@ static int svc_i3c_master_xfer(struct svc_i3c_master *master,
+ 	if (ret)
+ 		goto emit_stop;
+ 
++	if (readl(master->regs + SVC_I3C_MERRWARN) & SVC_I3C_MERRWARN_NACK) {
++		ret = -ENXIO;
++		goto emit_stop;
++	}
++
+ 	if (rnw)
+ 		ret = svc_i3c_master_read(master, in, xfer_len);
+ 	else
+-- 
+2.25.1
+

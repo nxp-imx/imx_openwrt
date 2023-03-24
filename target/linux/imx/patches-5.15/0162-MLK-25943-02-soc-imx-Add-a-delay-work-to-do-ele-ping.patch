@@ -1,0 +1,76 @@
+From c072c8c356a82581406050720c0de35054a94d30 Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Mon, 13 Jun 2022 15:35:39 +0800
+Subject: [PATCH 162/274] MLK-25943-02 soc: imx: Add a delay work to do ele
+ ping periodically
+
+The ELE Ping message can be sent to ELE at any time to
+verify ELE is alive This ping msg must be sent at least once
+every day (24 hours). So add a delay work with 1 hour interval
+for this purpose.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Reviewed-by: Pankaj Gupta <pankaj.gupta@nxp.com>
+---
+ drivers/soc/imx/soc-imx9.c | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/soc/imx/soc-imx9.c b/drivers/soc/imx/soc-imx9.c
+index 79b3ceb64..0a3f4ba22 100644
+--- a/drivers/soc/imx/soc-imx9.c
++++ b/drivers/soc/imx/soc-imx9.c
+@@ -3,6 +3,7 @@
+  * Copyright 2022 NXP
+  */
+ 
++#include <linux/firmware/imx/ele_base_msg.h>
+ #include <linux/module.h>
+ #include <linux/nvmem-consumer.h>
+ #include <linux/kernel.h>
+@@ -11,12 +12,29 @@
+ #include <linux/platform_device.h>
+ #include <linux/slab.h>
+ #include <linux/sys_soc.h>
++#include <linux/workqueue.h>
+ 
+ #define DEVICE_ID		0x800
+ #define DIGPROG_MAJOR_UPPER(x)	(((x) & 0x00f00000) >> 20)
+ #define DIGPROG_MAJOR_LOWER(x)	(((x) & 0x0000f000) >> 12)
+ #define BASE_LAYER_REV(x)	(((x) & 0x000000f0) >> 4)
+ 
++#define ELE_PING_INTERVAL	(3600 * HZ)
++
++static void ele_ping_handler(struct work_struct *work)
++{
++	int ret;
++
++	ret = ele_ping();
++	if (ret)
++		pr_err("ping ele failed, try again!\n");
++
++	/* reschedule the delay work */
++	schedule_delayed_work(to_delayed_work(work), ELE_PING_INTERVAL);
++}
++
++static DECLARE_DELAYED_WORK(ele_ping_work, ele_ping_handler);
++
+ static int imx9_soc_device_register(struct device *dev)
+ {
+ 	struct soc_device_attribute *attr;
+@@ -99,7 +117,11 @@ static int imx9_init_soc_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
+-        return ret;
++	/*
++	 * A ELE ping request must be send at least once every day(24 hours),
++	 * so setup a delay work with 1 hour interval to ping sentinel periodically.
++	 */
++	return schedule_delayed_work(&ele_ping_work, ELE_PING_INTERVAL);
+ }
+ 
+ static const struct of_device_id imx9_soc_of_match[] = {
+-- 
+2.25.1
+

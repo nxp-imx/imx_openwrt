@@ -1,0 +1,99 @@
+From f468aef7e2b24320fb29971cc8e776e02d188aa1 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Thu, 10 Mar 2022 07:38:56 +0100
+Subject: [PATCH 203/274] media: amphion: fix an issue that using
+ pm_runtime_get_sync incorrectly
+
+pm_runtime_get_sync() also returns 1 on success.
+The documentation for pm_runtime_get_sync() suggests using
+pm_runtime_resume_and_get() instead
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_core.c | 8 ++++----
+ drivers/media/platform/amphion/vpu_dbg.c  | 2 +-
+ drivers/media/platform/amphion/vpu_drv.c  | 6 ------
+ 3 files changed, 5 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_core.c b/drivers/media/platform/amphion/vpu_core.c
+index 1da20335b..24a5a4d5a 100644
+--- a/drivers/media/platform/amphion/vpu_core.c
++++ b/drivers/media/platform/amphion/vpu_core.c
+@@ -359,7 +359,7 @@ struct vpu_core *vpu_request_core(struct vpu_dev *vpu, enum vpu_core_type type)
+ 		goto exit;
+ 
+ 	mutex_lock(&core->lock);
+-	pm_runtime_get_sync(core->dev);
++	pm_runtime_resume_and_get(core->dev);
+ 
+ 	if (core->state == VPU_CORE_DEINIT) {
+ 		ret = vpu_core_boot(core, true);
+@@ -658,7 +658,7 @@ static int vpu_core_probe(struct platform_device *pdev)
+ 	vpu_iface_set_log_buf(core, &core->log);
+ 
+ 	pm_runtime_enable(dev);
+-	ret = pm_runtime_get_sync(dev);
++	ret = pm_runtime_resume_and_get(dev);
+ 	if (ret) {
+ 		pm_runtime_put_noidle(dev);
+ 		pm_runtime_set_suspended(dev);
+@@ -690,7 +690,7 @@ static int vpu_core_remove(struct platform_device *pdev)
+ 	int ret;
+ 
+ 	vpu_core_remove_dbgfs_file(core);
+-	ret = pm_runtime_get_sync(dev);
++	ret = pm_runtime_resume_and_get(dev);
+ 	WARN_ON(ret < 0);
+ 
+ 	vpu_core_shutdown(core);
+@@ -754,7 +754,7 @@ static int __maybe_unused vpu_core_resume(struct device *dev)
+ 	int ret = 0;
+ 
+ 	mutex_lock(&core->lock);
+-	pm_runtime_get_sync(dev);
++	pm_runtime_resume_and_get(dev);
+ 	vpu_core_get_vpu(core);
+ 	if (core->state != VPU_CORE_SNAPSHOT)
+ 		goto exit;
+diff --git a/drivers/media/platform/amphion/vpu_dbg.c b/drivers/media/platform/amphion/vpu_dbg.c
+index 3c12320e1..376196bea 100644
+--- a/drivers/media/platform/amphion/vpu_dbg.c
++++ b/drivers/media/platform/amphion/vpu_dbg.c
+@@ -344,7 +344,7 @@ static ssize_t vpu_dbg_core_write(struct file *file,
+ 	struct seq_file *s = file->private_data;
+ 	struct vpu_core *core = s->private;
+ 
+-	pm_runtime_get_sync(core->dev);
++	pm_runtime_resume_and_get(core->dev);
+ 	mutex_lock(&core->lock);
+ 	if (core->state != VPU_CORE_DEINIT && !core->instance_mask) {
+ 		dev_info(core->dev, "reset\n");
+diff --git a/drivers/media/platform/amphion/vpu_drv.c b/drivers/media/platform/amphion/vpu_drv.c
+index 834ec3964..f19f823d4 100644
+--- a/drivers/media/platform/amphion/vpu_drv.c
++++ b/drivers/media/platform/amphion/vpu_drv.c
+@@ -118,11 +118,6 @@ static int vpu_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 
+ 	pm_runtime_enable(dev);
+-	ret = pm_runtime_get_sync(dev);
+-	if (ret)
+-		goto err_runtime_disable;
+-
+-	pm_runtime_put_sync(dev);
+ 
+ 	ret = v4l2_device_register(dev, &vpu->v4l2_dev);
+ 	if (ret)
+@@ -149,7 +144,6 @@ static int vpu_probe(struct platform_device *pdev)
+ 	vpu_remove_func(&vpu->decoder);
+ 	v4l2_device_unregister(&vpu->v4l2_dev);
+ err_vpu_deinit:
+-err_runtime_disable:
+ 	pm_runtime_set_suspended(dev);
+ 	pm_runtime_disable(dev);
+ 
+-- 
+2.25.1
+

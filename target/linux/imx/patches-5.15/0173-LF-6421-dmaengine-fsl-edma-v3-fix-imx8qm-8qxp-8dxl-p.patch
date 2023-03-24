@@ -1,0 +1,44 @@
+From e53d91dee4c61ffc4abeefe5c60d2cd6807ba108 Mon Sep 17 00:00:00 2001
+From: Joy Zou <joy.zou@nxp.com>
+Date: Fri, 24 Jun 2022 15:21:05 +0800
+Subject: [PATCH 173/274] LF-6421: dmaengine: fsl-edma-v3: fix imx8qm/8qxp/8dxl
+ probe fail
+
+The imx8qm/8qxp/8dxl don't have mp and channel clock. it causes probe
+fail when use devm_clk_get API to get clock.
+
+Modify the has_chclk from true to false, and use devm_clk_get to
+replace devm_clk_get_optional for dmaclk.
+
+Signed-off-by: Joy Zou <joy.zou@nxp.com>
+Acked-by: Peng Fan <peng.fan@nxp.com>
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+---
+ drivers/dma/fsl-edma-v3.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dma/fsl-edma-v3.c b/drivers/dma/fsl-edma-v3.c
+index f5f400908..8c8dddbd5 100644
+--- a/drivers/dma/fsl-edma-v3.c
++++ b/drivers/dma/fsl-edma-v3.c
+@@ -217,7 +217,7 @@ struct fsl_edma3_engine {
+ static struct fsl_edma3_drvdata fsl_edma_imx8q = {
+ 	.has_pd = true,
+ 	.dmamuxs = 0,
+-	.has_chclk = true,
++	.has_chclk = false,
+ 	.has_chmux = true,
+ };
+ 
+@@ -1140,7 +1140,7 @@ static int fsl_edma3_probe(struct platform_device *pdev)
+ 		}
+ 		clk_prepare_enable(fsl_edma3->clk_mp);
+ 	} else {
+-		fsl_edma3->dmaclk = devm_clk_get(&pdev->dev, "edma");
++		fsl_edma3->dmaclk = devm_clk_get_optional(&pdev->dev, "edma");
+ 		if (IS_ERR(fsl_edma3->dmaclk)) {
+ 			dev_err(&pdev->dev, "Missing DMA block clock.\n");
+ 			return PTR_ERR(fsl_edma3->dmaclk);
+-- 
+2.25.1
+

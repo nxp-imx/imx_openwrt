@@ -1,0 +1,31 @@
+From 19b626ace9cf5579669646c0fcd3dcc0499f7d1b Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Thu, 23 Jun 2022 14:51:52 +0800
+Subject: [PATCH 170/274] MLK-25964 clk: imx: Add 300MHz freq support for imx9
+ pll
+
+Add 300MHz frequency config support on i.MX93 PLL.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Ye Li <ye.li@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index a2aaa14fc..352b8c542 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -71,7 +71,8 @@ static const struct imx_fracn_gppll_rate_table fracn_tbl[] = {
+ 	PLL_FRACN_GP(484000000U, 121, 0, 1, 0, 6),
+ 	PLL_FRACN_GP(445333333U, 167, 0, 1, 0, 9),
+ 	PLL_FRACN_GP(400000000U, 50, 0, 1, 0, 3),
+-	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5)
++	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5),
++	PLL_FRACN_GP(300000000U, 150, 0, 1, 0, 12)
+ };
+ 
+ struct imx_fracn_gppll_clk imx_fracn_gppll = {
+-- 
+2.25.1
+

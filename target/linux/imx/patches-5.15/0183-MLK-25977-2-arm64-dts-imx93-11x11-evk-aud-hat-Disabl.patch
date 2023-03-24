@@ -1,0 +1,31 @@
+From b8f05dcdfe069eb6143f0f400b8624e35a13177d Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Mon, 11 Jul 2022 15:01:08 +0800
+Subject: [PATCH 183/274] MLK-25977-2: arm64: dts: imx93-11x11-evk-aud-hat:
+ Disable wm8962 sound card
+
+To use cs42448 sound card on audio-hat board, wm8962 sound card
+should be disabled.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk-aud-hat.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-aud-hat.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-aud-hat.dts
+index 0fe19b4e6..ca72b5b87 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-aud-hat.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-aud-hat.dts
+@@ -111,7 +111,7 @@ reg_audio_pwr: regulator-audio-pwr {
+ 		regulator-always-on;
+ 	};
+ 
+-	sound-wm8960 {
++	sound-wm8962 {
+ 		status = "disabled";
+ 	};
+ 
+-- 
+2.25.1
+

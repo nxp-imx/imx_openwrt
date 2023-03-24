@@ -1,0 +1,72 @@
+From 8c36e60c8ab2edcff957b26f3fa897a8aa53971b Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Wed, 29 Jun 2022 10:33:51 +0800
+Subject: [PATCH 247/274] LF-6513: media: isi: add V4L2_PIX_FMT_NV12M new
+ format support
+
+Add V4L2_PIX_FMT_NV12M new format support
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ drivers/staging/media/imx/imx8-isi-cap.c | 9 ++++++---
+ drivers/staging/media/imx/imx8-isi-fmt.c | 9 +++++++++
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/staging/media/imx/imx8-isi-cap.c b/drivers/staging/media/imx/imx8-isi-cap.c
+index 880f0023f..abbc9faec 100644
+--- a/drivers/staging/media/imx/imx8-isi-cap.c
++++ b/drivers/staging/media/imx/imx8-isi-cap.c
+@@ -278,7 +278,8 @@ static int cap_vb2_queue_setup(struct vb2_queue *q,
+ 	for (i = 0; i < fmt->memplanes; i++) {
+ 		unsigned int size = (wh * fmt->depth[i]) / 8;
+ 
+-		if (i == 1 && fmt->fourcc == V4L2_PIX_FMT_NV12)
++		if (i == 1 && (fmt->fourcc == V4L2_PIX_FMT_NV12 ||
++			       fmt->fourcc == V4L2_PIX_FMT_NV12M))
+ 			size >>= 1;
+ 		sizes[i] = max_t(u32, size, dst_f->sizeimage[i]);
+ 	}
+@@ -903,7 +904,8 @@ static int mxc_isi_cap_try_fmt_mplane(struct file *file, void *fh,
+ 					(pix->width * fmt->depth[i]) >> 3;
+ 
+ 		if (pix->plane_fmt[i].sizeimage == 0) {
+-			if ((i == 1) && (pix->pixelformat == V4L2_PIX_FMT_NV12))
++			if ((i == 1) && (pix->pixelformat == V4L2_PIX_FMT_NV12 ||
++					 pix->pixelformat == V4L2_PIX_FMT_NV12M))
+ 				pix->plane_fmt[i].sizeimage =
+ 				  (pix->width * (pix->height >> 1) * fmt->depth[i] >> 3);
+ 			else
+@@ -1025,7 +1027,8 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
+ 					(pix->width * fmt->depth[i]) >> 3;
+ 
+ 		if (pix->plane_fmt[i].sizeimage == 0) {
+-			if ((i == 1) && (pix->pixelformat == V4L2_PIX_FMT_NV12))
++			if ((i == 1) && (pix->pixelformat == V4L2_PIX_FMT_NV12 ||
++					 pix->pixelformat == V4L2_PIX_FMT_NV12M))
+ 				pix->plane_fmt[i].sizeimage =
+ 				  (pix->width * (pix->height >> 1) * fmt->depth[i] >> 3);
+ 			else
+diff --git a/drivers/staging/media/imx/imx8-isi-fmt.c b/drivers/staging/media/imx/imx8-isi-fmt.c
+index fa26e5a2a..812e5531e 100644
+--- a/drivers/staging/media/imx/imx8-isi-fmt.c
++++ b/drivers/staging/media/imx/imx8-isi-fmt.c
+@@ -61,6 +61,15 @@ struct mxc_isi_fmt mxc_isi_out_formats[] = {
+ 		.colplanes	= 2,
+ 		.align		= 4,
+ 		.mbus_code	= MEDIA_BUS_FMT_YUYV8_1X16,
++	}, {
++		.name		= "NV12M (YUYV)",
++		.fourcc		= V4L2_PIX_FMT_NV12M,
++		.depth		= { 8, 8 },
++		.color		= MXC_ISI_OUT_FMT_YUV420_2P8P,
++		.memplanes	= 2,
++		.colplanes	= 2,
++		.align		= 4,
++		.mbus_code	= MEDIA_BUS_FMT_YUYV8_1X16,
+ 	}, {
+ 		.name		= "YUV444M (Y-U-V)",
+ 		.fourcc		= V4L2_PIX_FMT_YUV444M,
+-- 
+2.25.1
+

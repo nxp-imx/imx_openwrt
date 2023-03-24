@@ -1,0 +1,178 @@
+From b0c7f2b403e3c4a5e6afef53c6225b02096d6967 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 27 Sep 2022 16:55:26 +0800
+Subject: [PATCH 021/274] MLK-25903-1 driver: soc: imx9: add i.MX93 SoC device
+ register function
+
+Adding i.MX93 SoC device register function providers revision,
+serial_number and soc_id for other drivers to use.
+
+Reviewed-by: Ye Li <ye.li@nxp.com>
+Signed-off-by: Alice Guo <alice.guo@nxp.com>
+---
+ drivers/soc/imx/Kconfig    |  11 ++++
+ drivers/soc/imx/Makefile   |   1 +
+ drivers/soc/imx/soc-imx9.c | 122 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 134 insertions(+)
+ create mode 100644 drivers/soc/imx/soc-imx9.c
+
+diff --git a/drivers/soc/imx/Kconfig b/drivers/soc/imx/Kconfig
+index 05812f8ae..c549d2310 100644
+--- a/drivers/soc/imx/Kconfig
++++ b/drivers/soc/imx/Kconfig
+@@ -19,4 +19,15 @@ config SOC_IMX8M
+ 	  support, it will provide the SoC info like SoC family,
+ 	  ID and revision etc.
+ 
++config SOC_IMX9
++	tristate "i.MX9 SoC family support"
++	depends on ARCH_MXC || COMPILE_TEST
++	default ARCH_MXC && ARM64
++	select SOC_BUS
++	select ARM_GIC_V3 if ARCH_MXC && ARCH_MULTI_V7
++	help
++	  If you say yes here you get support for the NXP i.MX9 family
++	  support, it will provide the SoC info like SoC family,
++	  ID and revision etc.
++
+ endmenu
+diff --git a/drivers/soc/imx/Makefile b/drivers/soc/imx/Makefile
+index 078dc918f..255f60de9 100644
+--- a/drivers/soc/imx/Makefile
++++ b/drivers/soc/imx/Makefile
+@@ -5,3 +5,4 @@ endif
+ obj-$(CONFIG_HAVE_IMX_GPC) += gpc.o
+ obj-$(CONFIG_IMX_GPCV2_PM_DOMAINS) += gpcv2.o
+ obj-$(CONFIG_SOC_IMX8M) += soc-imx8m.o
++obj-$(CONFIG_SOC_IMX9) += soc-imx9.o
+diff --git a/drivers/soc/imx/soc-imx9.c b/drivers/soc/imx/soc-imx9.c
+new file mode 100644
+index 000000000..79b3ceb64
+--- /dev/null
++++ b/drivers/soc/imx/soc-imx9.c
+@@ -0,0 +1,122 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2022 NXP
++ */
++
++#include <linux/module.h>
++#include <linux/nvmem-consumer.h>
++#include <linux/kernel.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/sys_soc.h>
++
++#define DEVICE_ID		0x800
++#define DIGPROG_MAJOR_UPPER(x)	(((x) & 0x00f00000) >> 20)
++#define DIGPROG_MAJOR_LOWER(x)	(((x) & 0x0000f000) >> 12)
++#define BASE_LAYER_REV(x)	(((x) & 0x000000f0) >> 4)
++
++static int imx9_soc_device_register(struct device *dev)
++{
++	struct soc_device_attribute *attr;
++	struct device_node *anaosc_np;
++	struct soc_device *sdev;
++	void __iomem *anaosc;
++	u32 device_id;
++	u64 v;
++	int err;
++
++	attr = kzalloc(sizeof(*attr), GFP_KERNEL);
++	if (!attr)
++		return -ENOMEM;
++
++	err = of_property_read_string(of_root, "model", &attr->machine);
++	if (err) {
++		err = -EINVAL;
++		goto attr;
++	}
++
++	attr->family = kasprintf(GFP_KERNEL, "Freescale i.MX");
++
++	anaosc_np = of_find_compatible_node(NULL, NULL, "fsl,imx93-anatop");
++	if (!anaosc_np) {
++		err = -ENOENT;
++		goto family;
++	}
++	anaosc = of_iomap(anaosc_np, 0);
++	WARN_ON(!anaosc);
++
++	device_id = readl(anaosc + DEVICE_ID);
++
++	iounmap(anaosc);
++	of_node_put(anaosc_np);
++
++	if (BASE_LAYER_REV(device_id) == 0x1) {
++		attr->revision = kasprintf(GFP_KERNEL, "1.0");
++	} else {
++		attr->revision = kasprintf(GFP_KERNEL, "unknown" );
++	}
++
++	err = nvmem_cell_read_u64(dev, "soc_unique_id", &v);
++	if (err)
++		goto revision;
++	attr->serial_number = kasprintf(GFP_KERNEL, "%016llX", v);
++
++	if (DIGPROG_MAJOR_UPPER(device_id) == 0x9 && DIGPROG_MAJOR_LOWER(device_id) == 0x2) {
++		attr->soc_id = kasprintf(GFP_KERNEL, "i.MX93");
++	} else {
++		attr->soc_id = kasprintf(GFP_KERNEL, "unknown");
++	}
++
++	sdev = soc_device_register(attr);
++	if (IS_ERR(sdev)) {
++		err = -ENODEV;
++		goto soc_id;
++	}
++
++	return 0;
++
++soc_id:
++	kfree(attr->soc_id);
++	kfree(attr->serial_number);
++revision:
++	kfree(attr->revision);
++family:
++	kfree(attr->family);
++attr:
++	kfree(attr);
++	return err;
++}
++
++static int imx9_init_soc_probe(struct platform_device *pdev)
++{
++        int ret;
++
++	ret = imx9_soc_device_register(&pdev->dev);
++	if (ret) {
++		pr_err("failed to register SoC device: %d\n", ret);
++		return ret;
++	}
++
++        return ret;
++}
++
++static const struct of_device_id imx9_soc_of_match[] = {
++        { .compatible = "fsl,imx93-soc", },
++        { }
++};
++MODULE_DEVICE_TABLE(of, imx9_soc_of_match);
++
++static struct platform_driver imx9_init_soc_driver = {
++	.driver = {
++		.name           = "imx9_init_soc",
++		.of_match_table = of_match_ptr(imx9_soc_of_match),
++	},
++        .probe = imx9_init_soc_probe,
++};
++module_platform_driver(imx9_init_soc_driver);
++
++MODULE_AUTHOR("NXP");
++MODULE_DESCRIPTION("NXP i.MX9 SoC");
++MODULE_LICENSE("GPL v2");
+-- 
+2.25.1
+

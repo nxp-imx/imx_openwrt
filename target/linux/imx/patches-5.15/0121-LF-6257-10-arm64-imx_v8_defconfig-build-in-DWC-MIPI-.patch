@@ -1,0 +1,29 @@
+From 54bd87e407c78857f2bba2f04aeb82a8b46022fd Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 16:18:11 +0800
+Subject: [PATCH 121/274] LF-6257-10: arm64: imx_v8_defconfig: build-in DWC
+ MIPI CSI2 as default
+
+Enable DWC MIPI CSI2 build-in as default
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index a6516384d..534b11218 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -548,6 +548,7 @@ CONFIG_VIDEO_MXC_CAPTURE=y
+ CONFIG_VIDEO_MX8_CAPTURE=y
+ CONFIG_VIDEO_MXC_CSI_CAMERA=y
+ CONFIG_MXC_MIPI_CSI=y
++CONFIG_DWC_MIPI_CSI2_HOST=y
+ CONFIG_MXC_CAMERA_OV5640_MIPI_V2=y
+ CONFIG_V4L_MEM2MEM_DRIVERS=y
+ CONFIG_VIDEO_IMX8_JPEG=m
+-- 
+2.25.1
+

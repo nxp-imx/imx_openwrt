@@ -1,0 +1,30 @@
+From 58c2fb1f241562a3601b1533bf9b7b89d2f9f6db Mon Sep 17 00:00:00 2001
+From: Mauro Carvalho Chehab <mchehab@kernel.org>
+Date: Sun, 13 Mar 2022 11:18:21 +0100
+Subject: [PATCH 200/274] media: platform: Create vendor/{Makefile,Kconfig}
+ files
+
+Instead of placing multiple per-vendor entries at the
+platform/{Makefile,Kconfig}, create them at the per-vendor
+directories.
+
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/Kconfig | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/media/platform/amphion/Kconfig b/drivers/media/platform/amphion/Kconfig
+index 13899649f..e0e809896 100644
+--- a/drivers/media/platform/amphion/Kconfig
++++ b/drivers/media/platform/amphion/Kconfig
+@@ -1,4 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++
++comment "Amphion drivers"
++
+ config VIDEO_AMPHION_VPU
+ 	tristate "Amphion VPU (Video Processing Unit) Codec IP"
+ 	depends on V4L_MEM2MEM_DRIVERS
+-- 
+2.25.1
+

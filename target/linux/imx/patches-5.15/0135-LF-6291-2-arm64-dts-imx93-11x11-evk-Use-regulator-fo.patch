@@ -1,0 +1,41 @@
+From 4bfdd03841b2a247b457621cabcca3d136e4271f Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 6 Jun 2022 14:38:20 +0800
+Subject: [PATCH 135/274] LF-6291-2 arm64: dts: imx93-11x11-evk: Use regulator
+ for LVDS panel backlight
+
+Instead of using a PCAL6524 GPIO to control LVDS panel's enable pin,
+we should use it to control U202 MP2263GD to generate the VDD 12v
+output as a regulator, which aligns better to the hardware design.
+The LVDS panel backlight consumes the regulator.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ .../boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
+index a6c8674f7..9a84c4983 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-boe-wxga-lvds-panel.dts
+@@ -10,6 +10,7 @@ lvds_backlight: lvds_backlight {
+ 		compatible = "pwm-backlight";
+ 		pwms = <&adp5585pwm 0 100000 0>;
+ 		enable-gpios = <&adp5585gpio 8 GPIO_ACTIVE_HIGH>;
++		power-supply = <&reg_vdd_12v>;
+ 		status = "okay";
+ 
+ 		brightness-levels = < 0  1  2  3  4  5  6  7  8  9
+@@ -29,7 +30,6 @@ lvds_backlight: lvds_backlight {
+ 	lvds_panel {
+ 		compatible = "boe,ev121wxm-n10-1850";
+ 		backlight = <&lvds_backlight>;
+-		enable-gpios = <&pcal6524 14 GPIO_ACTIVE_HIGH>;
+ 
+ 		port {
+ 			panel_lvds_in: endpoint {
+-- 
+2.25.1
+

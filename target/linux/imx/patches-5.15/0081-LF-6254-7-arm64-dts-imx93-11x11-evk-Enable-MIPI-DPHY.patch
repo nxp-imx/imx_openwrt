@@ -1,0 +1,33 @@
+From 4710a942d87591ecacb0fd9f0b613b906c82c157 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Thu, 17 Mar 2022 14:34:22 +0800
+Subject: [PATCH 081/274] LF-6254-7 arm64: dts: imx93-11x11-evk: Enable MIPI
+ DPHY node
+
+This patch enables MIPI DPHY node on i.MX93 11x11 EVK platform.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 42f8f4ce8..d35aa6bff 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -107,6 +107,10 @@ &flexcan2 {
+ 	status = "okay";
+ };
+ 
++&dphy {
++	status = "okay";
++};
++
+ &lcdif {
+ 	status = "okay";
+ 	assigned-clock-rates = <445333333>, <148444444>, <400000000>, <133333333>;
+-- 
+2.25.1
+

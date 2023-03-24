@@ -1,0 +1,94 @@
+From 755d98d6031a3ce44b6b198829a11ead632bdfd6 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Thu, 17 Mar 2022 15:03:14 +0800
+Subject: [PATCH 083/274] LF-6254-9 arm64: dts: imx93-11x11-evk: Add ADV7535
+ DSI to HDMI transmitter support
+
+This patch adds ADV7535 DSI to HDMI transmitter support
+on i.MX93 11x11 EVK platform.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ .../dts/freescale/imx93-11x11-evk-i3c.dts     | 16 ++++++++++++-
+ .../boot/dts/freescale/imx93-11x11-evk.dts    | 24 +++++++++++++++++++
+ 2 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+index 7e58904af..68a3b8d8b 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+@@ -31,6 +31,20 @@ &i3c1 {
+ 	i2c-scl-hz = <400000>;
+ 	status = "okay";
+ 
++	adv7535: hdmi@3d {
++		compatible = "adi,adv7535";
++		reg = <0x3d 0x00 0x50>;
++		adi,addr-cec = <0x3b>;
++		adi,dsi-lanes = <4>;
++		status = "okay";
++
++		port {
++			adv7535_to_dsi: endpoint {
++				remote-endpoint = <&dsi_to_adv7535>;
++			};
++		};
++	};
++
+ 	/* i3c device with static i2c address*/
+ 	lsm6dso_i3c: imu@6a,208006c0000 {
+ 		reg = <0x6a 0x208 0x6c0000>;
+@@ -100,4 +114,4 @@ MX93_PAD_I2C1_SCL__I3C1_SCL	0x4000019e
+ 			MX93_PAD_I2C1_SDA__I3C1_SDA	0x4000019e
+ 		>;
+ 	};
+-};
+\ No newline at end of file
++};
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 54c427a7b..0a0e9890b 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -113,6 +113,16 @@ &dphy {
+ 
+ &dsi {
+ 	status = "okay";
++
++	ports {
++		port@1 {
++			reg = <1>;
++
++			dsi_to_adv7535: endpoint {
++				remote-endpoint = <&adv7535_to_dsi>;
++			};
++		};
++	};
+ };
+ 
+ &lcdif {
+@@ -133,6 +143,20 @@ &lpi2c1 {
+ 	pinctrl-1 = <&pinctrl_lpi2c1>;
+ 	status = "okay";
+ 
++	adv7535: hdmi@3d {
++		compatible = "adi,adv7535";
++		reg = <0x3d>;
++		adi,addr-cec = <0x3b>;
++		adi,dsi-lanes = <4>;
++		status = "okay";
++
++		port {
++			adv7535_to_dsi: endpoint {
++				remote-endpoint = <&dsi_to_adv7535>;
++			};
++		};
++	};
++
+ 	lsm6dsm@6a {
+ 		compatible = "st,lsm6dso";
+ 		reg = <0x6a>;
+-- 
+2.25.1
+

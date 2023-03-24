@@ -1,0 +1,29 @@
+From 34d9a223ee0efee67b5ecc0ea8d4a54d73112055 Mon Sep 17 00:00:00 2001
+From: Joy Zou <joy.zou@nxp.com>
+Date: Fri, 27 May 2022 21:00:48 +0800
+Subject: [PATCH 090/274] LF-6243: dt-bindings: regulator: pca9450: add
+ pca9451a support
+
+Update bindings pca9450 for imx93.
+
+Signed-off-by: Joy Zou <joy.zou@nxp.com>
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+---
+ .../devicetree/bindings/regulator/nxp,pca9450-regulator.yaml     | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/regulator/nxp,pca9450-regulator.yaml b/Documentation/devicetree/bindings/regulator/nxp,pca9450-regulator.yaml
+index f70f2e758..84c59ccc7 100644
+--- a/Documentation/devicetree/bindings/regulator/nxp,pca9450-regulator.yaml
++++ b/Documentation/devicetree/bindings/regulator/nxp,pca9450-regulator.yaml
+@@ -28,6 +28,7 @@ properties:
+       - nxp,pca9450a
+       - nxp,pca9450b
+       - nxp,pca9450c
++      - nxp,pca9451a
+ 
+   reg:
+     maxItems: 1
+-- 
+2.25.1
+

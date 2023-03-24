@@ -1,0 +1,58 @@
+From 15040a066612d2ace31a85973c52221d357276ad Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Thu, 24 Feb 2022 11:10:13 +0800
+Subject: [PATCH 197/274] media: amphion: add amphion vpu entry in Kconfig and
+ Makefile
+
+Add V4L2 driver entry for the amphion vpu encoder/decoder.
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+---
+ drivers/media/platform/Kconfig  | 19 +++++++++++++++++++
+ drivers/media/platform/Makefile |  2 ++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/drivers/media/platform/Kconfig b/drivers/media/platform/Kconfig
+index 80321e038..88e47552b 100644
+--- a/drivers/media/platform/Kconfig
++++ b/drivers/media/platform/Kconfig
+@@ -599,6 +599,25 @@ config VIDEO_SUN8I_ROTATE
+ 	   Support for the Allwinner DE2 rotation unit.
+ 	   To compile this driver as a module choose m here.
+ 
++config VIDEO_AMPHION_VPU
++	tristate "Amphion VPU (Video Processing Unit) Codec IP"
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on MEDIA_SUPPORT
++	depends on VIDEO_DEV
++	depends on VIDEO_V4L2
++	select MEDIA_CONTROLLER
++	select V4L2_MEM2MEM_DEV
++	select VIDEOBUF2_DMA_CONTIG
++	select VIDEOBUF2_VMALLOC
++	help
++	  Amphion VPU Codec IP contains two parts: Windsor and Malone.
++	  Windsor is encoder that supports H.264, and Malone is decoder
++	  that supports H.264, HEVC, and other video formats.
++	  This is a V4L2 driver for NXP MXC 8Q video accelerator hardware.
++	  It accelerates encoding and decoding operations on
++	  various NXP SoCs.
++	  To compile this driver as a module choose m here.
++
+ endif # V4L_MEM2MEM_DRIVERS
+ 
+ # TI VIDEO PORT Helper Modules
+diff --git a/drivers/media/platform/Makefile b/drivers/media/platform/Makefile
+index 73ce083c2..116797484 100644
+--- a/drivers/media/platform/Makefile
++++ b/drivers/media/platform/Makefile
+@@ -86,3 +86,5 @@ obj-$(CONFIG_VIDEO_QCOM_VENUS)		+= qcom/venus/
+ obj-y					+= sunxi/
+ 
+ obj-$(CONFIG_VIDEO_MESON_GE2D)		+= meson/ge2d/
++
++obj-$(CONFIG_VIDEO_AMPHION_VPU)		+= amphion/
+-- 
+2.25.1
+

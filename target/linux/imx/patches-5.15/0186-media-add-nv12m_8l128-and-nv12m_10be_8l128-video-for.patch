@@ -1,0 +1,91 @@
+From c629d563dbd0d457eb5e3ce18922d2803ab294ab Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Thu, 24 Feb 2022 11:10:00 +0800
+Subject: [PATCH 186/274] media: add nv12m_8l128 and nv12m_10be_8l128 video
+ format.
+
+nv12m_8l128 is 8-bit tiled nv12 format used by amphion decoder.
+nv12m_10be_8l128 is 10-bit tiled format used by amphion decoder.
+The tile size is 8x128
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Shijie Qin <shijie.qin@nxp.com>
+Signed-off-by: Zhou Peng <eagle.zhou@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+---
+ .../media/v4l/pixfmt-yuv-planar.rst           | 22 +++++++++++++++++++
+ drivers/media/v4l2-core/v4l2-ioctl.c          |  2 ++
+ include/uapi/linux/videodev2.h                |  4 ++++
+ 3 files changed, 28 insertions(+)
+
+diff --git a/Documentation/userspace-api/media/v4l/pixfmt-yuv-planar.rst b/Documentation/userspace-api/media/v4l/pixfmt-yuv-planar.rst
+index 090c091af..156302292 100644
+--- a/Documentation/userspace-api/media/v4l/pixfmt-yuv-planar.rst
++++ b/Documentation/userspace-api/media/v4l/pixfmt-yuv-planar.rst
+@@ -254,6 +254,8 @@ of the luma plane.
+ 
+ .. _V4L2-PIX-FMT-NV12MT:
+ .. _V4L2-PIX-FMT-NV12MT-16X16:
++.. _V4L2_PIX_FMT_NV12M_8L128:
++.. _V4L2_PIX_FMT_NV12M_10BE_8L128:
+ 
+ NV12MT and MV12MT_16X16
+ -----------------------
+@@ -276,6 +278,26 @@ If the vertical resolution is an odd number of macroblocks, the last row of
+ macroblocks is stored in linear order. The layouts of the luma and chroma
+ planes are identical.
+ 
++``V4L2_PIX_FMT_NV12M_8L128`` is similar to ``V4L2_PIX_FMT_NV12M`` but stores
++pixels in 2D 8x128 tiles, and stores tiles linearly in memory.
++The image height must be aligned to a multiple of 128.
++The layouts of the luma and chroma planes are identical.
++
++``V4L2_PIX_FMT_NV12M_10BE_8L128`` is similar to ``V4L2_PIX_FMT_NV12M`` but stores
++10 bits pixels in 2D 8x128 tiles, and stores tiles linearly in memory.
++the data is arranged in big endian order.
++The image height must be aligned to a multiple of 128.
++The layouts of the luma and chroma planes are identical.
++Note the tile size is 8bytes multiplied by 128 bytes,
++it means that the low bits and high bits of one pixel may be in different tiles.
++The 10 bit pixels are packed, so 5 bytes contain 4 10-bit pixels layout like
++this (for luma):
++byte 0: Y0(bits 9-2)
++byte 1: Y0(bits 1-0) Y1(bits 9-4)
++byte 2: Y1(bits 3-0) Y2(bits 9-6)
++byte 3: Y2(bits 5-0) Y3(bits 9-8)
++byte 4: Y3(bits 7-0)
++
+ .. _nv12mt:
+ 
+ .. kernel-figure:: nv12mt.svg
+diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
+index 7c596a85f..73adcc6e2 100644
+--- a/drivers/media/v4l2-core/v4l2-ioctl.c
++++ b/drivers/media/v4l2-core/v4l2-ioctl.c
+@@ -1387,6 +1387,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+ 	case V4L2_META_FMT_VIVID:       descr = "Vivid Metadata"; break;
+ 	case V4L2_META_FMT_RK_ISP1_PARAMS:	descr = "Rockchip ISP1 3A Parameters"; break;
+ 	case V4L2_META_FMT_RK_ISP1_STAT_3A:	descr = "Rockchip ISP1 3A Statistics"; break;
++	case V4L2_PIX_FMT_NV12M_8L128:	descr = "NV12M (8x128 Linear)"; break;
++	case V4L2_PIX_FMT_NV12M_10BE_8L128:	descr = "10-bit NV12M (8x128 Linear, BE)"; break;
+ 
+ 	default:
+ 		/* Compressed formats */
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index 9260791b8..d730da8fe 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -627,6 +627,10 @@ struct v4l2_pix_format {
+ #define V4L2_PIX_FMT_YUV444M v4l2_fourcc('Y', 'M', '2', '4') /* 24  YUV444 planar */
+ #define V4L2_PIX_FMT_YVU444M v4l2_fourcc('Y', 'M', '4', '2') /* 24  YVU444 planar */
+ 
++/* Tiled YUV formats, non contiguous planes */
++#define V4L2_PIX_FMT_NV12M_8L128      v4l2_fourcc('N', 'A', '1', '2') /* Y/CbCr 4:2:0 8x128 tiles */
++#define V4L2_PIX_FMT_NV12M_10BE_8L128 v4l2_fourcc_be('N', 'T', '1', '2') /* Y/CbCr 4:2:0 10-bit 8x128 tiles */
++
+ /* Bayer formats - see http://www.siliconimaging.com/RGB%20Bayer.htm */
+ #define V4L2_PIX_FMT_SBGGR8  v4l2_fourcc('B', 'A', '8', '1') /*  8  BGBG.. GRGR.. */
+ #define V4L2_PIX_FMT_SGBRG8  v4l2_fourcc('G', 'B', 'R', 'G') /*  8  GBGB.. RGRG.. */
+-- 
+2.25.1
+

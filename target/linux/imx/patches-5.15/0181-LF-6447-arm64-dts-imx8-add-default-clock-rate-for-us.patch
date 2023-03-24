@@ -1,0 +1,48 @@
+From 7e0e37de5611b277809d8ad4124a4552ade03d5d Mon Sep 17 00:00:00 2001
+From: Shenwei Wang <shenwei.wang@nxp.com>
+Date: Fri, 8 Jul 2022 10:16:59 -0500
+Subject: [PATCH 181/274] LF-6447 arm64: dts: imx8: add default clock rate for
+ usdhc
+
+Add default clock rate for usdhc nodes.
+
+Reviewed-by: Frank Li <frank.li@nxp.com>
+Signed-off-by: Shenwei Wang <shenwei.wang@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx8-ss-conn.dtsi | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx8-ss-conn.dtsi b/arch/arm64/boot/dts/freescale/imx8-ss-conn.dtsi
+index 582dbd5ea..04ab90081 100644
+--- a/arch/arm64/boot/dts/freescale/imx8-ss-conn.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8-ss-conn.dtsi
+@@ -79,6 +79,8 @@ usdhc1: mmc@5b010000 {
+ 			 <&sdhc0_lpcg 0>,
+ 			 <&sdhc0_lpcg 2>;
+ 		clock-names = "ipg", "per", "ahb";
++		assigned-clocks = <&clk IMX_SC_R_SDHC_0 IMX_SC_PM_CLK_PER>;
++		assigned-clock-rates = <400000000>;
+ 		power-domains = <&pd IMX_SC_R_SDHC_0>;
+ 		fsl,tuning-start-tap = <20>;
+ 		fsl,tuning-step= <2>;
+@@ -92,6 +94,8 @@ usdhc2: mmc@5b020000 {
+ 			 <&sdhc1_lpcg 0>,
+ 			 <&sdhc1_lpcg 2>;
+ 		clock-names = "ipg", "per", "ahb";
++		assigned-clocks = <&clk IMX_SC_R_SDHC_1 IMX_SC_PM_CLK_PER>;
++		assigned-clock-rates = <200000000>;
+ 		power-domains = <&pd IMX_SC_R_SDHC_1>;
+ 		fsl,tuning-start-tap = <20>;
+ 		fsl,tuning-step= <2>;
+@@ -105,6 +109,8 @@ usdhc3: mmc@5b030000 {
+ 			 <&sdhc2_lpcg 0>,
+ 			 <&sdhc2_lpcg 2>;
+ 		clock-names = "ipg", "per", "ahb";
++		assigned-clocks = <&clk IMX_SC_R_SDHC_2 IMX_SC_PM_CLK_PER>;
++		assigned-clock-rates = <200000000>;
+ 		power-domains = <&pd IMX_SC_R_SDHC_2>;
+ 		fsl,tuning-start-tap = <20>;
+ 		fsl,tuning-step= <2>;
+-- 
+2.25.1
+

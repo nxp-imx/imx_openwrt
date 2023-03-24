@@ -1,0 +1,28 @@
+From 1f0cf28da52a513077ee774cd0178db72ae30c4a Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Tue, 17 May 2022 09:47:23 +0800
+Subject: [PATCH 060/274] MLK-25923 clk: imx: Add 445.3MHz pll rate support
+
+Add 445.3MHz PLL frequency support used by the display case.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Ye Li <ye.li@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 5b96d5a72..3d272a4db 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -69,6 +69,7 @@ static const struct imx_fracn_gppll_rate_table fracn_tbl[] = {
+ 	PLL_FRACN_GP(560000000U, 70, 0, 0, 0, 3),
+ 	PLL_FRACN_GP(498000000U, 83, 0, 0, 0, 4),
+ 	PLL_FRACN_GP(484000000U, 121, 0, 0, 0, 6),
++	PLL_FRACN_GP(445333333U, 167, 0, 0, 0, 9),
+ 	PLL_FRACN_GP(400000000U, 50, 0, 0, 0, 3),
+ 	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5)
+ };
+-- 
+2.25.1
+

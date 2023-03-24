@@ -1,0 +1,28 @@
+From 1ac7b3535d6b714cb186588d3417775ace8eb2d4 Mon Sep 17 00:00:00 2001
+From: TaoJiang <tao.jiang_2@nxp.com>
+Date: Fri, 15 Jul 2022 08:42:03 +0530
+Subject: [PATCH 229/274] LF6572: IMX8M VPU:solve mult-instance test fail
+
+1.add invoke timeout
+
+Signed-off-by: TaoJiang <tao.jiang_2@nxp.com>
+---
+ drivers/mxc/hantro_v4l2/vsi-v4l2daemon.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/mxc/hantro_v4l2/vsi-v4l2daemon.c b/drivers/mxc/hantro_v4l2/vsi-v4l2daemon.c
+index 14ef739ac..8dd4e2ee2 100755
+--- a/drivers/mxc/hantro_v4l2/vsi-v4l2daemon.c
++++ b/drivers/mxc/hantro_v4l2/vsi-v4l2daemon.c
+@@ -537,7 +537,7 @@ static int invoke_daemonapp(void)
+ 			return ret;
+ 
+ 		ret = wait_event_interruptible_timeout(instance_queue,
+-				atomic_read(&daemon_fn) > 0, msecs_to_jiffies(1000));
++				atomic_read(&daemon_fn) > 0, msecs_to_jiffies(10000));
+ 		if (ret == -ERESTARTSYS || ret == 0)
+ 			ret = -ERESTARTSYS;
+ 
+-- 
+2.25.1
+

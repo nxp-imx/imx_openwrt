@@ -1,0 +1,55 @@
+From 143f51829deea2fef4553bcce28cfd547471cbec Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Fri, 22 Apr 2022 03:36:21 +0200
+Subject: [PATCH 211/274] media: amphion: free ctrl handler if error is set and
+ return error
+
+The typical behavior is to add all controls, then at the end check if
+hdl->error was set, and if so, v4l2_ctrl_handler_free is called and
+the error is returned.
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vdec.c | 6 ++++++
+ drivers/media/platform/amphion/venc.c | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/drivers/media/platform/amphion/vdec.c b/drivers/media/platform/amphion/vdec.c
+index 414e5215d..3c02aa2a5 100644
+--- a/drivers/media/platform/amphion/vdec.c
++++ b/drivers/media/platform/amphion/vdec.c
+@@ -162,6 +162,12 @@ static int vdec_ctrl_init(struct vpu_inst *inst)
+ 	if (ctrl)
+ 		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+ 
++	if (inst->ctrl_handler.error) {
++		ret = inst->ctrl_handler.error;
++		v4l2_ctrl_handler_free(&inst->ctrl_handler);
++		return ret;
++	}
++
+ 	ret = v4l2_ctrl_handler_setup(&inst->ctrl_handler);
+ 	if (ret) {
+ 		dev_err(inst->dev, "[%d] setup ctrls fail, ret = %d\n", inst->id, ret);
+diff --git a/drivers/media/platform/amphion/venc.c b/drivers/media/platform/amphion/venc.c
+index 06c873fd0..ba9f49cca 100644
+--- a/drivers/media/platform/amphion/venc.c
++++ b/drivers/media/platform/amphion/venc.c
+@@ -682,6 +682,12 @@ static int venc_ctrl_init(struct vpu_inst *inst)
+ 			       ~(1 << V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME),
+ 			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME);
+ 
++	if (inst->ctrl_handler.error) {
++		ret = inst->ctrl_handler.error;
++		v4l2_ctrl_handler_free(&inst->ctrl_handler);
++		return ret;
++	}
++
+ 	ret = v4l2_ctrl_handler_setup(&inst->ctrl_handler);
+ 	if (ret) {
+ 		dev_err(inst->dev, "[%d] setup ctrls fail, ret = %d\n", inst->id, ret);
+-- 
+2.25.1
+

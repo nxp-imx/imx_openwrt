@@ -1,0 +1,453 @@
+From 3aded99ceb53ac1fa5f96e9dcced63f9b64380de Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Fri, 11 Mar 2022 06:17:07 +0100
+Subject: [PATCH 205/274] media: amphion: fix some issues to improve robust
+
+fix some issues reported by Dan,
+1. fix some signedness bug
+2. don't use u32 as function return value
+3. prevent a divide by zero bug
+4. Just return zero on success, don't return a known parameter
+5. check the validity of some variables
+6. reset buffer state when return buffers
+7. make sure the ALIGN won't wrap to zero
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Reported-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_core.c    |  2 +-
+ drivers/media/platform/amphion/vpu_helpers.c | 13 ++--
+ drivers/media/platform/amphion/vpu_helpers.h |  6 +-
+ drivers/media/platform/amphion/vpu_imx8q.c   |  2 +-
+ drivers/media/platform/amphion/vpu_imx8q.h   |  2 +-
+ drivers/media/platform/amphion/vpu_malone.c  | 63 +++++++++++++-------
+ drivers/media/platform/amphion/vpu_msgs.c    |  6 +-
+ drivers/media/platform/amphion/vpu_rpc.c     |  4 +-
+ drivers/media/platform/amphion/vpu_rpc.h     |  9 ++-
+ drivers/media/platform/amphion/vpu_v4l2.c    |  8 ++-
+ drivers/media/platform/amphion/vpu_windsor.c |  6 ++
+ 11 files changed, 78 insertions(+), 43 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_core.c b/drivers/media/platform/amphion/vpu_core.c
+index 24a5a4d5a..68ad18392 100644
+--- a/drivers/media/platform/amphion/vpu_core.c
++++ b/drivers/media/platform/amphion/vpu_core.c
+@@ -472,7 +472,7 @@ struct vpu_inst *vpu_core_find_instance(struct vpu_core *core, u32 index)
+ 	struct vpu_inst *tmp;
+ 
+ 	mutex_lock(&core->lock);
+-	if (!test_bit(index, &core->instance_mask))
++	if (index >= core->supported_instance_count || !test_bit(index, &core->instance_mask))
+ 		goto exit;
+ 	list_for_each_entry(tmp, &core->instances, list) {
+ 		if (tmp->id == index) {
+diff --git a/drivers/media/platform/amphion/vpu_helpers.c b/drivers/media/platform/amphion/vpu_helpers.c
+index 768abf89e..e9aeb3453 100644
+--- a/drivers/media/platform/amphion/vpu_helpers.c
++++ b/drivers/media/platform/amphion/vpu_helpers.c
+@@ -197,7 +197,7 @@ u32 vpu_helper_get_plane_size(u32 fmt, u32 w, u32 h, int plane_no,
+ 	}
+ }
+ 
+-u32 vpu_helper_copy_from_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_copy_from_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				       u32 *rptr, u32 size, void *dst)
+ {
+ 	u32 offset;
+@@ -227,10 +227,11 @@ u32 vpu_helper_copy_from_stream_buffer(struct vpu_buffer *stream_buffer,
+ 	}
+ 
+ 	*rptr = vpu_helper_step_walk(stream_buffer, offset, size);
+-	return size;
++
++	return 0;
+ }
+ 
+-u32 vpu_helper_copy_to_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_copy_to_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				     u32 *wptr, u32 size, void *src)
+ {
+ 	u32 offset;
+@@ -260,10 +261,10 @@ u32 vpu_helper_copy_to_stream_buffer(struct vpu_buffer *stream_buffer,
+ 
+ 	*wptr = vpu_helper_step_walk(stream_buffer, offset, size);
+ 
+-	return size;
++	return 0;
+ }
+ 
+-u32 vpu_helper_memset_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_memset_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				    u32 *wptr, u8 val, u32 size)
+ {
+ 	u32 offset;
+@@ -297,7 +298,7 @@ u32 vpu_helper_memset_stream_buffer(struct vpu_buffer *stream_buffer,
+ 
+ 	*wptr = offset;
+ 
+-	return size;
++	return 0;
+ }
+ 
+ u32 vpu_helper_get_free_space(struct vpu_inst *inst)
+diff --git a/drivers/media/platform/amphion/vpu_helpers.h b/drivers/media/platform/amphion/vpu_helpers.h
+index 130d1357c..bc2835095 100644
+--- a/drivers/media/platform/amphion/vpu_helpers.h
++++ b/drivers/media/platform/amphion/vpu_helpers.h
+@@ -19,11 +19,11 @@ u32 vpu_helper_valid_frame_width(struct vpu_inst *inst, u32 width);
+ u32 vpu_helper_valid_frame_height(struct vpu_inst *inst, u32 height);
+ u32 vpu_helper_get_plane_size(u32 fmt, u32 width, u32 height, int plane_no,
+ 			      u32 stride, u32 interlaced, u32 *pbl);
+-u32 vpu_helper_copy_from_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_copy_from_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				       u32 *rptr, u32 size, void *dst);
+-u32 vpu_helper_copy_to_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_copy_to_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				     u32 *wptr, u32 size, void *src);
+-u32 vpu_helper_memset_stream_buffer(struct vpu_buffer *stream_buffer,
++int vpu_helper_memset_stream_buffer(struct vpu_buffer *stream_buffer,
+ 				    u32 *wptr, u8 val, u32 size);
+ u32 vpu_helper_get_free_space(struct vpu_inst *inst);
+ u32 vpu_helper_get_used_space(struct vpu_inst *inst);
+diff --git a/drivers/media/platform/amphion/vpu_imx8q.c b/drivers/media/platform/amphion/vpu_imx8q.c
+index 606cc5312..f14c2b831 100644
+--- a/drivers/media/platform/amphion/vpu_imx8q.c
++++ b/drivers/media/platform/amphion/vpu_imx8q.c
+@@ -165,7 +165,7 @@ int vpu_imx8q_on_firmware_loaded(struct vpu_core *core)
+ 	return 0;
+ }
+ 
+-u32 vpu_imx8q_check_memory_region(dma_addr_t base, dma_addr_t addr, u32 size)
++int vpu_imx8q_check_memory_region(dma_addr_t base, dma_addr_t addr, u32 size)
+ {
+ 	const struct vpu_rpc_region_t imx8q_regions[] = {
+ 		{0x00000000, 0x08000000, VPU_CORE_MEMORY_CACHED},
+diff --git a/drivers/media/platform/amphion/vpu_imx8q.h b/drivers/media/platform/amphion/vpu_imx8q.h
+index d63a2747e..9deffd7dd 100644
+--- a/drivers/media/platform/amphion/vpu_imx8q.h
++++ b/drivers/media/platform/amphion/vpu_imx8q.h
+@@ -108,7 +108,7 @@ int vpu_imx8q_set_system_cfg_common(struct vpu_rpc_system_config *config, u32 re
+ int vpu_imx8q_boot_core(struct vpu_core *core);
+ int vpu_imx8q_get_power_state(struct vpu_core *core);
+ int vpu_imx8q_on_firmware_loaded(struct vpu_core *core);
+-u32 vpu_imx8q_check_memory_region(dma_addr_t base, dma_addr_t addr, u32 size);
++int vpu_imx8q_check_memory_region(dma_addr_t base, dma_addr_t addr, u32 size);
+ bool vpu_imx8q_check_codec(enum vpu_core_type type);
+ bool vpu_imx8q_check_fmt(enum vpu_core_type type, u32 pixelfmt);
+ 
+diff --git a/drivers/media/platform/amphion/vpu_malone.c b/drivers/media/platform/amphion/vpu_malone.c
+index 80ba3ad90..446a9de0c 100644
+--- a/drivers/media/platform/amphion/vpu_malone.c
++++ b/drivers/media/platform/amphion/vpu_malone.c
+@@ -1006,8 +1006,8 @@ static int vpu_malone_add_padding_scode(struct vpu_buffer *stream_buffer,
+ 					u32 pixelformat, u32 scode_type)
+ {
+ 	u32 wptr;
+-	u32 size;
+-	u32 total_size = 0;
++	int size;
++	int total_size = 0;
+ 	const struct malone_padding_scode *ps;
+ 	const u32 padding_size = 4096;
+ 	int ret;
+@@ -1017,6 +1017,10 @@ static int vpu_malone_add_padding_scode(struct vpu_buffer *stream_buffer,
+ 		return -EINVAL;
+ 
+ 	wptr = readl(&str_buf->wptr);
++	if (wptr < stream_buffer->phys || wptr > stream_buffer->phys + stream_buffer->length)
++		return -EINVAL;
++	if (wptr == stream_buffer->phys + stream_buffer->length)
++		wptr = stream_buffer->phys;
+ 	size = ALIGN(wptr, 4) - wptr;
+ 	if (size)
+ 		vpu_helper_memset_stream_buffer(stream_buffer, &wptr, 0, size);
+@@ -1024,7 +1028,7 @@ static int vpu_malone_add_padding_scode(struct vpu_buffer *stream_buffer,
+ 
+ 	size = sizeof(ps->data);
+ 	ret = vpu_helper_copy_to_stream_buffer(stream_buffer, &wptr, size, (void *)ps->data);
+-	if (ret < size)
++	if (ret < 0)
+ 		return -EINVAL;
+ 	total_size += size;
+ 
+@@ -1234,12 +1238,15 @@ static int vpu_malone_insert_scode_seq(struct malone_scode_t *scode, u32 codec_i
+ 					       &scode->wptr,
+ 					       sizeof(hdr),
+ 					       hdr);
+-	return ret;
++	if (ret < 0)
++		return ret;
++	return sizeof(hdr);
+ }
+ 
+ static int vpu_malone_insert_scode_pic(struct malone_scode_t *scode, u32 codec_id, u32 ext_size)
+ {
+ 	u8 hdr[MALONE_PAYLOAD_HEADER_SIZE];
++	int ret;
+ 
+ 	set_payload_hdr(hdr,
+ 			SCODE_PICTURE,
+@@ -1247,10 +1254,13 @@ static int vpu_malone_insert_scode_pic(struct malone_scode_t *scode, u32 codec_i
+ 			ext_size + vb2_get_plane_payload(scode->vb, 0),
+ 			scode->inst->out_format.width,
+ 			scode->inst->out_format.height);
+-	return vpu_helper_copy_to_stream_buffer(&scode->inst->stream_buffer,
+-						&scode->wptr,
+-						sizeof(hdr),
+-						hdr);
++	ret = vpu_helper_copy_to_stream_buffer(&scode->inst->stream_buffer,
++					       &scode->wptr,
++					       sizeof(hdr),
++					       hdr);
++	if (ret < 0)
++		return ret;
++	return sizeof(hdr);
+ }
+ 
+ static int vpu_malone_insert_scode_vc1_g_pic(struct malone_scode_t *scode)
+@@ -1258,6 +1268,7 @@ static int vpu_malone_insert_scode_vc1_g_pic(struct malone_scode_t *scode)
+ 	struct vb2_v4l2_buffer *vbuf;
+ 	u8 nal_hdr[MALONE_VC1_NAL_HEADER_LEN];
+ 	u32 *data = NULL;
++	int ret;
+ 
+ 	vbuf = to_vb2_v4l2_buffer(scode->vb);
+ 	data = vb2_plane_vaddr(scode->vb, 0);
+@@ -1268,10 +1279,13 @@ static int vpu_malone_insert_scode_vc1_g_pic(struct malone_scode_t *scode)
+ 		return 0;
+ 
+ 	create_vc1_nal_pichdr(nal_hdr);
+-	return vpu_helper_copy_to_stream_buffer(&scode->inst->stream_buffer,
+-						&scode->wptr,
+-						sizeof(nal_hdr),
+-						nal_hdr);
++	ret = vpu_helper_copy_to_stream_buffer(&scode->inst->stream_buffer,
++					       &scode->wptr,
++					       sizeof(nal_hdr),
++					       nal_hdr);
++	if (ret < 0)
++		return ret;
++	return sizeof(nal_hdr);
+ }
+ 
+ static int vpu_malone_insert_scode_vc1_l_seq(struct malone_scode_t *scode)
+@@ -1282,8 +1296,7 @@ static int vpu_malone_insert_scode_vc1_l_seq(struct malone_scode_t *scode)
+ 
+ 	scode->need_data = 0;
+ 
+-	ret = vpu_malone_insert_scode_seq(scode, MALONE_CODEC_ID_VC1_SIMPLE,
+-					  sizeof(rcv_seqhdr));
++	ret = vpu_malone_insert_scode_seq(scode, MALONE_CODEC_ID_VC1_SIMPLE, sizeof(rcv_seqhdr));
+ 	if (ret < 0)
+ 		return ret;
+ 	size = ret;
+@@ -1299,7 +1312,7 @@ static int vpu_malone_insert_scode_vc1_l_seq(struct malone_scode_t *scode)
+ 
+ 	if (ret < 0)
+ 		return ret;
+-	size += ret;
++	size += sizeof(rcv_seqhdr);
+ 	return size;
+ }
+ 
+@@ -1322,7 +1335,7 @@ static int vpu_malone_insert_scode_vc1_l_pic(struct malone_scode_t *scode)
+ 					       rcv_pichdr);
+ 	if (ret < 0)
+ 		return ret;
+-	size += ret;
++	size += sizeof(rcv_pichdr);
+ 	return size;
+ }
+ 
+@@ -1346,7 +1359,7 @@ static int vpu_malone_insert_scode_vp8_seq(struct malone_scode_t *scode)
+ 					       ivf_hdr);
+ 	if (ret < 0)
+ 		return ret;
+-	size += ret;
++	size += sizeof(ivf_hdr);
+ 
+ 	return size;
+ }
+@@ -1369,7 +1382,7 @@ static int vpu_malone_insert_scode_vp8_pic(struct malone_scode_t *scode)
+ 					       ivf_hdr);
+ 	if (ret < 0)
+ 		return ret;
+-	size += ret;
++	size += sizeof(ivf_hdr);
+ 
+ 	return size;
+ }
+@@ -1470,9 +1483,9 @@ static int vpu_malone_input_frame_data(struct vpu_malone_str_buffer __iomem *str
+ 					       &wptr,
+ 					       vb2_get_plane_payload(vb, 0),
+ 					       vb2_plane_vaddr(vb, 0));
+-	if (ret < vb2_get_plane_payload(vb, 0))
++	if (ret < 0)
+ 		return -ENOMEM;
+-	size += ret;
++	size += vb2_get_plane_payload(vb, 0);
+ 
+ 	vpu_malone_update_wptr(str_buf, wptr);
+ 
+@@ -1500,7 +1513,7 @@ static int vpu_malone_input_stream_data(struct vpu_malone_str_buffer __iomem *st
+ 					       &wptr,
+ 					       vb2_get_plane_payload(vb, 0),
+ 					       vb2_plane_vaddr(vb, 0));
+-	if (ret < vb2_get_plane_payload(vb, 0))
++	if (ret < 0)
+ 		return -ENOMEM;
+ 
+ 	vpu_malone_update_wptr(str_buf, wptr);
+@@ -1566,9 +1579,13 @@ static bool vpu_malone_check_ready(struct vpu_shared_addr *shared, u32 instance)
+ 	u32 size = desc->end - desc->start;
+ 	u32 rptr = desc->rptr;
+ 	u32 wptr = desc->wptr;
+-	u32 used = (wptr + size - rptr) % size;
++	u32 used;
++
++	if (!size)
++		return true;
+ 
+-	if (!size || used < size / 2)
++	used = (wptr + size - rptr) % size;
++	if (used < (size / 2))
+ 		return true;
+ 
+ 	return false;
+diff --git a/drivers/media/platform/amphion/vpu_msgs.c b/drivers/media/platform/amphion/vpu_msgs.c
+index 68df43913..58502c51d 100644
+--- a/drivers/media/platform/amphion/vpu_msgs.c
++++ b/drivers/media/platform/amphion/vpu_msgs.c
+@@ -214,7 +214,7 @@ static int vpu_session_handle_msg(struct vpu_inst *inst, struct vpu_rpc_event *m
+ 
+ static bool vpu_inst_receive_msg(struct vpu_inst *inst, struct vpu_rpc_event *pkt)
+ {
+-	u32 bytes = sizeof(struct vpu_rpc_event_header);
++	unsigned long bytes = sizeof(struct vpu_rpc_event_header);
+ 	u32 ret;
+ 
+ 	memset(pkt, 0, sizeof(*pkt));
+@@ -246,7 +246,7 @@ void vpu_inst_run_work(struct work_struct *work)
+ 
+ static void vpu_inst_handle_msg(struct vpu_inst *inst, struct vpu_rpc_event *pkt)
+ {
+-	u32 bytes;
++	unsigned long bytes;
+ 	u32 id = pkt->hdr.id;
+ 	int ret;
+ 
+@@ -337,7 +337,7 @@ void vpu_msg_delayed_work(struct work_struct *work)
+ {
+ 	struct vpu_core *core;
+ 	struct delayed_work *dwork;
+-	u32 bytes = sizeof(bytes);
++	unsigned long bytes = sizeof(u32);
+ 	u32 i;
+ 
+ 	if (!work)
+diff --git a/drivers/media/platform/amphion/vpu_rpc.c b/drivers/media/platform/amphion/vpu_rpc.c
+index 6e01abaa5..18a164766 100644
+--- a/drivers/media/platform/amphion/vpu_rpc.c
++++ b/drivers/media/platform/amphion/vpu_rpc.c
+@@ -20,7 +20,7 @@
+ #include "vpu_windsor.h"
+ #include "vpu_malone.h"
+ 
+-u32 vpu_iface_check_memory_region(struct vpu_core *core, dma_addr_t addr, u32 size)
++int vpu_iface_check_memory_region(struct vpu_core *core, dma_addr_t addr, u32 size)
+ {
+ 	struct vpu_iface_ops *ops = vpu_core_get_iface(core);
+ 
+@@ -63,6 +63,8 @@ static int vpu_rpc_send_cmd_buf(struct vpu_shared_addr *shared, struct vpu_rpc_e
+ 	u32 wptr;
+ 	u32 i;
+ 
++	if (cmd->hdr.num > 0xff || cmd->hdr.num >= ARRAY_SIZE(cmd->data))
++		return -EINVAL;
+ 	desc = shared->cmd_desc;
+ 	space = vpu_rpc_check_buffer_space(desc, true);
+ 	if (space < (((cmd->hdr.num + 1) << 2) + 16))
+diff --git a/drivers/media/platform/amphion/vpu_rpc.h b/drivers/media/platform/amphion/vpu_rpc.h
+index c764ff52d..25119e5e8 100644
+--- a/drivers/media/platform/amphion/vpu_rpc.h
++++ b/drivers/media/platform/amphion/vpu_rpc.h
+@@ -43,7 +43,7 @@ struct vpu_iface_ops {
+ 	bool (*check_codec)(enum vpu_core_type type);
+ 	bool (*check_fmt)(enum vpu_core_type type, u32 pixelfmt);
+ 	u32 (*get_data_size)(void);
+-	u32 (*check_memory_region)(dma_addr_t base, dma_addr_t addr, u32 size);
++	int (*check_memory_region)(dma_addr_t base, dma_addr_t addr, u32 size);
+ 	int (*boot_core)(struct vpu_core *core);
+ 	int (*shutdown_core)(struct vpu_core *core);
+ 	int (*restore_core)(struct vpu_core *core);
+@@ -113,7 +113,7 @@ struct vpu_rpc_region_t {
+ 
+ struct vpu_iface_ops *vpu_core_get_iface(struct vpu_core *core);
+ struct vpu_iface_ops *vpu_inst_get_iface(struct vpu_inst *inst);
+-u32 vpu_iface_check_memory_region(struct vpu_core *core, dma_addr_t addr, u32 size);
++int vpu_iface_check_memory_region(struct vpu_core *core, dma_addr_t addr, u32 size);
+ 
+ static inline bool vpu_iface_check_codec(struct vpu_core *core)
+ {
+@@ -342,6 +342,11 @@ static inline int vpu_iface_config_stream_buffer(struct vpu_inst *inst,
+ 	if (!ops || !ops->config_stream_buffer || inst->id < 0)
+ 		return -EINVAL;
+ 
++	if ((buf->phys % 4) || (buf->length % 4))
++		return -EINVAL;
++	if (buf->phys + buf->length > (u64)UINT_MAX)
++		return -EINVAL;
++
+ 	return ops->config_stream_buffer(inst->core->iface, inst->id, buf);
+ }
+ 
+diff --git a/drivers/media/platform/amphion/vpu_v4l2.c b/drivers/media/platform/amphion/vpu_v4l2.c
+index 6fe077a68..9c0704cd5 100644
+--- a/drivers/media/platform/amphion/vpu_v4l2.c
++++ b/drivers/media/platform/amphion/vpu_v4l2.c
+@@ -403,11 +403,15 @@ void vpu_vb2_buffers_return(struct vpu_inst *inst, unsigned int type, enum vb2_b
+ 	struct vb2_v4l2_buffer *buf;
+ 
+ 	if (V4L2_TYPE_IS_OUTPUT(type)) {
+-		while ((buf = v4l2_m2m_src_buf_remove(inst->fh.m2m_ctx)))
++		while ((buf = v4l2_m2m_src_buf_remove(inst->fh.m2m_ctx))) {
++			vpu_set_buffer_state(buf, VPU_BUF_STATE_IDLE);
+ 			v4l2_m2m_buf_done(buf, state);
++		}
+ 	} else {
+-		while ((buf = v4l2_m2m_dst_buf_remove(inst->fh.m2m_ctx)))
++		while ((buf = v4l2_m2m_dst_buf_remove(inst->fh.m2m_ctx))) {
++			vpu_set_buffer_state(buf, VPU_BUF_STATE_IDLE);
+ 			v4l2_m2m_buf_done(buf, state);
++		}
+ 	}
+ }
+ 
+diff --git a/drivers/media/platform/amphion/vpu_windsor.c b/drivers/media/platform/amphion/vpu_windsor.c
+index a056ad624..1526af2ef 100644
+--- a/drivers/media/platform/amphion/vpu_windsor.c
++++ b/drivers/media/platform/amphion/vpu_windsor.c
+@@ -818,12 +818,18 @@ int vpu_windsor_config_memory_resource(struct vpu_shared_addr *shared,
+ 
+ 	switch (type) {
+ 	case MEM_RES_ENC:
++		if (index >= ARRAY_SIZE(pool->enc_frames))
++			return -EINVAL;
+ 		res = &pool->enc_frames[index];
+ 		break;
+ 	case MEM_RES_REF:
++		if (index >= ARRAY_SIZE(pool->ref_frames))
++			return -EINVAL;
+ 		res = &pool->ref_frames[index];
+ 		break;
+ 	case MEM_RES_ACT:
++		if (index)
++			return -EINVAL;
+ 		res = &pool->act_frame;
+ 		break;
+ 	default:
+-- 
+2.25.1
+

@@ -1,0 +1,33 @@
+From b791ac858fae3d7f09e7b66d21b88cdd665f5d76 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Tue, 22 Mar 2022 09:28:59 +0100
+Subject: [PATCH 213/274] media: amphion: ensure the buffer count is not less
+ than min_buffer
+
+the output buffer count should >= min_buffer_out
+the capture buffer count should >= min_buffer_cap
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_v4l2.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/media/platform/amphion/vpu_v4l2.c b/drivers/media/platform/amphion/vpu_v4l2.c
+index 801bd0874..34ab94146 100644
+--- a/drivers/media/platform/amphion/vpu_v4l2.c
++++ b/drivers/media/platform/amphion/vpu_v4l2.c
+@@ -398,6 +398,10 @@ static int vpu_vb2_queue_setup(struct vb2_queue *vq,
+ 		return 0;
+ 	}
+ 
++	if (V4L2_TYPE_IS_OUTPUT(vq->type))
++		*buf_count = max_t(unsigned int, *buf_count, inst->min_buffer_out);
++	else
++		*buf_count = max_t(unsigned int, *buf_count, inst->min_buffer_cap);
+ 	*plane_count = cur_fmt->num_planes;
+ 	for (i = 0; i < cur_fmt->num_planes; i++)
+ 		psize[i] = cur_fmt->sizeimage[i];
+-- 
+2.25.1
+

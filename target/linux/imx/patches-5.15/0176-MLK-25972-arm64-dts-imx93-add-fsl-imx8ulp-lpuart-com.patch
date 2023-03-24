@@ -1,0 +1,78 @@
+From 0152bf4b5021c5a366dd0873d170d8f51133e8a7 Mon Sep 17 00:00:00 2001
+From: Sherry Sun <sherry.sun@nxp.com>
+Date: Thu, 30 Jun 2022 12:31:06 +0800
+Subject: [PATCH 176/274] MLK-25972 arm64: dts: imx93: add "fsl,imx8ulp-lpuart"
+ compatible for imx93 lpuart
+
+For imx93 lpuart, it is inherited from imx8ulp, and add some enhanced
+feature set with full MODEM, IrDA, and enhanced idle detection so on.
+We should use "fsl,imx8ulp-lpuart" compatible for imx93 lpuart that can
+enable some features which was not supported on imx7ulp, such as EOP.
+
+Signed-off-by: Sherry Sun <sherry.sun@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index f00919211..d329c541e 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -291,7 +291,7 @@ lpspi2: spi@44370000 {
+ 			};
+ 
+ 			lpuart1: serial@44380000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x44380000 0x1000>;
+ 				interrupts = <GIC_SPI 19 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART1_GATE>;
+@@ -300,7 +300,7 @@ lpuart1: serial@44380000 {
+ 			};
+ 
+ 			lpuart2: serial@44390000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x44390000 0x1000>;
+ 				interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART2_GATE>;
+@@ -685,7 +685,7 @@ lpspi4: spi@42560000 {
+ 			};
+ 
+ 			lpuart3: serial@42570000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x42570000 0x1000>;
+ 				interrupts = <GIC_SPI 68 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART3_GATE>;
+@@ -694,7 +694,7 @@ lpuart3: serial@42570000 {
+ 			};
+ 
+ 			lpuart4: serial@42580000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x42580000 0x1000>;
+ 				interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART4_GATE>;
+@@ -703,7 +703,7 @@ lpuart4: serial@42580000 {
+ 			};
+ 
+ 			lpuart5: serial@42590000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x42590000 0x1000>;
+ 				interrupts = <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART5_GATE>;
+@@ -712,7 +712,7 @@ lpuart5: serial@42590000 {
+ 			};
+ 
+ 			lpuart6: serial@425a0000 {
+-				compatible = "fsl,imx93-lpuart", "fsl,imx7ulp-lpuart";
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
+ 				reg = <0x425a0000 0x1000>;
+ 				interrupts = <GIC_SPI 71 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clk IMX93_CLK_LPUART6_GATE>;
+-- 
+2.25.1
+

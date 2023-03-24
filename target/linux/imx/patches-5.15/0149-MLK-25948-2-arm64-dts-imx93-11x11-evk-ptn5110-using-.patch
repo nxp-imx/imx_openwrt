@@ -1,0 +1,44 @@
+From ada12d4ba2245ab745dd81a5d51bce4f714c192e Mon Sep 17 00:00:00 2001
+From: Xu Yang <xu.yang_2@nxp.com>
+Date: Wed, 15 Jun 2022 10:43:03 +0800
+Subject: [PATCH 149/274] MLK-25948-2 arm64: dts: imx93-11x11-evk: ptn5110
+ using shared interrupt line with pcal6524
+
+This workaround will use a shared interrupt line with pcal6524 to
+support level triggered tcpci driver.
+
+Signed-off-by: Xu Yang <xu.yang_2@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 808bb2dff..81d49fc52 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -348,8 +348,8 @@ lsm6dsm@6a {
+ 	ptn5110: tcpc@50 {
+ 		compatible = "nxp,ptn5110";
+ 		reg = <0x50>;
+-		interrupt-parent = <&pcal6524>;
+-		interrupts = <1 IRQ_TYPE_EDGE_FALLING>;
++		interrupt-parent = <&gpio3>;
++		interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
+ 		status = "okay";
+ 
+ 		port {
+@@ -375,8 +375,8 @@ typec1_con: connector {
+ 	ptn5110_2: tcpc@51 {
+ 		compatible = "nxp,ptn5110";
+ 		reg = <0x51>;
+-		interrupt-parent = <&pcal6524>;
+-		interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
++		interrupt-parent = <&gpio3>;
++		interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
+ 		status = "okay";
+ 
+ 		port {
+-- 
+2.25.1
+

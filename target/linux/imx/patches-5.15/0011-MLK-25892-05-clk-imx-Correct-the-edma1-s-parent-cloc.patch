@@ -1,0 +1,31 @@
+From 1666a82f840e0b3bab6b99fb4f49d22ad47da50e Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Sun, 24 Apr 2022 15:23:38 +0800
+Subject: [PATCH 011/274] MLK-25892-05 clk: imx: Correct the edma1's parent
+ clock
+
+For EDMA1 in AONMIX, its parent clock should be from cm33_root,
+so Correct it.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/clk/imx/clk-imx93.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index 26885bd39..f5c9fa404 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -160,7 +160,7 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_SEMA2_GATE,		"sema2",	"bus_wakeup_root",	0x8480, },
+ 	{ IMX93_CLK_MU_A_GATE,		"mu_a",		"bus_aon_root",		0x84c0, },
+ 	{ IMX93_CLK_MU_B_GATE,		"mu_b",		"bus_aon_root",		0x8500, },
+-	{ IMX93_CLK_EDMA1_GATE,		"edma1",	"wakeup_axi_root",	0x8540, },
++	{ IMX93_CLK_EDMA1_GATE,		"edma1",	"m33_root",		0x8540, },
+ 	{ IMX93_CLK_EDMA2_GATE,		"edma2",	"wakeup_axi_root",	0x8580, },
+ 	{ IMX93_CLK_FLEXSPI1_GATE,	"flexspi",	"flexspi_root",		0x8640, },
+ 	{ IMX93_CLK_GPIO1_GATE,		"gpio1",	"m33_root",		0x8880, },
+-- 
+2.25.1
+

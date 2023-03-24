@@ -1,0 +1,54 @@
+From 0f1b8d8ceae4a8f8435bcc416651fb5250dc70ce Mon Sep 17 00:00:00 2001
+From: Shenwei Wang <shenwei.wang@nxp.com>
+Date: Tue, 17 May 2022 09:59:10 -0500
+Subject: [PATCH 015/274] LF-6101: clk: imx: clk-imx8qxp: correct the enet
+ clocks for imx8dxl
+
+The SC_PM_CLK_MISC0 clock is not available for the resources of ENET0/1 on
+imx8dxl. Using the clock device compatible string to identify the platform
+and only initiate the enetX_rgmii_rx_clk clock for non imx8dxl platform.
+
+Signed-off-by: Shenwei Wang <shenwei.wang@nxp.com>
+Reviewed-by: Ranjani Vaidyanathan <ranjani.vaidyanathan@nxp.com>
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+---
+ drivers/clk/imx/clk-imx8qxp.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/imx/clk-imx8qxp.c b/drivers/clk/imx/clk-imx8qxp.c
+index 40a2efb13..e1dea4609 100644
+--- a/drivers/clk/imx/clk-imx8qxp.c
++++ b/drivers/clk/imx/clk-imx8qxp.c
+@@ -91,6 +91,11 @@ static const char * const pi_pll0_sels[] = {
+ 	"clk_dummy",
+ };
+ 
++static inline bool clk_on_imx8dxl(struct device_node *node)
++{
++	return of_device_is_compatible(node, "fsl,imx8dxl-clk") != 0;
++}
++
+ static int imx8qxp_clk_probe(struct platform_device *pdev)
+ {
+ 	struct device_node *ccm_node = pdev->dev.of_node;
+@@ -170,13 +175,15 @@ static int imx8qxp_clk_probe(struct platform_device *pdev)
+ 	imx_clk_mux_gpr_scu("enet0_rgmii_txc_sel", enet0_rgmii_txc_sels, ARRAY_SIZE(enet0_rgmii_txc_sels), IMX_SC_R_ENET_0, IMX_SC_C_TXCLK);
+ 	imx_clk_scu("enet0_bypass_clk", IMX_SC_R_ENET_0, IMX_SC_PM_CLK_BYPASS);
+ 	imx_clk_gate_gpr_scu("enet0_ref_50_clk", "clk_dummy", IMX_SC_R_ENET_0, IMX_SC_C_DISABLE_50, true);
+-	imx_clk_scu("enet0_rgmii_rx_clk", IMX_SC_R_ENET_0, IMX_SC_PM_CLK_MISC0);
++	if (!clk_on_imx8dxl(ccm_node)) {
++		imx_clk_scu("enet0_rgmii_rx_clk", IMX_SC_R_ENET_0, IMX_SC_PM_CLK_MISC0);
++		imx_clk_scu("enet1_rgmii_rx_clk", IMX_SC_R_ENET_1, IMX_SC_PM_CLK_MISC0);
++	}
+ 	imx_clk_scu("enet1_root_clk", IMX_SC_R_ENET_1, IMX_SC_PM_CLK_PER);
+ 	imx_clk_divider_gpr_scu("enet1_ref_div", "enet1_root_clk", IMX_SC_R_ENET_1, IMX_SC_C_CLKDIV);
+ 	imx_clk_mux_gpr_scu("enet1_rgmii_txc_sel", enet1_rgmii_txc_sels, ARRAY_SIZE(enet1_rgmii_txc_sels), IMX_SC_R_ENET_1, IMX_SC_C_TXCLK);
+ 	imx_clk_scu("enet1_bypass_clk", IMX_SC_R_ENET_1, IMX_SC_PM_CLK_BYPASS);
+ 	imx_clk_gate_gpr_scu("enet1_ref_50_clk", "clk_dummy", IMX_SC_R_ENET_1, IMX_SC_C_DISABLE_50, true);
+-	imx_clk_scu("enet1_rgmii_rx_clk", IMX_SC_R_ENET_1, IMX_SC_PM_CLK_MISC0);
+ 	imx_clk_scu("gpmi_io_clk", IMX_SC_R_NAND, IMX_SC_PM_CLK_MST_BUS);
+ 	imx_clk_scu("gpmi_bch_clk", IMX_SC_R_NAND, IMX_SC_PM_CLK_PER);
+ 	imx_clk_scu("usb3_aclk_div", IMX_SC_R_USB_2, IMX_SC_PM_CLK_PER);
+-- 
+2.25.1
+

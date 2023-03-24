@@ -1,0 +1,39 @@
+From 8fb2f57684f75323802ed332aa70f119fb88b31d Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Fri, 10 Jun 2022 18:43:31 +0800
+Subject: [PATCH 147/274] MLK-25941 arm64: dts: imx93-11x11-evk: add goodix
+ touch support
+
+Add goodix touch support on RM67199 DSI panel
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Clark Wang <xiaoning.wang@nxp.com>
+---
+ .../boot/dts/freescale/imx93-11x11-evk-rm67199.dts | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-rm67199.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-rm67199.dts
+index f66e205e6..8a27abb04 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-rm67199.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-rm67199.dts
+@@ -50,3 +50,17 @@ dsi_out: endpoint {
+ &lcdif {
+ 	assigned-clock-rates = <484000000>, <121000000>, <400000000>, <133333333>;
+ };
++
++&lpi2c1 {
++	touchscreen@14 {
++		compatible = "goodix,gt1151";
++		reg = <0x14>;
++		interrupt-parent = <&pcal6524>;
++		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
++		irq-gpios = <&pcal6524 7 GPIO_ACTIVE_HIGH>;
++		reset-gpios = <&adp5585gpio 9 GPIO_ACTIVE_HIGH>;
++		edge-failling-trigger;
++		touchscreen-size-x = <1080>;
++		touchscreen-size-y = <1920>;
++	};
++};
+-- 
+2.25.1
+

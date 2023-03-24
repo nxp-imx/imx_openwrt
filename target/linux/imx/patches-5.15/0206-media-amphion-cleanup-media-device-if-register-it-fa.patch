@@ -1,0 +1,51 @@
+From dd905bc9607fd173d806028e75313afa776bb8f0 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Mon, 14 Mar 2022 06:28:55 +0100
+Subject: [PATCH 206/274] media: amphion: cleanup media device if register it
+ fail
+
+there is issue that driver forget to
+call media_device_cleanup if media_device_register fail,
+it will led to memory leak.
+Also driver should check the return value of vpu_add_func.
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_drv.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_drv.c b/drivers/media/platform/amphion/vpu_drv.c
+index f19f823d4..9d5a50753 100644
+--- a/drivers/media/platform/amphion/vpu_drv.c
++++ b/drivers/media/platform/amphion/vpu_drv.c
+@@ -128,8 +128,12 @@ static int vpu_probe(struct platform_device *pdev)
+ 	vpu->encoder.function = MEDIA_ENT_F_PROC_VIDEO_ENCODER;
+ 	vpu->decoder.type = VPU_CORE_TYPE_DEC;
+ 	vpu->decoder.function = MEDIA_ENT_F_PROC_VIDEO_DECODER;
+-	vpu_add_func(vpu, &vpu->decoder);
+-	vpu_add_func(vpu, &vpu->encoder);
++	ret = vpu_add_func(vpu, &vpu->decoder);
++	if (ret)
++		goto err_add_decoder;
++	ret = vpu_add_func(vpu, &vpu->encoder);
++	if (ret)
++		goto err_add_encoder;
+ 	ret = media_device_register(&vpu->mdev);
+ 	if (ret)
+ 		goto err_vpu_media;
+@@ -141,7 +145,10 @@ static int vpu_probe(struct platform_device *pdev)
+ 
+ err_vpu_media:
+ 	vpu_remove_func(&vpu->encoder);
++err_add_encoder:
+ 	vpu_remove_func(&vpu->decoder);
++err_add_decoder:
++	media_device_cleanup(&vpu->mdev);
+ 	v4l2_device_unregister(&vpu->v4l2_dev);
+ err_vpu_deinit:
+ 	pm_runtime_set_suspended(dev);
+-- 
+2.25.1
+

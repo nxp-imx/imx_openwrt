@@ -1,0 +1,900 @@
+From 9da256ef40709b3214dcdd7b78f6faa67408f945 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Fri, 4 Mar 2022 14:29:43 +0800
+Subject: [PATCH 227/274] LF-6575: imx8q: vpu: switch to amphion upstream
+ driver
+
+dts add amphion vpu entry.
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+---
+ .../arm64/boot/dts/freescale/imx8-ss-vpu.dtsi | 78 ++++++++--------
+ .../boot/dts/freescale/imx8dxp-lpddr4-val.dts |  4 -
+ .../boot/dts/freescale/imx8qm-ddr4-val.dts    |  9 --
+ .../dts/freescale/imx8qm-mek-cockpit-a53.dts  | 81 ++++++----------
+ .../dts/freescale/imx8qm-mek-cockpit-a72.dts  | 81 ++++++----------
+ .../boot/dts/freescale/imx8qm-mek-dom0.dts    | 37 +++++---
+ .../boot/dts/freescale/imx8qm-mek-domu.dts    | 85 ++++++-----------
+ arch/arm64/boot/dts/freescale/imx8qm-mek.dts  | 92 +++++++------------
+ arch/arm64/boot/dts/freescale/imx8qm.dtsi     |  3 +
+ .../dts/freescale/imx8qxp-lpddr4-val-a0.dts   |  8 --
+ .../boot/dts/freescale/imx8qxp-mek-a0.dts     |  8 --
+ arch/arm64/boot/dts/freescale/imx8qxp.dtsi    |  2 +
+ arch/arm64/boot/dts/freescale/imx8x-mek.dtsi  | 47 +++-------
+ arch/arm64/boot/dts/freescale/imx8x-val.dtsi  |  4 -
+ 14 files changed, 201 insertions(+), 338 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx8-ss-vpu.dtsi b/arch/arm64/boot/dts/freescale/imx8-ss-vpu.dtsi
+index 96787fb70..cd8addbc0 100755
+--- a/arch/arm64/boot/dts/freescale/imx8-ss-vpu.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8-ss-vpu.dtsi
+@@ -4,67 +4,36 @@
+  *	Dong Aisheng <aisheng.dong@nxp.com>
+  */
+ 
+-vpu_subsys: bus@2c000000 {
+-	compatible = "simple-bus";
++vpu: vpu@2c000000 {
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 	ranges = <0x2c000000 0x0 0x2c000000 0x2000000>;
++	reg = <0 0x2c000000 0 0x1000000>;
++	power-domains = <&pd IMX_SC_R_VPU>;
++	status = "disabled";
+ 
+-	vpu_lpcg: clock-controller@2d000000 {
++	vpu_lpcg: clock-controller@2c000000 {
+ 		compatible = "fsl,imx8qxp-lpcg-vpu";
+ 		reg = <0x2c000000 0x2000000>;
+ 		#clock-cells = <1>;
+ 		status = "disabled";
+ 	};
+ 
+-	vpu_decoder: vpu_decoder@2c000000 {
+-		compatible = "nxp,imx8qm-b0-vpudec", "nxp,imx8qxp-b0-vpudec";
+-		reg = <0x2c000000 0x1000000>;
+-		reg-names = "vpu_regs";
+-		power-domains = <&pd IMX_SC_R_VPU_DEC_0>,
+-				<&pd IMX_SC_R_VPU>;
+-		power-domain-names = "vpudec", "vpu";
+-
+-		mbox-names = "tx0", "tx1", "rx";
+-		mboxes = <&mu_m0 0 0
+-			  &mu_m0 0 1
+-			  &mu_m0 1 0>;
+-
+-		status = "disabled";
+-	};
+-
+-	vpu_encoder: vpu_encoder@2d000000 {
+-		compatible = "nxp,imx8qxp-b0-vpuenc";
+-		reg = <0x2d000000 0x1000000>,	/*VPU Encoder*/
+-			<0x2c000000 0x2000000>; /*VPU*/
+-		reg-names = "vpu_regs";
+-		power-domains = <&pd IMX_SC_R_VPU_ENC_0>,
+-				<&pd IMX_SC_R_VPU>;
+-		power-domain-names = "vpuenc1", "vpu";
+-		#address-cells = <1>;
+-		#size-cells = <1>;
+-		status = "disabled";
+-	};
+-
+ 	mu_m0: mailbox@2d000000 {
+-		compatible = "fsl,imx8-mu0-vpu-m0", "fsl,imx6sx-mu";
++		compatible = "fsl,imx6sx-mu";
+ 		reg = <0x2d000000 0x20000>;
+ 		interrupts = <GIC_SPI 469 IRQ_TYPE_LEVEL_HIGH>;
+ 		#mbox-cells = <2>;
+ 		power-domains = <&pd IMX_SC_R_VPU_MU_0>;
+-		power-domain-names = "vpumu0";
+-		fsl,vpu_ap_mu_id = <16>;
+ 		status = "okay";
+ 	};
+ 
+ 	mu1_m0: mailbox@2d020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0", "fsl,imx6sx-mu";
++		compatible = "fsl,imx6sx-mu";
+ 		reg = <0x2d020000 0x20000>;
+ 		interrupts = <GIC_SPI 470 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+ 		#mbox-cells = <2>;
+ 		power-domains = <&pd IMX_SC_R_VPU_MU_1>;
+-		power-domain-names = "vpumu1";
+ 		status = "okay";
+ 	};
+ 
+@@ -72,10 +41,39 @@ mu2_m0: mailbox@2d040000 {
+ 		compatible = "fsl,imx8-mu2-vpu-m0", "fsl,imx6sx-mu";
+ 		reg = <0x2d040000 0x20000>;
+ 		interrupts = <GIC_SPI 474 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <18>;
+ 		#mbox-cells = <2>;
+ 		power-domains = <&pd IMX_SC_R_VPU_MU_2>;
+-		power-domain-names = "vpumu2";
++		status = "disabled";
++	};
++
++	vpu_core0: vpu-core@2d080000 {
++		reg = <0x2d080000 0x10000>;
++		compatible = "nxp,imx8q-vpu-decoder";
++		power-domains = <&pd IMX_SC_R_VPU_DEC_0>;
++		mbox-names = "tx0", "tx1", "rx";
++		mboxes = <&mu_m0 0 0>,
++			<&mu_m0 0 1>,
++			<&mu_m0 1 0>;
++		status = "disabled";
++	};
++	vpu_core1: vpu-core@2d090000 {
++		reg = <0x2d090000 0x10000>;
++		compatible = "nxp,imx8q-vpu-encoder";
++		power-domains = <&pd IMX_SC_R_VPU_ENC_0>;
++		mbox-names = "tx0", "tx1", "rx";
++		mboxes = <&mu1_m0 0 0>,
++			<&mu1_m0 0 1>,
++			<&mu1_m0 1 0>;
++		status = "disabled";
++	};
++	vpu_core2: vpu-core@2d0a0000 {
++		reg = <0x2d0a0000 0x10000>;
++		compatible = "nxp,imx8q-vpu-encoder";
++		power-domains = <&pd IMX_SC_R_VPU_ENC_1>;
++		mbox-names = "tx0", "tx1", "rx";
++		mboxes = <&mu2_m0 0 0>,
++			<&mu2_m0 0 1>,
++			<&mu2_m0 1 0>;
+ 		status = "disabled";
+ 	};
+ };
+diff --git a/arch/arm64/boot/dts/freescale/imx8dxp-lpddr4-val.dts b/arch/arm64/boot/dts/freescale/imx8dxp-lpddr4-val.dts
+index 15b28e151..7d4db3ad1 100644
+--- a/arch/arm64/boot/dts/freescale/imx8dxp-lpddr4-val.dts
++++ b/arch/arm64/boot/dts/freescale/imx8dxp-lpddr4-val.dts
+@@ -18,7 +18,3 @@ &usbotg3 {
+ 	extcon = <&typec_ptn5150>;
+ 	status = "okay";
+ };
+-
+-&vpu_decoder {
+-	status = "okay";
+-};
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-ddr4-val.dts b/arch/arm64/boot/dts/freescale/imx8qm-ddr4-val.dts
+index ac82470e1..49be4062c 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qm-ddr4-val.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-ddr4-val.dts
+@@ -867,12 +867,3 @@ it6263_1_in: endpoint {
+ 		};
+ 	};
+ };
+-
+-&vpu_decoder {
+-	core_type = <2>;
+-	status = "okay";
+-};
+-
+-&vpu_encoder {
+-	status = "okay";
+-};
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a53.dts b/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a53.dts
+index e9ba1b5a2..542a8b291 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a53.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a53.dts
+@@ -102,9 +102,13 @@ decoder_boot: decoder_boot@0x84000000 {
+ 			no-map;
+ 			reg = <0 0x84000000 0 0x2000000>;
+ 		};
+-		encoder_boot: encoder_boot@0x86000000 {
++		encoder1_boot: encoder1_boot@0x86000000 {
+ 			no-map;
+-			reg = <0 0x86000000 0 0x400000>;
++			reg = <0 0x86000000 0 0x200000>;
++		};
++		encoder2_boot: encoder2_boot@0x86200000 {
++			no-map;
++			reg = <0 0x86200000 0 0x200000>;
+ 		};
+ 		/*
+ 		 * reserved-memory layout
+@@ -134,17 +138,17 @@ decoder_rpc: decoder_rpc@0x92000000 {
+ 			no-map;
+ 			reg = <0 0x92000000 0 0x0>;
+ 		};
+-		encoder_rpc: encoder_rpc@0x92200000 {
+-			no-map;
+-			reg = <0 0x92200000 0 0x0>;
+-		};
+ 		dsp_reserved: dsp@0x92400000 {
+ 			no-map;
+ 			reg = <0 0x92400000 0 0x2000000>;
+ 		};
+-		encoder_reserved: encoder_reserved@0x94400000 {
++		encoder1_rpc: encoder1_rpc@0x94400000 {
++			no-map;
++			reg = <0 0x94400000 0 0x700000>;
++		};
++		encoder2_rpc: encoder2_rpc@0x94b00000 {
+ 			no-map;
+-			reg = <0 0x94400000 0 0x800000>;
++			reg = <0 0x94b00000 0 0x700000>;
+ 		};
+ 
+ 		/* global autoconfigured region for contiguous allocations */
+@@ -1726,56 +1730,27 @@ &mu2_m0{
+ 	status = "okay";
+ };
+ 
+-&vpu_decoder {
+-	compatible = "nxp,imx8qm-b0-vpudec";
+-	boot-region = <&decoder_boot>;
+-	rpc-region = <&decoder_rpc>;
+-	reg-csr = <0x2d080000>;
+-	core_type = <2>;
++&vpu {
++	compatible = "nxp,imx8qm-vpu";
+ 	status = "okay";
+ };
+ 
+-&vpu_encoder {
+-	compatible = "nxp,imx8qm-b0-vpuenc";
+-	boot-region = <&encoder_boot>;
+-	rpc-region = <&encoder_rpc>;
+-	reserved-region = <&encoder_reserved>;
+-	reg-rpc-system = <0x40000000>;
+-	resolution-max = <1920 1080>;
+-	power-domains = <&pd IMX_SC_R_VPU_ENC_0>, <&pd IMX_SC_R_VPU_ENC_1>,
+-			<&pd IMX_SC_R_VPU>;
+-	power-domain-names = "vpuenc1", "vpuenc2", "vpu";
+-	mbox-names = "enc1_tx0", "enc1_tx1", "enc1_rx",
+-		     "enc2_tx0", "enc2_tx1", "enc2_rx";
+-	mboxes = <&mu1_m0 0 0
+-		  &mu1_m0 0 1
+-		  &mu1_m0 1 0
+-		  &mu2_m0 0 0
+-		  &mu2_m0 0 1
+-		  &mu2_m0 1 0>;
++&vpu_core0 {
++	reg = <0x2d080000 0x10000>;
++	memory-region = <&decoder_boot>, <&decoder_rpc>;
+ 	status = "okay";
++};
+ 
+-	core0@1020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0";
+-		reg = <0x1020000 0x20000>;
+-		reg-csr = <0x1090000 0x10000>;
+-		interrupts = <GIC_SPI 473 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
+-
+-	core1@1040000 {
+-		compatible = "fsl,imx8-mu2-vpu-m0";
+-		reg = <0x1040000 0x20000>;
+-		reg-csr = <0x10A0000 0x10000>;
+-		interrupts = <GIC_SPI 474 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <18>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
++&vpu_core1 {
++	reg = <0x2d090000 0x10000>;
++	memory-region = <&encoder1_boot>, <&encoder1_rpc>;
++	status = "okay";
++};
++
++&vpu_core2 {
++	reg = <0x2d0a0000 0x10000>;
++	memory-region = <&encoder2_boot>, <&encoder2_rpc>;
++	status = "okay";
+ };
+ 
+ &lsio_gpio0 {
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a72.dts b/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a72.dts
+index c4f1af276..ca84be761 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a72.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-mek-cockpit-a72.dts
+@@ -102,9 +102,13 @@ decoder_boot: decoder_boot@0xc4000000 {
+ 			no-map;
+ 			reg = <0 0xc4000000 0 0x2000000>;
+ 		};
+-		encoder_boot: encoder_boot@0xc6000000 {
++		encoder1_boot: encoder1_boot@0xc6000000 {
+ 			no-map;
+-			reg = <0 0xc6000000 0 0x400000>;
++			reg = <0 0xc6000000 0 0x200000>;
++		};
++		encoder2_boot: encoder2_boot@0xc6200000 {
++			no-map;
++			reg = <0 0xc6000000 0 0x200000>;
+ 		};
+ 		/*
+ 		 * reserved-memory layout
+@@ -134,17 +138,17 @@ decoder_rpc: decoder_rpc@0xd2000000 {
+ 			no-map;
+ 			reg = <0 0xd2000000 0 0x200000>;
+ 		};
+-		encoder_rpc: encoder_rpc@0xd2200000 {
+-			no-map;
+-			reg = <0 0xd2200000 0 0x200000>;
+-		};
+ 		dsp_reserved: dsp@0x92400000 {
+ 			no-map;
+ 			reg = <0 0x92400000 0 0x2000000>;
+ 		};
+-		encoder_reserved: encoder_reserved@0xd4400000 {
++		encoder1_rpc: encoder1_rpc@0xd4400000 {
++			no-map;
++			reg = <0 0xd4400000 0 0x700000>;
++		};
++		encoder2_rpc: encoder2_rpc@0xd4b00000 {
+ 			no-map;
+-			reg = <0 0xd4400000 0 0x800000>;
++			reg = <0 0xd4b00000 0 0x700000>;
+ 		};
+ 
+ 		/* global autoconfigured region for contiguous allocations */
+@@ -1753,56 +1757,27 @@ &mu2_m0{
+ 	status = "okay";
+ };
+ 
+-&vpu_decoder {
+-	compatible = "nxp,imx8qm-b0-vpudec";
+-	boot-region = <&decoder_boot>;
+-	rpc-region = <&decoder_rpc>;
+-	reg-csr = <0x2d080000>;
+-	core_type = <2>;
++&vpu {
++	compatible = "nxp,imx8qm-vpu";
+ 	status = "okay";
+ };
+ 
+-&vpu_encoder {
+-	compatible = "nxp,imx8qm-b0-vpuenc";
+-	boot-region = <&encoder_boot>;
+-	rpc-region = <&encoder_rpc>;
+-	reserved-region = <&encoder_reserved>;
+-	reg-rpc-system = <0x40000000>;
+-	resolution-max = <1920 1080>;
+-	power-domains = <&pd IMX_SC_R_VPU_ENC_0>, <&pd IMX_SC_R_VPU_ENC_1>,
+-			<&pd IMX_SC_R_VPU>;
+-	power-domain-names = "vpuenc1", "vpuenc2", "vpu";
+-	mbox-names = "enc1_tx0", "enc1_tx1", "enc1_rx",
+-		     "enc2_tx0", "enc2_tx1", "enc2_rx";
+-	mboxes = <&mu1_m0 0 0
+-		  &mu1_m0 0 1
+-		  &mu1_m0 1 0
+-		  &mu2_m0 0 0
+-		  &mu2_m0 0 1
+-		  &mu2_m0 1 0>;
++&vpu_core0 {
++	reg = <0x2d080000 0x10000>;
++	memory-region = <&decoder_boot>, <&decoder_rpc>;
+ 	status = "okay";
++};
+ 
+-	core0@1020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0";
+-		reg = <0x1020000 0x20000>;
+-		reg-csr = <0x1090000 0x10000>;
+-		interrupts = <GIC_SPI 473 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
+-
+-	core1@1040000 {
+-		compatible = "fsl,imx8-mu2-vpu-m0";
+-		reg = <0x1040000 0x20000>;
+-		reg-csr = <0x10A0000 0x10000>;
+-		interrupts = <GIC_SPI 474 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <18>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
++&vpu_core1 {
++	reg = <0x2d090000 0x10000>;
++	memory-region = <&encoder1_boot>, <&encoder1_rpc>;
++	status = "okay";
++};
++
++&vpu_core2 {
++	reg = <0x2d0a0000 0x10000>;
++	memory-region = <&encoder2_boot>, <&encoder2_rpc>;
++	status = "okay";
+ };
+ 
+ &lsio_gpio0 {
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-mek-dom0.dts b/arch/arm64/boot/dts/freescale/imx8qm-mek-dom0.dts
+index 0e4e12276..f9d7f041f 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qm-mek-dom0.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-mek-dom0.dts
+@@ -336,9 +336,14 @@ decoder_boot@0x84000000 {
+ 			reg = <0 0x84000000 0 0x2000000>;
+ 			xen,passthrough;
+ 		};
+-		encoder_boot@0x86000000 {
++		encoder1_boot@0x86000000 {
+ 			no-map;
+-			reg = <0 0x86000000 0 0x400000>;
++			reg = <0 0x86000000 0 0x200000>;
++			xen,passthrough;
++		};
++		encoder2_boot@0x86200000 {
++			no-map;
++			reg = <0 0x86200000 0 0x200000>;
+ 			xen,passthrough;
+ 		};
+ 		m4@0x88000000 {
+@@ -351,19 +356,19 @@ decoder_rpc@0x92000000 {
+ 			reg = <0 0x92000000 0 0x200000>;
+ 			xen,passthrough;
+ 		};
+-		encoder_rpc@0x92200000 {
++		dsp@0x92200000 {
+ 			no-map;
+-			reg = <0 0x92200000 0 0x200000>;
++			reg = <0 0x92200000 0 0x2000000>;
+ 			xen,passthrough;
+ 		};
+-		dsp@0x92400000 {
++		encoder1_rpc@0x94200000 {
+ 			no-map;
+-			reg = <0 0x92400000 0 0x2000000>;
++			reg = <0 0x94200000 0 0x700000>;
+ 			xen,passthrough;
+ 		};
+-		encoder_reserved@0x94400000 {
++		encoder2_rpc@0x94900000 {
+ 			no-map;
+-			reg = <0 0x94400000 0 0x800000>;
++			reg = <0 0x94900000 0 0x700000>;
+ 			xen,passthrough;
+ 		};
+ 		ts_boot@0x95000000 {
+@@ -387,7 +392,7 @@ linux,cma {
+ 
+ &smmu {
+ 	mmu-masters = <&dpu1 0x13>, <&gpu_3d0 0x15>, <&usdhc1 0x12>, <&edma0 0x14>,
+-		      <&vpu_decoder 0x7>, <&usbotg1 0x11>, <&usbotg3 0x4>,
++		      <&vpu_core0 0x7>, <&usbotg1 0x11>, <&usbotg3 0x4>,
+ 		      <&pciea 0x8>, <&edma214 0x10>, <&isi_0 0x5>;
+ };
+ 
+@@ -575,7 +580,11 @@ &vpu_lpcg {
+ 	xen,passthrough;
+ };
+ 
+-&vpu_decoder {
++&vpu {
++	xen,passthrough;
++};
++
++&vpu_core0 {
+ 	xen,passthrough;
+ 	#stream-id-cells = <1>;
+ 	iommus = <&smmu>;
+@@ -591,7 +600,11 @@ &vpu_decoder {
+ 			 <IMX_SC_R_VPU_PID7>;
+ };
+ 
+-&vpu_encoder {
++&vpu_core1 {
++	xen,passthrough;
++};
++
++&vpu_core2 {
+ 	xen,passthrough;
+ };
+ 
+@@ -627,6 +640,7 @@ &mu3_m0 {
+ };
+ */
+ 
++/*
+ &vpu_enc_core0 {
+ 	xen,passthrough;
+ };
+@@ -634,6 +648,7 @@ &vpu_enc_core0 {
+ &vpu_enc_core1 {
+ 	xen,passthrough;
+ };
++*/
+ 
+ &usbotg1 {
+ 	xen,passthrough;
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-mek-domu.dts b/arch/arm64/boot/dts/freescale/imx8qm-mek-domu.dts
+index fa7e73ed8..f591023cf 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qm-mek-domu.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-mek-domu.dts
+@@ -133,21 +133,25 @@ dsp_vdev0buffer: vdev0buffer@94300000 {
+ 			reg = <0 0x94300000 0 0x100000>;
+ 			no-map;
+ 		};
+-		encoder_boot: encoder_boot@0x86000000 {
++		encoder1_boot: encoder1_boot@0x86000000 {
+ 			no-map;
+-			reg = <0 0x86000000 0 0x400000>;
++			reg = <0 0x86000000 0 0x200000>;
++		};
++		encoder2_boot: encoder2_boot@0x86200000 {
++			no-map;
++			reg = <0 0x86200000 0 0x200000>;
+ 		};
+ 		decoder_rpc: decoder_rpc@0x92000000 {
+ 			no-map;
+ 			reg = <0 0x92000000 0 0x200000>;
+ 		};
+-		encoder_rpc: encoder_rpc@0x92200000 {
++		encoder1_rpc: encoder1_rpc@0x94200000 {
+ 			no-map;
+-			reg = <0 0x92200000 0 0x200000>;
++			reg = <0 0x94200000 0 0x700000>;
+ 		};
+-		encoder_reserved: encoder_reserved@0x94400000 {
++		encoder2_rpc: encoder2_rpc@0x94900000 {
+ 			no-map;
+-			reg = <0 0x94400000 0 0x800000>;
++			reg = <0 0x94900000 0 0x700000>;
+ 		};
+ 		ts_boot: ts_boot@0x95000000 {
+ 			no-map;
+@@ -959,12 +963,26 @@ &mu3_m0{
+ };
+ */
+ 
+-&vpu_decoder {
+-	compatible = "nxp,imx8qm-b0-vpudec";
+-	boot-region = <&decoder_boot>;
+-	rpc-region = <&decoder_rpc>;
+-	reg-csr = <0x2d080000>;
+-	core_type = <2>;
++&vpu {
++	compatible = "nxp,imx8qm-vpu";
++	status = "okay";
++};
++
++&vpu_core0 {
++	reg = <0x2d080000 0x10000>;
++	memory-region = <&decoder_boot>, <&decoder_rpc>;
++	status = "okay";
++};
++
++&vpu_core1 {
++	reg = <0x2d090000 0x10000>;
++	memory-region = <&encoder1_boot>, <&encoder1_rpc>;
++	status = "okay";
++};
++
++&vpu_core2 {
++	reg = <0x2d0a0000 0x10000>;
++	memory-region = <&encoder2_boot>, <&encoder2_rpc>;
+ 	status = "okay";
+ };
+ 
+@@ -977,49 +995,6 @@ &vpu_ts {
+ };
+ */
+ 
+-&vpu_encoder {
+-	compatible = "nxp,imx8qm-b0-vpuenc";
+-	boot-region = <&encoder_boot>;
+-	rpc-region = <&encoder_rpc>;
+-	reserved-region = <&encoder_reserved>;
+-	reg-rpc-system = <0x40000000>;
+-	resolution-max = <1920 1920>;
+-	power-domains = <&pd IMX_SC_R_VPU_ENC_0>, <&pd IMX_SC_R_VPU_ENC_1>,
+-			<&pd IMX_SC_R_VPU>;
+-	power-domain-names = "vpuenc1", "vpuenc2", "vpu";
+-	mbox-names = "enc1_tx0", "enc1_tx1", "enc1_rx",
+-		     "enc2_tx0", "enc2_tx1", "enc2_rx";
+-	mboxes = <&mu1_m0 0 0
+-		  &mu1_m0 0 1
+-		  &mu1_m0 1 0
+-		  &mu2_m0 0 0
+-		  &mu2_m0 0 1
+-		  &mu2_m0 1 0>;
+-	status = "okay";
+-
+-	vpu_enc_core0: core0@1020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0";
+-		reg = <0x1020000 0x20000>;
+-		reg-csr = <0x1090000 0x10000>;
+-		interrupts = <GIC_SPI 473 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
+-
+-	vpu_enc_core1: core1@1040000 {
+-		compatible = "fsl,imx8-mu2-vpu-m0";
+-		reg = <0x1040000 0x20000>;
+-		reg-csr = <0x10A0000 0x10000>;
+-		interrupts = <GIC_SPI 474 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <18>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
+-};
+-
+ &lsio_gpio4 {
+ 	/delete-property/ power-domains;
+ };
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm-mek.dts b/arch/arm64/boot/dts/freescale/imx8qm-mek.dts
+index 745a5ed77..4104eedcd 100755
+--- a/arch/arm64/boot/dts/freescale/imx8qm-mek.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qm-mek.dts
+@@ -106,17 +106,17 @@ decoder_boot: decoder_boot@0x84000000 {
+ 			no-map;
+ 			reg = <0 0x84000000 0 0x2000000>;
+ 		};
+-		encoder_boot: encoder_boot@0x86000000 {
++		encoder1_boot: encoder1_boot@0x86000000 {
+ 			no-map;
+-			reg = <0 0x86000000 0 0x400000>;
++			reg = <0 0x86000000 0 0x200000>;
+ 		};
+-		decoder_rpc: decoder_rpc@0x92000000 {
++		encoder2_boot: encoder2_boot@0x86200000 {
+ 			no-map;
+-			reg = <0 0x92000000 0 0x200000>;
++			reg = <0 0x86200000 0 0x200000>;
+ 		};
+-		encoder_rpc: encoder_rpc@0x92200000 {
++		decoder_rpc: decoder_rpc@0x92000000 {
+ 			no-map;
+-			reg = <0 0x92200000 0 0x200000>;
++			reg = <0 0x92000000 0 0x100000>;
+ 		};
+ 		dsp_reserved: dsp@92400000 {
+ 			reg = <0 0x92400000 0 0x1000000>;
+@@ -139,9 +139,13 @@ dsp_vdev0buffer: vdev0buffer@94300000 {
+ 			reg = <0 0x94300000 0 0x100000>;
+ 			no-map;
+ 		};
+-		encoder_reserved: encoder_reserved@0x94400000 {
++		encoder1_rpc: encoder1_rpc@0x94400000 {
++			no-map;
++			reg = <0 0x94400000 0 0x700000>;
++		};
++		encoder2_rpc: encoder2_rpc@0x94b00000 {
+ 			no-map;
+-			reg = <0 0x94400000 0 0x800000>;
++			reg = <0 0x94b00000 0 0x700000>;
+ 		};
+ 
+ 		/* global autoconfigured region for contiguous allocations */
+@@ -1834,55 +1838,25 @@ &mu2_m0{
+ 	status = "okay";
+ };
+ 
+-&vpu_decoder {
+-	compatible = "nxp,imx8qm-b0-vpudec";
+-	boot-region = <&decoder_boot>;
+-	rpc-region = <&decoder_rpc>;
+-	reg-csr = <0x2d080000>;
+-	core_type = <2>;
+-	status = "okay";
+-};
+-
+-&vpu_encoder {
+-	compatible = "nxp,imx8qm-b0-vpuenc";
+-	boot-region = <&encoder_boot>;
+-	rpc-region = <&encoder_rpc>;
+-	reserved-region = <&encoder_reserved>;
+-	reg-rpc-system = <0x40000000>;
+-	resolution-max = <1920 1920>;
+-	fps-max = <120>;
+-	power-domains = <&pd IMX_SC_R_VPU_ENC_0>, <&pd IMX_SC_R_VPU_ENC_1>,
+-			<&pd IMX_SC_R_VPU>;
+-	power-domain-names = "vpuenc1", "vpuenc2", "vpu";
+-	mbox-names = "enc1_tx0", "enc1_tx1", "enc1_rx",
+-		     "enc2_tx0", "enc2_tx1", "enc2_rx";
+-	mboxes = <&mu1_m0 0 0
+-		  &mu1_m0 0 1
+-		  &mu1_m0 1 0
+-		  &mu2_m0 0 0
+-		  &mu2_m0 0 1
+-		  &mu2_m0 1 0>;
+-	status = "okay";
+-
+-	vpu_enc_core0: core0@1020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0";
+-		reg = <0x1020000 0x20000>;
+-		reg-csr = <0x1090000 0x10000>;
+-		interrupts = <GIC_SPI 473 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
+-
+-	vpu_enc_core1: core1@1040000 {
+-		compatible = "fsl,imx8-mu2-vpu-m0";
+-		reg = <0x1040000 0x20000>;
+-		reg-csr = <0x10A0000 0x10000>;
+-		interrupts = <GIC_SPI 474 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <18>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
++&vpu {
++	compatible = "nxp,imx8qm-vpu";
++	status = "okay";
++};
++
++&vpu_core0 {
++	reg = <0x2d080000 0x10000>;
++	memory-region = <&decoder_boot>, <&decoder_rpc>;
++	status = "okay";
++};
++
++&vpu_core1 {
++	reg = <0x2d090000 0x10000>;
++	memory-region = <&encoder1_boot>, <&encoder1_rpc>;
++	status = "okay";
++};
++
++&vpu_core2 {
++	reg = <0x2d0a0000 0x10000>;
++	memory-region = <&encoder2_boot>, <&encoder2_rpc>;
++	status = "okay";
+ };
+diff --git a/arch/arm64/boot/dts/freescale/imx8qm.dtsi b/arch/arm64/boot/dts/freescale/imx8qm.dtsi
+index 976991d05..c3fdee60b 100755
+--- a/arch/arm64/boot/dts/freescale/imx8qm.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8qm.dtsi
+@@ -58,6 +58,9 @@ aliases {
+ 		dphy1 = &mipi1_dphy;
+ 		mipi_dsi0 = &mipi0_dsi_host;
+ 		mipi_dsi1 = &mipi1_dsi_host;
++		vpu_core0 = &vpu_core0;
++		vpu_core1 = &vpu_core1;
++		vpu_core2 = &vpu_core2;
+ 	};
+ 
+ 	cpus: cpus {
+diff --git a/arch/arm64/boot/dts/freescale/imx8qxp-lpddr4-val-a0.dts b/arch/arm64/boot/dts/freescale/imx8qxp-lpddr4-val-a0.dts
+index 74695fd4a..48bd96a1d 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qxp-lpddr4-val-a0.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qxp-lpddr4-val-a0.dts
+@@ -6,11 +6,3 @@
+ /dts-v1/;
+ 
+ #include "imx8qxp-lpddr4-val.dts"
+-
+-&vpu_encoder {
+-	status = "disabled";
+-};
+-
+-&vpu_decoder {
+-	status = "disabled";
+-};
+diff --git a/arch/arm64/boot/dts/freescale/imx8qxp-mek-a0.dts b/arch/arm64/boot/dts/freescale/imx8qxp-mek-a0.dts
+index 16b0261de..324c4be59 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qxp-mek-a0.dts
++++ b/arch/arm64/boot/dts/freescale/imx8qxp-mek-a0.dts
+@@ -6,11 +6,3 @@
+ /dts-v1/;
+ 
+ #include "imx8qxp-mek.dts"
+-
+-&vpu_encoder {
+-	status = "disabled";
+-};
+-
+-&vpu_decoder {
+-	status = "disabled";
+-};
+diff --git a/arch/arm64/boot/dts/freescale/imx8qxp.dtsi b/arch/arm64/boot/dts/freescale/imx8qxp.dtsi
+index fd7268293..be33c4591 100644
+--- a/arch/arm64/boot/dts/freescale/imx8qxp.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8qxp.dtsi
+@@ -69,6 +69,8 @@ aliases {
+ 		i2c15 = &i2c_rpbus_15;
+ 		mipi_dsi0 = &mipi0_dsi_host;
+ 		mipi_dsi1 = &mipi1_dsi_host;
++		vpu_core0 = &vpu_core0;
++		vpu_core1 = &vpu_core1;
+ 	};
+ 
+ 	cpus: cpus {
+diff --git a/arch/arm64/boot/dts/freescale/imx8x-mek.dtsi b/arch/arm64/boot/dts/freescale/imx8x-mek.dtsi
+index cb792a0fd..c6d777643 100644
+--- a/arch/arm64/boot/dts/freescale/imx8x-mek.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8x-mek.dtsi
+@@ -97,12 +97,7 @@ encoder_boot: encoder-boot@86000000 {
+ 		};
+ 
+ 		decoder_rpc: decoder-rpc@0x92000000 {
+-			reg = <0 0x92000000 0 0x200000>;
+-			no-map;
+-		};
+-
+-		encoder_rpc: encoder-rpc@0x92200000 {
+-			reg = <0 0x92200000 0 0x200000>;
++			reg = <0 0x92000000 0 0x100000>;
+ 			no-map;
+ 		};
+ 
+@@ -130,9 +125,9 @@ dsp_vdev0buffer: vdev0buffer@94300000 {
+ 			no-map;
+ 		};
+ 
+-		encoder_reserved: encoder_reserved@94400000 {
++		encoder_rpc: encoder-rpc@0x94400000 {
++			reg = <0 0x94400000 0 0x700000>;
+ 			no-map;
+-			reg = <0 0x94400000 0 0x800000>;
+ 		};
+ 		/* global autoconfigured region for contiguous allocations */
+ 		linux,cma {
+@@ -1071,37 +1066,21 @@ &usdhc2 {
+ 	status = "okay";
+ };
+ 
+-&vpu_decoder {
+-	boot-region = <&decoder_boot>;
+-	rpc-region = <&decoder_rpc>;
+-	reg-csr = <0x2d040000>;
+-	core_type = <1>;
++&vpu {
++	compatible = "nxp,imx8qxp-vpu";
+ 	status = "okay";
+ };
+ 
+-&vpu_encoder {
+-	boot-region = <&encoder_boot>;
+-	rpc-region = <&encoder_rpc>;
+-	reserved-region = <&encoder_reserved>;
+-	reg-rpc-system = <0x40000000>;
+-	resolution-max = <1920 1920>;
+-	fps-max = <120>;
+-	mbox-names = "enc1_tx0", "enc1_tx1", "enc1_rx";
+-	mboxes = <&mu1_m0 0 0
+-		  &mu1_m0 0 1
+-		  &mu1_m0 1 0>;
++&vpu_core0 {
++	reg = <0x2d040000 0x10000>;
++	memory-region = <&decoder_boot>, <&decoder_rpc>;
+ 	status = "okay";
++};
+ 
+-	core0@1020000 {
+-		compatible = "fsl,imx8-mu1-vpu-m0";
+-		reg = <0x1020000 0x20000>;
+-		reg-csr = <0x1050000 0x10000>;
+-		interrupts = <GIC_SPI 470 IRQ_TYPE_LEVEL_HIGH>;
+-		fsl,vpu_ap_mu_id = <17>;
+-		fw-buf-size = <0x200000>;
+-		rpc-buf-size = <0x80000>;
+-		print-buf-size = <0x80000>;
+-	};
++&vpu_core1 {
++	reg = <0x2d050000 0x10000>;
++	memory-region = <&encoder_boot>, <&encoder_rpc>;
++	status = "okay";
+ };
+ 
+ &gpu_3d0 {
+diff --git a/arch/arm64/boot/dts/freescale/imx8x-val.dtsi b/arch/arm64/boot/dts/freescale/imx8x-val.dtsi
+index 1026e23ad..90967c902 100644
+--- a/arch/arm64/boot/dts/freescale/imx8x-val.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx8x-val.dtsi
+@@ -841,7 +841,3 @@ it6263_1_in: endpoint {
+ 		};
+ 	};
+ };
+-
+-&vpu_encoder {
+-	status = "okay";
+-};
+-- 
+2.25.1
+

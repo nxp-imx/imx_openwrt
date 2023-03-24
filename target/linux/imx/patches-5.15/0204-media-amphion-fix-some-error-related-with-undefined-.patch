@@ -1,0 +1,262 @@
+From 82b5bb3b734f93874193525d389a70336343baf6 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Fri, 11 Mar 2022 06:16:34 +0100
+Subject: [PATCH 204/274] media: amphion: fix some error related with undefined
+ reference to __divdi3
+
+1. use ns_to_timespec64 instead of division method
+2. use timespec64_to_ns instead of custom macro
+3. remove unused custom macro
+4. don't modify minus timestamp
+5. remove some unused debug timestamp information
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Reported-by: kernel test robot <lkp@intel.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vdec.c        | 35 --------------------
+ drivers/media/platform/amphion/vpu_helpers.h |  3 --
+ drivers/media/platform/amphion/vpu_malone.c  | 18 +++++-----
+ drivers/media/platform/amphion/vpu_v4l2.c    |  5 +--
+ drivers/media/platform/amphion/vpu_windsor.c | 18 +++++-----
+ 5 files changed, 19 insertions(+), 60 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vdec.c b/drivers/media/platform/amphion/vdec.c
+index 24ce5ea8e..8f8dfd6ce 100644
+--- a/drivers/media/platform/amphion/vdec.c
++++ b/drivers/media/platform/amphion/vdec.c
+@@ -65,9 +65,6 @@ struct vdec_t {
+ 	u32 drain;
+ 	u32 ts_pre_count;
+ 	u32 frame_depth;
+-	s64 ts_start;
+-	s64 ts_input;
+-	s64 timestamp;
+ };
+ 
+ static const struct vpu_format vdec_formats[] = {
+@@ -693,7 +690,6 @@ static void vdec_buf_done(struct vpu_inst *inst, struct vpu_frame_info *frame)
+ 
+ 	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
+ 	vpu_inst_lock(inst);
+-	vdec->timestamp = frame->timestamp;
+ 	vdec->display_frame_count++;
+ 	vpu_inst_unlock(inst);
+ 	dev_dbg(inst->dev, "[%d] decoded : %d, display : %d, sequence : %d\n",
+@@ -713,9 +709,6 @@ static void vdec_stop_done(struct vpu_inst *inst)
+ 	vdec->params.end_flag = 0;
+ 	vdec->drain = 0;
+ 	vdec->ts_pre_count = 0;
+-	vdec->timestamp = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_start = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_input = VPU_INVALID_TIMESTAMP;
+ 	vdec->params.frame_count = 0;
+ 	vdec->decoded_frame_count = 0;
+ 	vdec->display_frame_count = 0;
+@@ -1228,7 +1221,6 @@ static int vdec_process_output(struct vpu_inst *inst, struct vb2_buffer *vb)
+ 	struct vdec_t *vdec = inst->priv;
+ 	struct vb2_v4l2_buffer *vbuf;
+ 	struct vpu_rpc_buffer_desc desc;
+-	s64 timestamp;
+ 	u32 free_space;
+ 	int ret;
+ 
+@@ -1252,12 +1244,6 @@ static int vdec_process_output(struct vpu_inst *inst, struct vb2_buffer *vb)
+ 	if (free_space < vb2_get_plane_payload(vb, 0) + 0x40000)
+ 		return -ENOMEM;
+ 
+-	timestamp = vb->timestamp;
+-	if (timestamp >= 0 && vdec->ts_start < 0)
+-		vdec->ts_start = timestamp;
+-	if (vdec->ts_input < timestamp)
+-		vdec->ts_input = timestamp;
+-
+ 	ret = vpu_iface_input_frame(inst, vb);
+ 	if (ret < 0)
+ 		return -ENOMEM;
+@@ -1333,9 +1319,6 @@ static void vdec_abort(struct vpu_inst *inst)
+ 	vdec->params.end_flag = 0;
+ 	vdec->drain = 0;
+ 	vdec->ts_pre_count = 0;
+-	vdec->timestamp = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_start = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_input = VPU_INVALID_TIMESTAMP;
+ 	vdec->params.frame_count = 0;
+ 	vdec->decoded_frame_count = 0;
+ 	vdec->display_frame_count = 0;
+@@ -1550,21 +1533,6 @@ static int vdec_get_debug_info(struct vpu_inst *inst, char *str, u32 size, u32 i
+ 				vdec->codec_info.frame_rate.numerator,
+ 				vdec->codec_info.frame_rate.denominator);
+ 		break;
+-	case 10:
+-	{
+-		s64 timestamp = vdec->timestamp;
+-		s64 ts_start = vdec->ts_start;
+-		s64 ts_input = vdec->ts_input;
+-
+-		num = scnprintf(str, size, "timestamp = %9lld.%09lld(%9lld.%09lld, %9lld.%09lld)\n",
+-				timestamp / NSEC_PER_SEC,
+-				timestamp % NSEC_PER_SEC,
+-				ts_start / NSEC_PER_SEC,
+-				ts_start % NSEC_PER_SEC,
+-				ts_input / NSEC_PER_SEC,
+-				ts_input % NSEC_PER_SEC);
+-	}
+-		break;
+ 	default:
+ 		break;
+ 	}
+@@ -1599,9 +1567,6 @@ static void vdec_init(struct file *file)
+ 
+ 	vdec = inst->priv;
+ 	vdec->frame_depth = VDEC_FRAME_DEPTH;
+-	vdec->timestamp = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_start = VPU_INVALID_TIMESTAMP;
+-	vdec->ts_input = VPU_INVALID_TIMESTAMP;
+ 
+ 	memset(&f, 0, sizeof(f));
+ 	f.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+diff --git a/drivers/media/platform/amphion/vpu_helpers.h b/drivers/media/platform/amphion/vpu_helpers.h
+index 3676cc83e..130d1357c 100644
+--- a/drivers/media/platform/amphion/vpu_helpers.h
++++ b/drivers/media/platform/amphion/vpu_helpers.h
+@@ -11,9 +11,6 @@ struct vpu_pair {
+ 	u32 dst;
+ };
+ 
+-#define MAKE_TIMESTAMP(s, ns)		(((s32)(s) * NSEC_PER_SEC) + (ns))
+-#define VPU_INVALID_TIMESTAMP		MAKE_TIMESTAMP(-1, 0)
+-
+ int vpu_helper_find_in_array_u8(const u8 *array, u32 size, u32 x);
+ bool vpu_helper_check_type(struct vpu_inst *inst, u32 type);
+ const struct vpu_format *vpu_helper_find_format(struct vpu_inst *inst, u32 type, u32 pixelfmt);
+diff --git a/drivers/media/platform/amphion/vpu_malone.c b/drivers/media/platform/amphion/vpu_malone.c
+index c2b424fb6..80ba3ad90 100644
+--- a/drivers/media/platform/amphion/vpu_malone.c
++++ b/drivers/media/platform/amphion/vpu_malone.c
+@@ -14,6 +14,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/delay.h>
+ #include <linux/rational.h>
++#include <linux/time64.h>
+ #include <media/videobuf2-v4l2.h>
+ #include <media/videobuf2-dma-contig.h>
+ #include <linux/videodev2.h>
+@@ -748,14 +749,12 @@ static void vpu_malone_pack_fs_release(struct vpu_rpc_event *pkt,
+ static void vpu_malone_pack_timestamp(struct vpu_rpc_event *pkt,
+ 				      struct vpu_ts_info *info)
+ {
++	struct timespec64 ts = ns_to_timespec64(info->timestamp);
++
+ 	pkt->hdr.num = 3;
+-	if (info->timestamp < 0) {
+-		pkt->data[0] = (u32)-1;
+-		pkt->data[1] = 0;
+-	} else {
+-		pkt->data[0] = info->timestamp / NSEC_PER_SEC;
+-		pkt->data[1] = info->timestamp % NSEC_PER_SEC;
+-	}
++
++	pkt->data[0] = ts.tv_sec;
++	pkt->data[1] = ts.tv_nsec;
+ 	pkt->data[2] = info->size;
+ }
+ 
+@@ -916,6 +915,8 @@ static void vpu_malone_unpack_rel_frame(struct vpu_rpc_event *pkt,
+ static void vpu_malone_unpack_buff_rdy(struct vpu_rpc_event *pkt,
+ 				       struct vpu_dec_pic_info *info)
+ {
++	struct timespec64 ts = { pkt->data[9], pkt->data[10] };
++
+ 	info->id = pkt->data[0];
+ 	info->luma = pkt->data[1];
+ 	info->stride = pkt->data[3];
+@@ -923,7 +924,8 @@ static void vpu_malone_unpack_buff_rdy(struct vpu_rpc_event *pkt,
+ 		info->skipped = 1;
+ 	else
+ 		info->skipped = 0;
+-	info->timestamp = MAKE_TIMESTAMP(pkt->data[9], pkt->data[10]);
++
++	info->timestamp = timespec64_to_ns(&ts);
+ }
+ 
+ int vpu_malone_unpack_msg_data(struct vpu_rpc_event *pkt, void *data)
+diff --git a/drivers/media/platform/amphion/vpu_v4l2.c b/drivers/media/platform/amphion/vpu_v4l2.c
+index cc3674daf..6fe077a68 100644
+--- a/drivers/media/platform/amphion/vpu_v4l2.c
++++ b/drivers/media/platform/amphion/vpu_v4l2.c
+@@ -459,11 +459,8 @@ static void vpu_vb2_buf_queue(struct vb2_buffer *vb)
+ 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+ 	struct vpu_inst *inst = vb2_get_drv_priv(vb->vb2_queue);
+ 
+-	if (V4L2_TYPE_IS_OUTPUT(vb->type)) {
++	if (V4L2_TYPE_IS_OUTPUT(vb->type))
+ 		vbuf->sequence = inst->sequence++;
+-		if ((s64)vb->timestamp < 0)
+-			vb->timestamp = VPU_INVALID_TIMESTAMP;
+-	}
+ 
+ 	v4l2_m2m_buf_queue(inst->fh.m2m_ctx, vbuf);
+ 	vpu_process_output_buffer(inst);
+diff --git a/drivers/media/platform/amphion/vpu_windsor.c b/drivers/media/platform/amphion/vpu_windsor.c
+index e8852dd85..a056ad624 100644
+--- a/drivers/media/platform/amphion/vpu_windsor.c
++++ b/drivers/media/platform/amphion/vpu_windsor.c
+@@ -12,6 +12,7 @@
+ #include <linux/of_device.h>
+ #include <linux/of_address.h>
+ #include <linux/platform_device.h>
++#include <linux/time64.h>
+ #include <media/videobuf2-v4l2.h>
+ #include <media/videobuf2-dma-contig.h>
+ #include "vpu.h"
+@@ -682,7 +683,6 @@ static struct vpu_pair windsor_msgs[] = {
+ int vpu_windsor_pack_cmd(struct vpu_rpc_event *pkt, u32 index, u32 id, void *data)
+ {
+ 	int ret;
+-	s64 timestamp;
+ 
+ 	ret = vpu_find_dst_by_src(windsor_cmds, ARRAY_SIZE(windsor_cmds), id);
+ 	if (ret < 0)
+@@ -691,15 +691,12 @@ int vpu_windsor_pack_cmd(struct vpu_rpc_event *pkt, u32 index, u32 id, void *dat
+ 	pkt->hdr.num = 0;
+ 	pkt->hdr.index = index;
+ 	if (id == VPU_CMD_ID_FRAME_ENCODE) {
++		s64 timestamp = *(s64 *)data;
++		struct timespec64 ts = ns_to_timespec64(timestamp);
++
+ 		pkt->hdr.num = 2;
+-		timestamp = *(s64 *)data;
+-		if (timestamp < 0) {
+-			pkt->data[0] = (u32)-1;
+-			pkt->data[1] = 0;
+-		} else {
+-			pkt->data[0] = timestamp / NSEC_PER_SEC;
+-			pkt->data[1] = timestamp % NSEC_PER_SEC;
+-		}
++		pkt->data[0] = ts.tv_sec;
++		pkt->data[1] = ts.tv_nsec;
+ 	}
+ 
+ 	return 0;
+@@ -714,6 +711,7 @@ static void vpu_windsor_unpack_pic_info(struct vpu_rpc_event *pkt, void *data)
+ {
+ 	struct vpu_enc_pic_info *info = data;
+ 	struct windsor_pic_info *windsor = (struct windsor_pic_info *)pkt->data;
++	struct timespec64 ts = { windsor->tv_s, windsor->tv_ns };
+ 
+ 	info->frame_id = windsor->frame_id;
+ 	switch (windsor->pic_type) {
+@@ -736,7 +734,7 @@ static void vpu_windsor_unpack_pic_info(struct vpu_rpc_event *pkt, void *data)
+ 	info->frame_size = windsor->frame_size;
+ 	info->wptr = get_ptr(windsor->str_buff_wptr);
+ 	info->crc = windsor->frame_crc;
+-	info->timestamp = MAKE_TIMESTAMP(windsor->tv_s, windsor->tv_ns);
++	info->timestamp = timespec64_to_ns(&ts);
+ }
+ 
+ static void vpu_windsor_unpack_mem_req(struct vpu_rpc_event *pkt, void *data)
+-- 
+2.25.1
+

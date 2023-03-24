@@ -1,0 +1,31 @@
+From b99c7aff038447e8485f830f36d72466db59fc0e Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Tue, 31 May 2022 15:04:39 +0800
+Subject: [PATCH 097/274] LF-6264-3 arm64: imx_v8_defconfig: Build in i.MX93
+ LDB drm encoder driver
+
+This patch changes imx_v8_defconfig to build in
+i.MX93 LDB drm encoder driver.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index be657efc3..a6516384d 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -606,6 +606,7 @@ CONFIG_DRM_IMX_LDB=y
+ CONFIG_DRM_IMX8QM_LDB=y
+ CONFIG_DRM_IMX8QXP_LDB=y
+ CONFIG_DRM_IMX8MP_LDB=y
++CONFIG_DRM_IMX93_LDB=y
+ CONFIG_DRM_IMX_DW_MIPI_DSI=y
+ CONFIG_DRM_IMX_HDMI=y
+ CONFIG_DRM_IMX_SEC_DSIM=y
+-- 
+2.25.1
+

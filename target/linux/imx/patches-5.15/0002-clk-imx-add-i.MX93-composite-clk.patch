@@ -1,0 +1,155 @@
+From 88e3d2a76306bdf6cdf32bf31add8051fc482a9e Mon Sep 17 00:00:00 2001
+From: Peng Fan <peng.fan@nxp.com>
+Date: Mon, 28 Feb 2022 10:09:06 +0800
+Subject: [PATCH 002/274] clk: imx: add i.MX93 composite clk
+
+i.MX93 CCM ROOT clock has a mux, gate and divider in one register, here
+is to combine all these into one composite clk and simplify clk tree.
+i.MX93 CCM is a new IP compared with i.MX8M, so introduce a new file.
+
+Reviewed-by: Abel Vesa <abel.vesa@nxp.com>
+Reviewed-by: Stephen Boyd <sboyd@kernel.org>
+Signed-off-by: Peng Fan <peng.fan@nxp.com>
+Link: https://lore.kernel.org/r/20220228020908.2810346-4-peng.fan@oss.nxp.com
+Signed-off-by: Abel Vesa <abel.vesa@nxp.com>
+---
+ drivers/clk/imx/Makefile           |  1 +
+ drivers/clk/imx/clk-composite-93.c | 93 ++++++++++++++++++++++++++++++
+ drivers/clk/imx/clk.h              |  9 +++
+ 3 files changed, 103 insertions(+)
+ create mode 100644 drivers/clk/imx/clk-composite-93.c
+
+diff --git a/drivers/clk/imx/Makefile b/drivers/clk/imx/Makefile
+index c24a2acbf..7649f16b0 100644
+--- a/drivers/clk/imx/Makefile
++++ b/drivers/clk/imx/Makefile
+@@ -4,6 +4,7 @@ mxc-clk-objs += clk.o
+ mxc-clk-objs += clk-busy.o
+ mxc-clk-objs += clk-composite-7ulp.o
+ mxc-clk-objs += clk-composite-8m.o
++mxc-clk-objs += clk-composite-93.o
+ mxc-clk-objs += clk-cpu.o
+ mxc-clk-objs += clk-divider-gate.o
+ mxc-clk-objs += clk-fixup-div.o
+diff --git a/drivers/clk/imx/clk-composite-93.c b/drivers/clk/imx/clk-composite-93.c
+new file mode 100644
+index 000000000..b44619aa5
+--- /dev/null
++++ b/drivers/clk/imx/clk-composite-93.c
+@@ -0,0 +1,93 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2021 NXP
++ *
++ * Peng Fan <peng.fan@nxp.com>
++ */
++
++#include <linux/clk-provider.h>
++#include <linux/errno.h>
++#include <linux/export.h>
++#include <linux/io.h>
++#include <linux/slab.h>
++
++#include "clk.h"
++
++#define CCM_DIV_SHIFT	0
++#define CCM_DIV_WIDTH	8
++#define CCM_MUX_SHIFT	8
++#define CCM_MUX_MASK	3
++#define CCM_OFF_SHIFT	24
++
++#define AUTHEN_OFFSET	0x30
++#define TZ_NS_SHIFT	9
++#define TZ_NS_MASK	BIT(9)
++
++struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *parent_names,
++					 int num_parents, void __iomem *reg,
++					 unsigned long flags)
++{
++	struct clk_hw *hw = ERR_PTR(-ENOMEM), *mux_hw;
++	struct clk_hw *div_hw, *gate_hw;
++	struct clk_divider *div = NULL;
++	struct clk_gate *gate = NULL;
++	struct clk_mux *mux = NULL;
++	bool clk_ro = false;
++
++	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
++	if (!mux)
++		goto fail;
++
++	mux_hw = &mux->hw;
++	mux->reg = reg;
++	mux->shift = CCM_MUX_SHIFT;
++	mux->mask = CCM_MUX_MASK;
++	mux->lock = &imx_ccm_lock;
++
++	div = kzalloc(sizeof(*div), GFP_KERNEL);
++	if (!div)
++		goto fail;
++
++	div_hw = &div->hw;
++	div->reg = reg;
++	div->shift = CCM_DIV_SHIFT;
++	div->width = CCM_DIV_WIDTH;
++	div->lock = &imx_ccm_lock;
++	div->flags = CLK_DIVIDER_ROUND_CLOSEST;
++
++	if (!(readl(reg + AUTHEN_OFFSET) & TZ_NS_MASK))
++		clk_ro = true;
++
++	if (clk_ro) {
++		hw = clk_hw_register_composite(NULL, name, parent_names, num_parents,
++					       mux_hw, &clk_mux_ro_ops, div_hw,
++					       &clk_divider_ro_ops, NULL, NULL, flags);
++	} else {
++		gate = kzalloc(sizeof(*gate), GFP_KERNEL);
++		if (!gate)
++			goto fail;
++
++		gate_hw = &gate->hw;
++		gate->reg = reg;
++		gate->bit_idx = CCM_OFF_SHIFT;
++		gate->lock = &imx_ccm_lock;
++		gate->flags = CLK_GATE_SET_TO_DISABLE;
++
++		hw = clk_hw_register_composite(NULL, name, parent_names, num_parents,
++					       mux_hw, &clk_mux_ops, div_hw,
++					       &clk_divider_ops, gate_hw,
++					       &clk_gate_ops, flags | CLK_SET_RATE_NO_REPARENT);
++	}
++
++	if (IS_ERR(hw))
++		goto fail;
++
++	return hw;
++
++fail:
++	kfree(gate);
++	kfree(div);
++	kfree(mux);
++	return ERR_CAST(hw);
++}
++EXPORT_SYMBOL_GPL(imx93_clk_composite_flags);
+diff --git a/drivers/clk/imx/clk.h b/drivers/clk/imx/clk.h
+index e144f983f..af9dc4468 100644
+--- a/drivers/clk/imx/clk.h
++++ b/drivers/clk/imx/clk.h
+@@ -594,6 +594,15 @@ struct clk_hw *imx8m_clk_hw_composite_flags(const char *name,
+ #define imx8m_clk_composite_critical(name, parent_names, reg) \
+ 	__imx8m_clk_composite(name, parent_names, reg, CLK_IS_CRITICAL)
+ 
++struct clk_hw *imx93_clk_composite_flags(const char *name,
++					 const char * const *parent_names,
++					 int num_parents,
++					 void __iomem *reg,
++					 unsigned long flags);
++#define imx93_clk_composite(name, parent_names, num_parents, reg) \
++	imx93_clk_composite_flags(name, parent_names, num_parents, reg, \
++				  CLK_SET_RATE_NO_REPARENT | CLK_OPS_PARENT_ENABLE)
++
+ struct clk_hw *imx_clk_hw_divider_gate(const char *name, const char *parent_name,
+ 		unsigned long flags, void __iomem *reg, u8 shift, u8 width,
+ 		u8 clk_divider_flags, const struct clk_div_table *table,
+-- 
+2.25.1
+

@@ -1,0 +1,30 @@
+From b77b517862385fcf92e6a487cbc0bd0b892a5112 Mon Sep 17 00:00:00 2001
+From: Mirela Rabulea <mirela.rabulea@oss.nxp.com>
+Date: Sat, 16 Jul 2022 10:07:43 +0300
+Subject: [PATCH 243/274] media: imx-jpeg: Unlock job if no context in irq
+
+Align with upstream version.
+
+Fixes: 997b139f9cd8 ("media: imx-jpeg: Disable slot interrupt when frame done")
+Signed-off-by: Mirela Rabulea <mirela.rabulea@oss.nxp.com>
+---
+ drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c
+index 6d027bbff..7e21791e3 100644
+--- a/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c
++++ b/drivers/media/platform/nxp/imx-jpeg/mxc-jpeg.c
+@@ -596,7 +596,8 @@ static irqreturn_t mxc_jpeg_dec_irq(int irq, void *priv)
+ 	dev_dbg(dev, "Irq %d on slot %d.\n", irq, slot);
+ 
+ 	ctx = v4l2_m2m_get_curr_priv(jpeg->m2m_dev);
+-	WARN_ON(!ctx);
++	if (WARN_ON(!ctx))
++		goto job_unlock;
+ 
+ 	if (slot != ctx->slot) {
+ 		/* TODO investigate when adding multi-instance support */
+-- 
+2.25.1
+

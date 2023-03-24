@@ -1,0 +1,48 @@
+From 0446d4a84f0896f3d4dd8d6ca7ccfdc3e7542fa7 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Fri, 6 May 2022 18:12:34 +0800
+Subject: [PATCH 029/274] LF-6002-2 i2c: imx-lpi2c: set MDER only when using
+ DMA to transmit
+
+On imx93, if set MDER too early, it will trigger an extra rx DMA request
+in front of all rx data.
+So only setting MDER before dma transfer to avoid this issue.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ drivers/i2c/busses/i2c-imx-lpi2c.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-imx-lpi2c.c b/drivers/i2c/busses/i2c-imx-lpi2c.c
+index 4476e65c6..340dee3d3 100644
+--- a/drivers/i2c/busses/i2c-imx-lpi2c.c
++++ b/drivers/i2c/busses/i2c-imx-lpi2c.c
+@@ -308,9 +308,6 @@ static int lpi2c_imx_master_enable(struct lpi2c_imx_struct *lpi2c_imx)
+ 	if (ret)
+ 		goto rpm_put;
+ 
+-	if (lpi2c_imx->can_use_dma)
+-		writel(MDER_TDDE | MDER_RDDE, lpi2c_imx->base + LPI2C_MDER);
+-
+ 	temp = readl(lpi2c_imx->base + LPI2C_MCR);
+ 	temp |= MCR_MEN;
+ 	writel(temp, lpi2c_imx->base + LPI2C_MCR);
+@@ -663,7 +660,14 @@ static int lpi2c_imx_xfer(struct i2c_adapter *adapter,
+ 			lpi2c_imx->dma_buf = i2c_get_dma_safe_msg_buf(&msgs[i],
+ 							    I2C_DMA_THRESHOLD);
+ 			if (lpi2c_imx->dma_buf) {
++				/* Enable I2C DMA function */
++				writel(MDER_TDDE | MDER_RDDE, lpi2c_imx->base + LPI2C_MDER);
++
+ 				result = lpi2c_dma_xfer(lpi2c_imx, &msgs[i]);
++
++				/* Disable I2C DMA function */
++				writel(0, lpi2c_imx->base + LPI2C_MDER);
++
+ 				if (result != I2C_USE_PIO)
+ 					goto stop;
+ 			}
+-- 
+2.25.1
+

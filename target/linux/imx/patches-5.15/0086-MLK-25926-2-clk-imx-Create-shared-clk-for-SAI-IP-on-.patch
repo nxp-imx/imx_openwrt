@@ -1,0 +1,57 @@
+From c4545d055380faae6f0530d741c3915ef9ba9743 Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Tue, 31 May 2022 12:36:57 +0800
+Subject: [PATCH 086/274] MLK-25926-2: clk: imx: Create shared clk for SAI IP
+ on i.MX93
+
+The ipg clk and mclk of SAI IP share the same control gate.
+
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ drivers/clk/imx/clk-imx93.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index f5c9fa404..cfcd5595c 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -15,6 +15,10 @@
+ 
+ #include "clk.h"
+ 
++static u32 share_count_sai1;
++static u32 share_count_sai2;
++static u32 share_count_sai3;
++
+ enum clk_sel {
+ 	LOW_SPEED_IO_SEL,
+ 	NON_IO_SEL,
+@@ -210,9 +214,6 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_USDHC1_GATE,	"usdhc1",	"usdhc1_root",		0x9380, },
+ 	{ IMX93_CLK_USDHC2_GATE,	"usdhc2",	"usdhc2_root",		0x93c0, },
+ 	{ IMX93_CLK_USDHC3_GATE,	"usdhc3",	"usdhc3_root",		0x9400, },
+-	{ IMX93_CLK_SAI1_GATE,		"sai1",		"sai1_root",		0x9440, },
+-	{ IMX93_CLK_SAI2_GATE,		"sai2",		"sai2_root",		0x9480, },
+-	{ IMX93_CLK_SAI3_GATE,		"sai3",		"sai3_root",		0x94c0, },
+ 	{ IMX93_CLK_MIPI_CSI_GATE,	"mipi_csi",	"media_apb_root",	0x9580, },
+ 	{ IMX93_CLK_MIPI_DSI_GATE,	"mipi_dsi",	"media_apb_root",	0x95c0, },
+ 	{ IMX93_CLK_LVDS_GATE,		"lvds",		"media_ldb_root",	0x9600, },
+@@ -305,6 +306,13 @@ static int imx93_clocks_probe(struct platform_device *pdev)
+ 							 ccgr->flags);
+ 	}
+ 
++	clks[IMX93_CLK_SAI1_GATE] = imx_clk_hw_gate2_shared2("sai1_mclk", "sai1_root", base + 0x9440, 0, &share_count_sai1);
++	clks[IMX93_CLK_SAI1_IPG] = imx_clk_hw_gate2_shared2("sai1_ipg_clk", "bus_aon_root", base + 0x9440, 0, &share_count_sai1);
++	clks[IMX93_CLK_SAI2_GATE] = imx_clk_hw_gate2_shared2("sai2_mclk", "sai2_root", base + 0x9480, 0, &share_count_sai2);
++	clks[IMX93_CLK_SAI2_IPG] = imx_clk_hw_gate2_shared2("sai2_ipg_clk", "bus_wakeup_root", base + 0x9480, 0, &share_count_sai2);
++	clks[IMX93_CLK_SAI3_GATE] = imx_clk_hw_gate2_shared2("sai3_mclk", "sai3_root", base + 0x94c0, 0, &share_count_sai3);
++	clks[IMX93_CLK_SAI3_IPG] = imx_clk_hw_gate2_shared2("sai3_ipg_clk", "bus_wakeup_root", base + 0x94c0, 0, &share_count_sai3);
++
+ 	imx_check_clk_hws(clks, IMX93_CLK_END);
+ 
+ 	ret = of_clk_add_hw_provider(np, of_clk_hw_onecell_get, clk_hw_data);
+-- 
+2.25.1
+

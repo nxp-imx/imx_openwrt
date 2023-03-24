@@ -1,0 +1,36 @@
+From f207d0fce21204b713dbf4329d6ce9662c1631ee Mon Sep 17 00:00:00 2001
+From: Alice Guo <alice.guo@nxp.com>
+Date: Thu, 9 Jun 2022 14:16:48 +0800
+Subject: [PATCH 142/274] MLK-25934-2 arm64: dts: freescale: add LPWDOG3 device
+ node for i.MX93
+
+Add LPWDOG3 device node for i.MX93.
+
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+Signed-off-by: Alice Guo <alice.guo@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index dec876d04..2917ae66c 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -582,6 +582,14 @@ mu2: mailbox@42440000 {
+ 				status = "disabled";
+ 			};
+ 
++			wdog3: wdog@42490000 {
++				compatible = "fsl,imx93-wdt";
++				reg = <0x42490000 0x10000>;
++				interrupts = <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_WDOG3_GATE>;
++				timeout-sec = <40>;
++			};
++
+ 			tpm4: pwm@424f0000 {
+ 				compatible = "fsl,imx7ulp-pwm";
+ 				reg = <0x424f0000 0x1000>;
+-- 
+2.25.1
+

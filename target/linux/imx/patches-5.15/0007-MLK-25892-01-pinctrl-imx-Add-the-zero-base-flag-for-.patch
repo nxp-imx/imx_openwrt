@@ -1,0 +1,31 @@
+From 7ed24f3eba97e2b8cb9cace510938e23d3c19be4 Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Thu, 21 Apr 2022 17:23:04 +0800
+Subject: [PATCH 007/274] MLK-25892-01 pinctrl: imx: Add the zero base flag for
+ imx93
+
+On i.MX93, the pin mux reg offset is from 0x0,
+so need to add the 'ZERO_OFFSET_VALID' flag to make
+sure the pin at mux offset 0 can be found.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/pinctrl/freescale/pinctrl-imx93.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/pinctrl/freescale/pinctrl-imx93.c b/drivers/pinctrl/freescale/pinctrl-imx93.c
+index c0630f69e..417e41b37 100644
+--- a/drivers/pinctrl/freescale/pinctrl-imx93.c
++++ b/drivers/pinctrl/freescale/pinctrl-imx93.c
+@@ -239,6 +239,7 @@ static const struct pinctrl_pin_desc imx93_pinctrl_pads[] = {
+ static const struct imx_pinctrl_soc_info imx93_pinctrl_info = {
+ 	.pins = imx93_pinctrl_pads,
+ 	.npins = ARRAY_SIZE(imx93_pinctrl_pads),
++	.flags = ZERO_OFFSET_VALID,
+ 	.gpr_compatible = "fsl,imx93-iomuxc-gpr",
+ };
+ 
+-- 
+2.25.1
+

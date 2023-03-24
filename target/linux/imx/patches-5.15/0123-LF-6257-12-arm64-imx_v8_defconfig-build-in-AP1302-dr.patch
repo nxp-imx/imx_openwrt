@@ -1,0 +1,29 @@
+From 9f80dfb0954f664ec25e2603985afdd158eaaada Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 16:27:53 +0800
+Subject: [PATCH 123/274] LF-6257-12: arm64: imx_v8_defconfig: build-in AP1302
+ driver as default
+
+Build-in AP1302 driver as default
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index 534b11218..dd593b24b 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -556,6 +556,7 @@ CONFIG_SDR_PLATFORM_DRIVERS=y
+ CONFIG_VIDEO_IMX219=m
+ CONFIG_VIDEO_OV5640=y
+ CONFIG_VIDEO_OV5645=m
++CONFIG_VIDEO_AP1302=y
+ CONFIG_IMX_DPU_CORE=y
+ CONFIG_IMX_LCDIF_CORE=y
+ CONFIG_IMX_LCDIFV3_CORE=y
+-- 
+2.25.1
+

@@ -1,0 +1,51 @@
+From 27f58779f99f1b5caeab4fbd105e3b0506d78cc3 Mon Sep 17 00:00:00 2001
+From: Sherry Sun <sherry.sun@nxp.com>
+Date: Thu, 19 May 2022 20:46:05 +0800
+Subject: [PATCH 052/274] MLK-25921-1 arm64: dts: imx93-11x11-evk: add
+ bluetooth support for imx93-11x11-evk
+
+Enable the lpuart5 to support the bleutooth function on imx93-11x11-evk.
+
+Signed-off-by: Sherry Sun <sherry.sun@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ .../arm64/boot/dts/freescale/imx93-11x11-evk.dts | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index ce46bbde1..0cd7badbe 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -211,6 +211,13 @@ &lpuart1 { /* console */
+ 	status = "okay";
+ };
+ 
++&lpuart5 {
++	/* BT */
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_uart5>;
++	status = "okay";
++};
++
+ &mu1 {
+ 	status = "okay";
+ };
+@@ -351,6 +358,15 @@ MX93_PAD_UART1_TXD__LPUART1_TX			0x31e
+ 		>;
+ 	};
+ 
++	pinctrl_uart5: uart5grp {
++		fsl,pins = <
++			MX93_PAD_DAP_TDO_TRACESWO__LPUART5_TX	0x31e
++			MX93_PAD_DAP_TDI__LPUART5_RX		0x31e
++			MX93_PAD_DAP_TMS_SWDIO__LPUART5_RTS_B	0x31e
++			MX93_PAD_DAP_TCLK_SWCLK__LPUART5_CTS_B	0x31e
++		>;
++	};
++
+ 	pinctrl_usdhc1: usdhc1grp {
+ 		fsl,pins = <
+ 			MX93_PAD_SD1_CLK__USDHC1_CLK		0x17fe
+-- 
+2.25.1
+

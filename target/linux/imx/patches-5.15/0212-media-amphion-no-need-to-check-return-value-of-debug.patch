@@ -1,0 +1,58 @@
+From 7e22dc16acbe50ddac6ba4c34f2897b30d739243 Mon Sep 17 00:00:00 2001
+From: Lv Ruyi <lv.ruyi@zte.com.cn>
+Date: Fri, 22 Apr 2022 04:12:46 +0200
+Subject: [PATCH 212/274] media: amphion: no need to check return value of
+ debugfs_create functions
+
+When calling debugfs functions, there is no need to ever check the
+return value. The function can work or not, but the code logic should
+never do something different based on this.
+
+Reported-by: Zeal Robot <zealci@zte.com.cn>
+Signed-off-by: Lv Ruyi <lv.ruyi@zte.com.cn>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_dbg.c | 12 ------------
+ 1 file changed, 12 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/vpu_dbg.c b/drivers/media/platform/amphion/vpu_dbg.c
+index 376196bea..da62bd718 100644
+--- a/drivers/media/platform/amphion/vpu_dbg.c
++++ b/drivers/media/platform/amphion/vpu_dbg.c
+@@ -413,10 +413,6 @@ int vpu_inst_create_dbgfs_file(struct vpu_inst *inst)
+ 					    vpu->debugfs,
+ 					    inst,
+ 					    &vpu_dbg_inst_fops);
+-	if (!inst->debugfs) {
+-		dev_err(inst->dev, "vpu create debugfs %s fail\n", name);
+-		return -EINVAL;
+-	}
+ 
+ 	return 0;
+ }
+@@ -451,10 +447,6 @@ int vpu_core_create_dbgfs_file(struct vpu_core *core)
+ 						    vpu->debugfs,
+ 						    core,
+ 						    &vpu_dbg_core_fops);
+-		if (!core->debugfs) {
+-			dev_err(core->dev, "vpu create debugfs %s fail\n", name);
+-			return -EINVAL;
+-		}
+ 	}
+ 	if (!core->debugfs_fwlog) {
+ 		scnprintf(name, sizeof(name), "fwlog.%d", core->id);
+@@ -463,10 +455,6 @@ int vpu_core_create_dbgfs_file(struct vpu_core *core)
+ 							  vpu->debugfs,
+ 							  core,
+ 							  &vpu_dbg_fwlog_fops);
+-		if (!core->debugfs_fwlog) {
+-			dev_err(core->dev, "vpu create debugfs %s fail\n", name);
+-			return -EINVAL;
+-		}
+ 	}
+ 
+ 	return 0;
+-- 
+2.25.1
+

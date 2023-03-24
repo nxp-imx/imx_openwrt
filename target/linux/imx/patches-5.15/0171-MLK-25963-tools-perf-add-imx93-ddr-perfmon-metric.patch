@@ -1,0 +1,79 @@
+From f076670510d08e7418e581bdda48375cc53af396 Mon Sep 17 00:00:00 2001
+From: Xu Yang <xu.yang_2@nxp.com>
+Date: Mon, 27 Jun 2022 10:26:43 +0800
+Subject: [PATCH 171/274] MLK-25963 tools: perf: add imx93 ddr perfmon metric
+
+Add imx93 ddr perfmon metric
+
+root@imx8mmevk:~# ./perf list metric
+
+List of pre-defined events (to be used in -e):
+
+Metrics:
+
+  imx93_bandwidth_usage.lpddr4x
+       [bandwidth usage for lpddr4x evk board. Unit: uncore_imx9_ddr ]
+  imx93_ddr_read.all
+       [bytes all masters read from ddr. Unit: uncore_imx9_ddr ]
+  imx93_ddr_write.all
+       [bytes all masters write to ddr. Unit: uncore_imx9_ddr ]
+
+Signed-off-by: Xu Yang <xu.yang_2@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ .../arch/arm64/freescale/imx93/sys/ddrc.json  |  9 +++++++
+ .../arm64/freescale/imx93/sys/metrics.json    | 26 +++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+ create mode 100644 tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/ddrc.json
+ create mode 100644 tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/metrics.json
+
+diff --git a/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/ddrc.json b/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/ddrc.json
+new file mode 100644
+index 000000000..eeeae4d49
+--- /dev/null
++++ b/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/ddrc.json
+@@ -0,0 +1,9 @@
++[
++   {
++           "BriefDescription": "ddr cycles event",
++           "EventCode": "0x00",
++           "EventName": "imx93_ddr.cycles",
++           "Unit": "imx9_ddr",
++           "Compat": "imx93"
++   }
++]
+diff --git a/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/metrics.json b/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/metrics.json
+new file mode 100644
+index 000000000..d99a5aa39
+--- /dev/null
++++ b/tools/perf/pmu-events/arch/arm64/freescale/imx93/sys/metrics.json
+@@ -0,0 +1,26 @@
++[
++   {
++	    "BriefDescription": "bandwidth usage for lpddr4x evk board",
++	    "MetricName": "imx93_bandwidth_usage.lpddr4x",
++	    "MetricExpr": "(((( imx9_ddr0@ddrc_pm_0\\,counter\\=1@ ) * 2 * 8 ) + (( imx9_ddr0@ddrc_pm_3\\,counter\\=3@ + imx9_ddr0@ddrc_pm_5\\,counter\\=5@ + imx9_ddr0@ddrc_pm_7\\,counter\\=7@ + imx9_ddr0@ddrc_pm_9\\,counter\\=9@ - imx9_ddr0@ddrc_pm_2\\,counter\\=2@ - imx9_ddr0@ddrc_pm_4\\,counter\\=4@ - imx9_ddr0@ddrc_pm_6\\,counter\\=6@ - imx9_ddr0@ddrc_pm_8\\,counter\\=8@) * 32 )) / duration_time) / (3733 * 1000000 * 2)",
++	    "ScaleUnit": "1e2%",
++	    "Unit": "imx9_ddr",
++	    "Compat": "imx93"
++   },
++   {
++	    "BriefDescription": "bytes all masters read from ddr",
++	    "MetricName": "imx93_ddr_read.all",
++	    "MetricExpr": "( imx9_ddr0@ddrc_pm_0\\,counter\\=1@ ) * 2 * 8",
++	    "ScaleUnit": "9.765625e-4KB",
++	    "Unit": "imx9_ddr",
++	    "Compat": "imx93"
++   },
++   {
++	    "BriefDescription": "bytes all masters write to ddr",
++	    "MetricName": "imx93_ddr_write.all",
++	    "MetricExpr": "( imx9_ddr0@ddrc_pm_3\\,counter\\=3@ + imx9_ddr0@ddrc_pm_5\\,counter\\=5@ + imx9_ddr0@ddrc_pm_7\\,counter\\=7@ + imx9_ddr0@ddrc_pm_9\\,counter\\=9@ - imx9_ddr0@ddrc_pm_2\\,counter\\=2@ - imx9_ddr0@ddrc_pm_4\\,counter\\=4@ - imx9_ddr0@ddrc_pm_6\\,counter\\=6@ - imx9_ddr0@ddrc_pm_8\\,counter\\=8@) * 32",
++	    "ScaleUnit": "9.765625e-4KB",
++	    "Unit": "imx9_ddr",
++	    "Compat": "imx93"
++   }
++]
+-- 
+2.25.1
+

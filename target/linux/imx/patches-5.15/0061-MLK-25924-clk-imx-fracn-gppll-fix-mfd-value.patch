@@ -1,0 +1,44 @@
+From 4234b60998ca3e3ad59323ec96eb3afcde9c1c51 Mon Sep 17 00:00:00 2001
+From: Peng Fan <peng.fan@nxp.com>
+Date: Mon, 30 May 2022 10:19:51 +0800
+Subject: [PATCH 061/274] MLK-25924 clk: imx: fracn-gppll: fix mfd value
+
+According to spec:
+A value of 0 is disallowed and should not be programmed in this register
+
+Fix to 1.
+
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+Signed-off-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/clk/imx/clk-fracn-gppll.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 3d272a4db..02ed94e8a 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -64,13 +64,13 @@ struct clk_fracn_gppll {
+  * Fout = Fvco / (rdiv * odiv)
+  */
+ static const struct imx_fracn_gppll_rate_table fracn_tbl[] = {
+-	PLL_FRACN_GP(650000000U, 81, 0, 0, 0, 3),
+-	PLL_FRACN_GP(594000000U, 198, 0, 0, 0, 8),
+-	PLL_FRACN_GP(560000000U, 70, 0, 0, 0, 3),
+-	PLL_FRACN_GP(498000000U, 83, 0, 0, 0, 4),
+-	PLL_FRACN_GP(484000000U, 121, 0, 0, 0, 6),
+-	PLL_FRACN_GP(445333333U, 167, 0, 0, 0, 9),
+-	PLL_FRACN_GP(400000000U, 50, 0, 0, 0, 3),
++	PLL_FRACN_GP(650000000U, 81, 0, 1, 0, 3),
++	PLL_FRACN_GP(594000000U, 198, 0, 1, 0, 8),
++	PLL_FRACN_GP(560000000U, 70, 0, 1, 0, 3),
++	PLL_FRACN_GP(498000000U, 83, 0, 1, 0, 4),
++	PLL_FRACN_GP(484000000U, 121, 0, 1, 0, 6),
++	PLL_FRACN_GP(445333333U, 167, 0, 1, 0, 9),
++	PLL_FRACN_GP(400000000U, 50, 0, 1, 0, 3),
+ 	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5)
+ };
+ 
+-- 
+2.25.1
+

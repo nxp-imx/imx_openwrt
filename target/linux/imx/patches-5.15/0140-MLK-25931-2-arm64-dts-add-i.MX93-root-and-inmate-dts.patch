@@ -1,0 +1,250 @@
+From 8e4c54755cc867d87a619c7d029df2d0d477833e Mon Sep 17 00:00:00 2001
+From: Alice Guo <alice.guo@nxp.com>
+Date: Wed, 27 Apr 2022 17:38:28 +0800
+Subject: [PATCH 140/274] MLK-25931-2 arm64: dts: add i.MX93 root and inmate
+ dts files
+
+Add i.MX93 root and inmate dts files to support jailhouse.
+
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Alice Guo <alice.guo@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |   1 +
+ .../dts/freescale/imx93-11x11-evk-inmate.dts  | 151 ++++++++++++++++++
+ .../dts/freescale/imx93-11x11-evk-root.dts    |  54 +++++++
+ 3 files changed, 206 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-inmate.dts
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-root.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index ba5bc9dad..6036e5a91 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -245,6 +245,7 @@ dtb-$(CONFIG_ARCH_MXC) += imx8dxl-evk-root.dtb imx8dxl-evk-inmate.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb imx93-11x11-evk-rpmsg.dtb \
+ 			  imx93-11x11-evk-lpspi.dtb imx93-11x11-evk-lpspi-slave.dtb \
+ 			  imx93-11x11-evk-i3c.dtb imx93-11x11-evk-rm67199.dtb \
++			  imx93-11x11-evk-inmate.dtb imx93-11x11-evk-root.dtb \
+ 			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb imx93-11x11-evk-mqs.dtb
+ dtb-$(CONFIG_ARCH_S32) += s32v234-evb.dtb \
+ 			  s32v234-sbc.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-inmate.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-inmate.dts
+new file mode 100644
+index 000000000..c09044d28
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-inmate.dts
+@@ -0,0 +1,151 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++
++/ {
++	model = "NXP i.MX93 11x11 EVK";
++	compatible = "fsl,imx93-11x11-evk", "fsl,imx93";
++	interrupt-parent = <&gic>;
++	#address-cells = <2>;
++	#size-cells = <2>;
++
++	aliases {
++		mmc0 = &usdhc1;
++		serial1 = &lpuart2;
++	};
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		A55_0: cpu@0 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a55";
++			reg = <0x0>;
++			enable-method = "psci";
++			#cooling-cells = <2>;
++		};
++	};
++
++	psci {
++		compatible = "arm,psci-1.0";
++		method = "smc";
++	};
++
++	gic: interrupt-controller@48000000 {
++		compatible = "arm,gic-v3";
++		reg = <0 0x48000000 0 0x10000>,
++		      <0 0x48040000 0 0xc0000>;
++		#interrupt-cells = <3>;
++		interrupt-controller;
++		interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH>;
++		interrupt-parent = <&gic>;
++	};
++
++	timer {
++		compatible = "arm,armv8-timer";
++		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
++			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
++			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
++			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>;
++		clock-frequency = <24000000>;
++	};
++
++	clk_dummy: clock-dummy {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <0>;
++		clock-output-names = "clk_dummy";
++	};
++
++	clk_400m: clock-400m {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <200000000>;
++		clock-output-names = "200m";
++	};
++
++	osc_24m: clock-osc-24m {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <24000000>;
++		clock-output-names = "osc_24m";
++	};
++
++	pci@fd700000 {
++		compatible = "pci-host-ecam-generic";
++		device_type = "pci";
++		bus-range = <0 0>;
++		#address-cells = <3>;
++		#size-cells = <2>;
++		#interrupt-cells = <1>;
++		interrupt-map-mask = <0 0 0 7>;
++		interrupt-map = <0 0 0 1 &gic GIC_SPI 227 IRQ_TYPE_EDGE_RISING>,
++				<0 0 0 2 &gic GIC_SPI 228 IRQ_TYPE_EDGE_RISING>,
++				<0 0 0 3 &gic GIC_SPI 229 IRQ_TYPE_EDGE_RISING>,
++				<0 0 0 4 &gic GIC_SPI 230 IRQ_TYPE_EDGE_RISING>;
++		reg = <0x0 0xfd700000 0x0 0x100000>;
++		ranges = <0x02000000 0x00 0x10000000 0x0 0x10000000 0x00 0x10000>;
++	};
++
++	soc@0 {
++		compatible = "simple-bus";
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges = <0x0 0x0 0x0 0x80000000>,
++			 <0x28000000 0x0 0x28000000 0x10000000>;
++
++		aips1: bus@44000000 {
++			compatible = "fsl,aips-bus", "simple-bus";
++			reg = <0x44000000 0x800000>;
++			#address-cells = <1>;
++			#size-cells = <1>;
++			ranges;
++
++			lpuart2: serial@44390000 {
++				compatible = "fsl,imx93-lpuart", "fsl,imx8ulp-lpuart", "fsl,imx7ulp-lpuart";
++				reg = <0x44390000 0x1000>;
++				interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
++				status = "disabled";
++			};
++                };
++
++		aips3: bus@42800000 {
++			compatible = "fsl,aips-bus", "simple-bus";
++			reg = <0x42800000 0x800000>;
++			#address-cells = <1>;
++			#size-cells = <1>;
++			ranges;
++
++			usdhc1: mmc@42850000 {
++				compatible = "fsl,imx93-usdhc", "fsl,imx8mm-usdhc";
++				reg = <0x42850000 0x10000>;
++				interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>;
++				fsl,tuning-start-tap = <20>;
++				fsl,tuning-step= <2>;
++				status = "disabled";
++			};
++                };
++	};
++};
++
++&lpuart2 {
++	clocks = <&osc_24m>;
++	clock-names = "ipg";
++	status = "okay";
++};
++
++&usdhc1 {
++	clocks = <&clk_dummy>,
++		 <&clk_dummy>,
++		 <&clk_400m>;
++	clock-names = "ipg", "ahb", "per";
++	bus-width = <8>;
++	non-removable;
++	status = "okay";
++};
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-root.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-root.dts
+new file mode 100644
+index 000000000..3511268ae
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-root.dts
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++/dts-v1/;
++
++#include "imx93-11x11-evk.dts"
++
++/{
++	interrupt-parent = <&gic>;
++
++	resmem: reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++	};
++};
++
++&clk {
++	init-on-array = <IMX93_CLK_LPUART2_GATE
++			 IMX93_CLK_USDHC1_GATE>;
++};
++
++&iomuxc {
++	pinctrl_uart2: uart2grp {
++		fsl,pins = <
++			MX93_PAD_UART2_TXD__LPUART2_TX			0x31e
++			MX93_PAD_UART2_RXD__LPUART2_RX			0x31e
++		>;
++	};
++};
++
++&lpuart2 {
++	/delete-property/ dmas;
++	/delete-property/ dma-names;
++	status = "disabled";
++};
++
++&lpuart1 {
++	pinctrl-0 = <&pinctrl_uart1>, <&pinctrl_uart2>;
++	assigned-clocks = <&clk IMX93_CLK_LPUART2>;
++	assigned-clock-parents = <&clk IMX93_CLK_24M>;
++};
++
++&usdhc1 {
++	status = "disabled";
++};
++
++&usdhc2 {
++	pinctrl-0 = <&pinctrl_usdhc2>, <&pinctrl_usdhc2_gpio>, <&pinctrl_usdhc1>;
++	pinctrl-1 = <&pinctrl_usdhc2>, <&pinctrl_usdhc2_gpio>, <&pinctrl_usdhc1>;
++	pinctrl-2 = <&pinctrl_usdhc2>, <&pinctrl_usdhc2_gpio>, <&pinctrl_usdhc1>;
++};
+-- 
+2.25.1
+

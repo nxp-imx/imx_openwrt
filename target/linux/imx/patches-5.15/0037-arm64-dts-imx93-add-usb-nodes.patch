@@ -1,0 +1,75 @@
+From 01439a5cb41b86af64337b59d64a8bff9b576e38 Mon Sep 17 00:00:00 2001
+From: Li Jun <jun.li@nxp.com>
+Date: Wed, 25 May 2022 15:44:26 +0800
+Subject: [PATCH 037/274] arm64: dts: imx93: add usb nodes
+
+iMX93 has 2 USB 2.0 otg ports.
+
+Signed-off-by: Li Jun <jun.li@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 50 ++++++++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index eb26e40d9..982db3b47 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -579,5 +579,55 @@ media_blk_ctrl: blk-ctrl@4ac10000 {
+ 				      "pxp", "lcdif", "isi", "csi", "dsi";
+ 			#power-domain-cells = <1>;
+ 		};
++
++		usbphynop1: usbphynop1 {
++			compatible = "usb-nop-xceiv";
++			clocks = <&clk IMX93_CLK_USB_PHY_BURUNIN>;
++			clock-names = "main_clk";
++		};
++
++		usbotg1: usb@4c100000 {
++			compatible = "fsl,imx8mm-usb", "fsl,imx7d-usb";
++			reg = <0x4c100000 0x200>;
++			interrupts = <GIC_SPI 187 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&clk IMX93_CLK_USB_CONTROLLER_GATE>;
++			clock-names = "usb1_ctrl_root_clk";
++			assigned-clocks = <&clk IMX93_CLK_USB_CONTROLLER_GATE>;
++			assigned-clock-parents = <&clk IMX93_CLK_HSIO>;
++			fsl,usbphy = <&usbphynop1>;
++			fsl,usbmisc = <&usbmisc1 0>;
++			status = "disabled";
++		};
++
++		usbmisc1: usbmisc@4c100200 {
++			compatible = "fsl,imx8mm-usbmisc", "fsl,imx7d-usbmisc";
++			#index-cells = <1>;
++			reg = <0x4c100200 0x200>;
++		};
++
++		usbphynop2: usbphynop2 {
++			compatible = "usb-nop-xceiv";
++			clocks = <&clk IMX93_CLK_USB_PHY_BURUNIN>;
++			clock-names = "main_clk";
++		};
++
++		usbotg2: usb@4c200000 {
++			compatible = "fsl,imx8mm-usb", "fsl,imx7d-usb";
++			reg = <0x4c200000 0x200>;
++			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&clk IMX93_CLK_USB_CONTROLLER_GATE>;
++			clock-names = "usb2_ctrl_root_clk";
++			assigned-clocks = <&clk IMX93_CLK_USB_CONTROLLER_GATE>;
++			assigned-clock-parents = <&clk IMX93_CLK_HSIO>;
++			fsl,usbphy = <&usbphynop2>;
++			fsl,usbmisc = <&usbmisc2 0>;
++			status = "disabled";
++		};
++
++		usbmisc2: usbmisc@4c200200 {
++			compatible = "fsl,imx8mm-usbmisc", "fsl,imx7d-usbmisc";
++			#index-cells = <1>;
++			reg = <0x4c200200 0x200>;
++		};
+ 	};
+ };
+-- 
+2.25.1
+

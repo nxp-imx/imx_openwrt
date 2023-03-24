@@ -1,0 +1,129 @@
+From 55e776b27ca342501ef6d9b34cc561c2b6eec1c5 Mon Sep 17 00:00:00 2001
+From: Alice Guo <alice.guo@nxp.com>
+Date: Fri, 1 Jul 2022 17:52:08 +0800
+Subject: [PATCH 178/274] MLK-25973 arm64: dts: imx93-11x11-evk: enable flexio1
+ on imx93
+
+Add FlexIO i2c master support for i.MX93 11x11 evk. FlexIO is a latency
+sensitive device, so just verify FlexIO can work, but it has a certain
+error rate.
+
+Reviewed-by: Ye Li <ye.li@nxp.com>
+Signed-off-by: Alice Guo <alice.guo@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |  2 +-
+ .../freescale/imx93-11x11-evk-flexio-i2c.dts  | 65 +++++++++++++++++++
+ arch/arm64/boot/dts/freescale/imx93.dtsi      | 13 ++++
+ 3 files changed, 79 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-flexio-i2c.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 09b638899..e99e1e9eb 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -247,6 +247,6 @@ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb imx93-11x11-evk-rpmsg.dtb \
+ 			  imx93-11x11-evk-i3c.dtb imx93-11x11-evk-rm67199.dtb \
+ 			  imx93-11x11-evk-inmate.dtb imx93-11x11-evk-root.dtb \
+ 			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb imx93-11x11-evk-mqs.dtb \
+-			  imx93-11x11-evk-aud-hat.dtb
++			  imx93-11x11-evk-aud-hat.dtb imx93-11x11-evk-flexio-i2c.dtb
+ dtb-$(CONFIG_ARCH_S32) += s32v234-evb.dtb \
+ 			  s32v234-sbc.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-flexio-i2c.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-flexio-i2c.dts
+new file mode 100644
+index 000000000..e05c91dbe
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-flexio-i2c.dts
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++/{
++	aliases {
++		i2c8 = &flexio_i2c_master;
++	};
++};
++
++&lpi2c1 {
++	status = "disabled";
++	/delete-node/ tcpc@51;
++};
++
++&flexio_i2c_master {
++	#address-cells = <1>;
++	#size-cells = <0>;
++	clock-frequency = <100000>;
++	pinctrl-names = "default", "sleep";
++	pinctrl-0 = <&pinctrl_flexio_i2c_master>;
++	pinctrl-1 = <&pinctrl_flexio_i2c_master>;
++	sda = /bits/ 8 <0x6>;
++	scl = /bits/ 8 <0x5>;
++	status = "okay";
++
++	ptn5110_2: tcpc@51 {
++		compatible = "nxp,ptn5110";
++		reg = <0x51>;
++		interrupt-parent = <&gpio3>;
++		interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
++		status = "okay";
++
++		port {
++			typec2_dr_sw: endpoint {
++				remote-endpoint = <&usb2_drd_sw>;
++			};
++		};
++
++		typec2_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			power-role = "dual";
++			data-role = "dual";
++			try-power-role = "sink";
++			source-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)
++				     PDO_VAR(5000, 20000, 3000)>;
++			op-sink-microwatt = <15000000>;
++			self-powered;
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_flexio_i2c_master: flexiogrp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO05__FLEXIO1_FLEXIO05    0xb9e
++			MX93_PAD_GPIO_IO06__FLEXIO1_FLEXIO06    0xb9e
++		>;
++	};
++};
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index d329c541e..b67e49792 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -929,6 +929,19 @@ lpspi8: spi@42720000 {
+ 				dma-names = "tx","rx";
+ 				status = "disabled";
+ 			};
++
++			flexio_i2c_master: flexio@425c0000 {
++				compatible = "imx,flexio_i2c_master";
++				reg = <0x425c0000 0x10000>;
++				interrupts = <GIC_SPI 53 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_FLEXIO1_GATE>,
++					 <&clk IMX93_CLK_FLEXIO1_GATE>;
++				clock-names = "per", "ipg";
++				assigned-clocks = <&clk IMX93_CLK_FLEXIO1_GATE>;
++				assigned-clock-parents = <&clk IMX93_CLK_FLEXIO1>;
++				assigned-clock-rates = <24000000>;
++				status = "disabled";
++			};
+ 		};
+ 
+ 		aips3: bus@42800000 {
+-- 
+2.25.1
+

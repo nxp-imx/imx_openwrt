@@ -1,0 +1,31 @@
+From 71d9e5511fe4d12e3850c4c2482bccd0deb9f095 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 30 May 2022 11:07:56 +0800
+Subject: [PATCH 074/274] LF-6256 arm64: imx_v8_defconfig: Build in Synopsys
+ DesignWare MIPI DSI bridge driver
+
+This patch changes imx_v8_defconfig to build in
+Synopsys DesignWare MIPI DSI drm bridge driver.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index fad7e2da4..be657efc3 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -595,6 +595,7 @@ CONFIG_DRM_DW_HDMI_AHB_AUDIO=m
+ CONFIG_DRM_DW_HDMI_I2S_AUDIO=m
+ CONFIG_DRM_DW_HDMI_GP_AUDIO=y
+ CONFIG_DRM_DW_HDMI_CEC=m
++CONFIG_DRM_DW_MIPI_DSI=y
+ CONFIG_DRM_ITE_IT6263=y
+ CONFIG_DRM_ITE_IT6161=y
+ CONFIG_DRM_IMX=y
+-- 
+2.25.1
+

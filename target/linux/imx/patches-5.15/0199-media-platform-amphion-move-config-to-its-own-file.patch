@@ -1,0 +1,83 @@
+From 5b1678b97dbf7e297dcc340bd7fe9b6d350aa88c Mon Sep 17 00:00:00 2001
+From: Mauro Carvalho Chehab <mchehab@kernel.org>
+Date: Fri, 11 Mar 2022 12:24:34 +0100
+Subject: [PATCH 199/274] media: platform: amphion: move config to its own file
+
+In order to better organize the platform/Kconfig, place
+amphion-specific config stuff on a separate Kconfig file.
+
+Reviewed-by: Shijie Qin <shijie.qin@nxp.com>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/Kconfig         | 20 +-------------------
+ drivers/media/platform/amphion/Kconfig | 20 ++++++++++++++++++++
+ 2 files changed, 21 insertions(+), 19 deletions(-)
+ create mode 100644 drivers/media/platform/amphion/Kconfig
+
+diff --git a/drivers/media/platform/Kconfig b/drivers/media/platform/Kconfig
+index 88e47552b..d07e6513c 100644
+--- a/drivers/media/platform/Kconfig
++++ b/drivers/media/platform/Kconfig
+@@ -25,6 +25,7 @@ config VIDEO_VIA_CAMERA
+ #
+ # Platform multimedia device configuration
+ #
++source "drivers/media/platform/amphion/Kconfig"
+ source "drivers/media/platform/cadence/Kconfig"
+ 
+ source "drivers/media/platform/davinci/Kconfig"
+@@ -599,25 +600,6 @@ config VIDEO_SUN8I_ROTATE
+ 	   Support for the Allwinner DE2 rotation unit.
+ 	   To compile this driver as a module choose m here.
+ 
+-config VIDEO_AMPHION_VPU
+-	tristate "Amphion VPU (Video Processing Unit) Codec IP"
+-	depends on ARCH_MXC || COMPILE_TEST
+-	depends on MEDIA_SUPPORT
+-	depends on VIDEO_DEV
+-	depends on VIDEO_V4L2
+-	select MEDIA_CONTROLLER
+-	select V4L2_MEM2MEM_DEV
+-	select VIDEOBUF2_DMA_CONTIG
+-	select VIDEOBUF2_VMALLOC
+-	help
+-	  Amphion VPU Codec IP contains two parts: Windsor and Malone.
+-	  Windsor is encoder that supports H.264, and Malone is decoder
+-	  that supports H.264, HEVC, and other video formats.
+-	  This is a V4L2 driver for NXP MXC 8Q video accelerator hardware.
+-	  It accelerates encoding and decoding operations on
+-	  various NXP SoCs.
+-	  To compile this driver as a module choose m here.
+-
+ endif # V4L_MEM2MEM_DRIVERS
+ 
+ # TI VIDEO PORT Helper Modules
+diff --git a/drivers/media/platform/amphion/Kconfig b/drivers/media/platform/amphion/Kconfig
+new file mode 100644
+index 000000000..13899649f
+--- /dev/null
++++ b/drivers/media/platform/amphion/Kconfig
+@@ -0,0 +1,20 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config VIDEO_AMPHION_VPU
++	tristate "Amphion VPU (Video Processing Unit) Codec IP"
++	depends on V4L_MEM2MEM_DRIVERS
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on MEDIA_SUPPORT
++	depends on VIDEO_DEV
++	depends on VIDEO_V4L2
++	select MEDIA_CONTROLLER
++	select V4L2_MEM2MEM_DEV
++	select VIDEOBUF2_DMA_CONTIG
++	select VIDEOBUF2_VMALLOC
++	help
++	  Amphion VPU Codec IP contains two parts: Windsor and Malone.
++	  Windsor is encoder that supports H.264, and Malone is decoder
++	  that supports H.264, HEVC, and other video formats.
++	  This is a V4L2 driver for NXP MXC 8Q video accelerator hardware.
++	  It accelerates encoding and decoding operations on
++	  various NXP SoCs.
++	  To compile this driver as a module choose m here.
+-- 
+2.25.1
+

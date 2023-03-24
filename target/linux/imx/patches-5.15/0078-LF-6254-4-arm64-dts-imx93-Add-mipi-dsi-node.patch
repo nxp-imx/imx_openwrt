@@ -1,0 +1,68 @@
+From 63f5a40921d176da7c7c6a49f60cb7595d5a547c Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 13 Sep 2021 11:31:45 +0800
+Subject: [PATCH 078/274] LF-6254-4 arm64: dts: imx93: Add mipi dsi node
+
+This patch adds i.MX93 Synopsys DesignWare MIPI DSI controller
+device tree node.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 32 ++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 2fdb4b5a5..9db1c3867 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -759,6 +759,37 @@ dphy: dphy {
+ 			};
+ 		};
+ 
++		dsi: dsi@4ae10000 {
++			compatible = "fsl,imx93-mipi-dsi";
++			reg = <0x4ae10000 0x4000>;
++			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&clk IMX93_CLK_MIPI_TEST_BYTE>,
++				 <&clk IMX93_CLK_MIPI_DSI_GATE>;
++			clock-names = "byte", "pclk";
++			assigned-clocks = <&clk IMX93_CLK_MIPI_TEST_BYTE>,
++					  <&clk IMX93_CLK_MEDIA_APB>;
++			assigned-clock-parents = <&clk IMX93_CLK_SYS_PLL_PFD0>,
++						 <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>;
++			assigned-clock-rates = <20000000>, <133333333>;
++			phys = <&dphy>;
++			phy-names = "dphy";
++			power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_MIPI_DSI>;
++			status = "disabled";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					dsi_to_lcdif: endpoint {
++						remote-endpoint = <&lcdif_to_dsi>;
++					};
++				};
++			};
++		};
++
+ 		lcdif: lcd-controller@4ae30000 {
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+@@ -787,6 +818,7 @@ lcdif_disp: port@0 {
+ 
+ 				lcdif_to_dsi: endpoint@0 {
+ 					reg = <0>;
++					remote-endpoint = <&dsi_to_lcdif>;
+ 				};
+ 
+ 				lcdif_to_ldb: endpoint@1 {
+-- 
+2.25.1
+

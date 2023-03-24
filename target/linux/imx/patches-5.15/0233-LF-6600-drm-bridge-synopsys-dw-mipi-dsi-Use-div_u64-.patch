@@ -1,0 +1,46 @@
+From 1fff83f7e86f11389f5285e2aa3c29d7ac2d50ad Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 18 Jul 2022 11:08:23 +0800
+Subject: [PATCH 233/274] LF-6600 drm/bridge: synopsys: dw-mipi-dsi: Use
+ div_u64() to divide u64 by u32
+
+div_u64() should be used to divide u64 by u32, otherwise, the below
+build error may happen.
+
+ERROR: modpost: "__aeabi_uldivmod" [drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.ko] undefined!
+
+This fixes the below patch:
+LF-6253 drm/bridge: synopsys: dw-mipi-dsi: Use better lbcc calculation
+
+Reported-by: Jun Zhu <junzhu@nxp.com>
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+index 5a505e26a..bf124c2d4 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+@@ -12,6 +12,7 @@
+ #include <linux/component.h>
+ #include <linux/debugfs.h>
+ #include <linux/iopoll.h>
++#include <linux/math64.h>
+ #include <linux/module.h>
+ #include <linux/of_device.h>
+ #include <linux/pm_runtime.h>
+@@ -741,7 +742,7 @@ static u32 dw_mipi_dsi_get_hcomponent_lbcc(struct dw_mipi_dsi *dsi,
+ 		return 0;
+ 	}
+ 
+-	lbcc = (u64)hcomponent * mode->clock * bpp / (dsi->lanes * 8);
++	lbcc = div_u64((u64)hcomponent * mode->clock * bpp, dsi->lanes * 8);
+ 
+ 	frac = lbcc % mode->clock;
+ 	lbcc = lbcc / mode->clock;
+-- 
+2.25.1
+

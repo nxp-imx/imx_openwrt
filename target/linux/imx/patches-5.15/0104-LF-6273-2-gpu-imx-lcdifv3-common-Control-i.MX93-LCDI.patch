@@ -1,0 +1,65 @@
+From 18a60172433af76a6d517eeee20c2e5c4e9f4ab4 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Wed, 1 Jun 2022 13:12:07 +0800
+Subject: [PATCH 104/274] LF-6273-2 gpu: imx: lcdifv3: common: Control i.MX93
+ LCDIF QoS and cache when do runtime PM
+
+As a temporary solution, we need to get the mediamix block control
+regmap through the 'fsl,gpr' lcdif DT node property to control lcdif
+QoS and cache in the lcdif driver to achieve better system performance
+and lcdif memory access performance.  In the future, we'll use proper
+and generic APIs in the lcdif driver to do the control instead of
+accessing the mediamix block control register by our own.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ drivers/gpu/imx/lcdifv3/lcdifv3-common.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/gpu/imx/lcdifv3/lcdifv3-common.c b/drivers/gpu/imx/lcdifv3/lcdifv3-common.c
+index abe173096..491a6b2e2 100644
+--- a/drivers/gpu/imx/lcdifv3/lcdifv3-common.c
++++ b/drivers/gpu/imx/lcdifv3/lcdifv3-common.c
+@@ -734,6 +734,15 @@ static int imx_lcdifv3_probe(struct platform_device *pdev)
+ 	if (IS_ERR(lcdifv3->base))
+ 		return PTR_ERR(lcdifv3->base);
+ 
++	if (of_device_is_compatible(np, "fsl,imx93-lcdif")) {
++		lcdifv3->gpr = syscon_regmap_lookup_by_phandle(np, "fsl,gpr");
++		if (IS_ERR(lcdifv3->gpr)) {
++			ret = PTR_ERR(lcdifv3->gpr);
++			dev_err(dev, "failed to get gpr: %d\n", ret);
++			return ret;
++		}
++	}
++
+ 	lcdifv3->dev = dev;
+ 
+ 	/* reset controller to avoid any conflict
+@@ -796,6 +805,10 @@ static int imx_lcdifv3_runtime_suspend(struct device *dev)
+ 
+ 	release_bus_freq(BUS_FREQ_HIGH);
+ 
++	/* clear LCDIF QoS and cache */
++	if (of_device_is_compatible(dev->of_node, "fsl,imx93-lcdif"))
++		regmap_write(lcdifv3->gpr, 0xc, 0x0);
++
+ 	return 0;
+ }
+ 
+@@ -812,6 +825,10 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
+ 	if (!atomic_dec_and_test(&lcdifv3->rpm_suspended))
+ 		return 0;
+ 
++	/* set LCDIF QoS and cache */
++	if (of_device_is_compatible(dev->of_node, "fsl,imx93-lcdif"))
++		regmap_write(lcdifv3->gpr, 0xc, 0x3712);
++
+ 	request_bus_freq(BUS_FREQ_HIGH);
+ 
+ 	ret = lcdifv3_enable_clocks(lcdifv3);
+-- 
+2.25.1
+

@@ -1,0 +1,85 @@
+From ec646435856ef3f76af2a6198385ab30dc7223d9 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 15:30:33 +0800
+Subject: [PATCH 118/274] LF-6257-07: arm64: dts: enable all camera related
+ modules for iMX93 platform
+
+Enable all camera related modules for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ .../dts/freescale/imx93-11x11-evk-i3c.dts     |  6 ++++
+ .../boot/dts/freescale/imx93-11x11-evk.dts    | 35 +++++++++++++++++++
+ 2 files changed, 41 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+index f03b7875e..411371ac5 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+@@ -127,6 +127,12 @@ ap1302: ap1302_mipi@3c {
+ 		VDDIO-supply  = <&reg_vddio_1v8>;
+ 		AVDD-supply   = <&reg_avdd_2v8>;
+ 		status = "okay";
++
++		port {
++			ar1302_mipi_ep: endpoint {
++				remote-endpoint = <&mipi_csi_ep>;
++			};
++		};
+ 	};
+ };
+ 
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index bf2190cf7..74e18c9cd 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -293,6 +293,12 @@ ap1302: ap1302_mipi@3c {
+ 		VDDIO-supply  = <&reg_vddio_1v8>;
+ 		AVDD-supply   = <&reg_avdd_2v8>;
+ 		status = "okay";
++
++		port {
++			ar1302_mipi_ep: endpoint {
++				remote-endpoint = <&mipi_csi_ep>;
++			};
++		};
+ 	};
+ };
+ 
+@@ -671,3 +677,32 @@ MX93_PAD_CCM_CLKO1__GPIO3_IO26			0x31e
+ &epxp {
+ 	status = "okay";
+ };
++
++&cameradev {
++	status = "okay";
++};
++
++&isi_0 {
++	status = "okay";
++
++	cap_device {
++		status = "okay";
++	};
++};
++
++&mipi_csi {
++	#address-cells = <1>;
++	#size-cells = <0>;
++	status = "okay";
++
++	port@0 {
++		reg = <0>;
++		mipi_csi_ep: endpoint {
++			remote-endpoint = <&ar1302_mipi_ep>;
++			data-lanes = <2>;
++			cfg-clk-range = <28>;
++			hs-clk-range = <0x2b>;
++			bus-type = <4>;
++		};
++	};
++};
+-- 
+2.25.1
+

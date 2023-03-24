@@ -1,0 +1,217 @@
+From ceb54f5d659d38b3feb2a36213fcc207e4c0696e Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Wed, 12 Oct 2022 11:25:50 +0800
+Subject: [PATCH 258/274] imx93: update the mmc driver
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/mmc/host/Kconfig             |  4 +-
+ drivers/mmc/host/mtk-sd.c            | 20 ++++++----
+ drivers/mmc/host/sdhci-of-esdhc.c    | 59 +++++++++++++++++++---------
+ drivers/mmc/host/sdhci-pci-o2micro.c |  2 +
+ 4 files changed, 57 insertions(+), 28 deletions(-)
+
+diff --git a/drivers/mmc/host/Kconfig b/drivers/mmc/host/Kconfig
+index ccc148cdb..29920d28b 100644
+--- a/drivers/mmc/host/Kconfig
++++ b/drivers/mmc/host/Kconfig
+@@ -276,14 +276,14 @@ config MMC_SDHCI_ESDHC_MCF
+ 
+ config MMC_SDHCI_ESDHC_IMX
+ 	tristate "SDHCI support for the Freescale eSDHC/uSDHC i.MX controller"
+-	depends on ARCH_MXC || COMPILE_TEST
++	depends on ARCH_MXC || COMPILE_TEST || SOC_S32V234
+ 	depends on MMC_SDHCI_PLTFM
+ 	depends on OF
+ 	select MMC_SDHCI_IO_ACCESSORS
+ 	select MMC_CQHCI
+ 	help
+ 	  This selects the Freescale eSDHC/uSDHC controller support
+-	  found on i.MX25, i.MX35 i.MX5x and i.MX6x.
++	  found on i.MX25, i.MX35 i.MX5x and i.MX6x and S32V234.
+ 
+ 	  If you have a controller with this interface, say Y or M here.
+ 
+diff --git a/drivers/mmc/host/mtk-sd.c b/drivers/mmc/host/mtk-sd.c
+index 1ac920159..f9b289756 100644
+--- a/drivers/mmc/host/mtk-sd.c
++++ b/drivers/mmc/host/mtk-sd.c
+@@ -1355,7 +1355,7 @@ static void msdc_data_xfer_next(struct msdc_host *host, struct mmc_request *mrq)
+ 		msdc_request_done(host, mrq);
+ }
+ 
+-static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
++static void msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 				struct mmc_request *mrq, struct mmc_data *data)
+ {
+ 	struct mmc_command *stop;
+@@ -1375,7 +1375,7 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 	spin_unlock_irqrestore(&host->lock, flags);
+ 
+ 	if (done)
+-		return true;
++		return;
+ 	stop = data->stop;
+ 
+ 	if (check_data || (stop && stop->error)) {
+@@ -1384,12 +1384,15 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 		sdr_set_field(host->base + MSDC_DMA_CTRL, MSDC_DMA_CTRL_STOP,
+ 				1);
+ 
++		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CTRL, val,
++						!(val & MSDC_DMA_CTRL_STOP), 1, 20000);
++		if (ret)
++			dev_dbg(host->dev, "DMA stop timed out\n");
++
+ 		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CFG, val,
+ 						!(val & MSDC_DMA_CFG_STS), 1, 20000);
+-		if (ret) {
+-			dev_dbg(host->dev, "DMA stop timed out\n");
+-			return false;
+-		}
++		if (ret)
++			dev_dbg(host->dev, "DMA inactive timed out\n");
+ 
+ 		sdr_clr_bits(host->base + MSDC_INTEN, data_ints_mask);
+ 		dev_dbg(host->dev, "DMA stop\n");
+@@ -1414,9 +1417,7 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 		}
+ 
+ 		msdc_data_xfer_next(host, mrq);
+-		done = true;
+ 	}
+-	return done;
+ }
+ 
+ static void msdc_set_buswidth(struct msdc_host *host, u32 width)
+@@ -2347,6 +2348,9 @@ static void msdc_cqe_disable(struct mmc_host *mmc, bool recovery)
+ 	if (recovery) {
+ 		sdr_set_field(host->base + MSDC_DMA_CTRL,
+ 			      MSDC_DMA_CTRL_STOP, 1);
++		if (WARN_ON(readl_poll_timeout(host->base + MSDC_DMA_CTRL, val,
++			!(val & MSDC_DMA_CTRL_STOP), 1, 3000)))
++			return;
+ 		if (WARN_ON(readl_poll_timeout(host->base + MSDC_DMA_CFG, val,
+ 			!(val & MSDC_DMA_CFG_STS), 1, 3000)))
+ 			return;
+diff --git a/drivers/mmc/host/sdhci-of-esdhc.c b/drivers/mmc/host/sdhci-of-esdhc.c
+index 0f3658b36..d68ab2225 100644
+--- a/drivers/mmc/host/sdhci-of-esdhc.c
++++ b/drivers/mmc/host/sdhci-of-esdhc.c
+@@ -23,6 +23,7 @@
+ #include <linux/iopoll.h>
+ #include <linux/mmc/host.h>
+ #include <linux/mmc/mmc.h>
++#include <linux/acpi.h>
+ #include "sdhci-pltfm.h"
+ #include "sdhci-esdhc.h"
+ 
+@@ -73,6 +74,14 @@ static const struct of_device_id sdhci_esdhc_of_match[] = {
+ };
+ MODULE_DEVICE_TABLE(of, sdhci_esdhc_of_match);
+ 
++#ifdef CONFIG_ACPI
++static const struct acpi_device_id sdhci_esdhc_ids[] = {
++	{"NXP0003" },
++	{ }
++};
++MODULE_DEVICE_TABLE(acpi, sdhci_esdhc_ids);
++#endif
++
+ struct sdhci_esdhc {
+ 	u8 vendor_ver;
+ 	u8 spec_ver;
+@@ -537,6 +546,12 @@ static int esdhc_of_enable_dma(struct sdhci_host *host)
+ 
+ 	value = sdhci_readl(host, ESDHC_DMA_SYSCTL);
+ 
++	if (!dev->of_node) {
++		value |= ESDHC_DMA_SNOOP;
++		sdhci_writel(host, value, ESDHC_DMA_SYSCTL);
++		return 0;
++	}
++
+ 	if (of_dma_is_coherent(dev->of_node))
+ 		value |= ESDHC_DMA_SNOOP;
+ 	else
+@@ -1375,23 +1390,28 @@ static void esdhc_init(struct platform_device *pdev, struct sdhci_host *host)
+ 		esdhc->quirk_trans_complete_erratum = true;
+ 	}
+ 
+-	clk = of_clk_get(np, 0);
+-	if (!IS_ERR(clk)) {
+-		/*
+-		 * esdhc->peripheral_clock would be assigned with a value
+-		 * which is eSDHC base clock when use periperal clock.
+-		 * For some platforms, the clock value got by common clk
+-		 * API is peripheral clock while the eSDHC base clock is
+-		 * 1/2 peripheral clock.
+-		 */
+-		if (of_device_is_compatible(np, "fsl,ls1046a-esdhc") ||
+-		    of_device_is_compatible(np, "fsl,ls1028a-esdhc") ||
+-		    of_device_is_compatible(np, "fsl,ls1088a-esdhc"))
+-			esdhc->peripheral_clock = clk_get_rate(clk) / 2;
+-		else
+-			esdhc->peripheral_clock = clk_get_rate(clk);
+-
+-		clk_put(clk);
++	if (np) {
++		clk = of_clk_get(np, 0);
++		if (!IS_ERR(clk)) {
++			/*
++			 * esdhc->peripheral_clock would be assigned with a value
++			 * which is eSDHC base clock when use peripheral clock.
++			 * For some platforms, the clock value got by common clk
++			 * API is peripheral clock while the eSDHC base clock is
++			 * 1/2 peripheral clock.
++			 */
++			if (of_device_is_compatible(np, "fsl,ls1046a-esdhc") ||
++			    of_device_is_compatible(np, "fsl,ls1028a-esdhc") ||
++			    of_device_is_compatible(np, "fsl,ls1088a-esdhc"))
++				esdhc->peripheral_clock = clk_get_rate(clk) / 2;
++			else
++				esdhc->peripheral_clock = clk_get_rate(clk);
++
++			clk_put(clk);
++		}
++	} else {
++		device_property_read_u32(&pdev->dev, "clock-frequency",
++					 &esdhc->peripheral_clock);
+ 	}
+ 
+ 	esdhc_clock_enable(host, false);
+@@ -1425,7 +1445,7 @@ static int sdhci_esdhc_probe(struct platform_device *pdev)
+ 
+ 	np = pdev->dev.of_node;
+ 
+-	if (of_property_read_bool(np, "little-endian"))
++	if (device_property_read_bool(&pdev->dev, "little-endian"))
+ 		host = sdhci_pltfm_init(pdev, &sdhci_esdhc_le_pdata,
+ 					sizeof(struct sdhci_esdhc));
+ 	else
+@@ -1510,6 +1530,9 @@ static struct platform_driver sdhci_esdhc_driver = {
+ 		.name = "sdhci-esdhc",
+ 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+ 		.of_match_table = sdhci_esdhc_of_match,
++#ifdef CONFIG_ACPI
++		.acpi_match_table = sdhci_esdhc_ids,
++#endif
+ 		.pm = &esdhc_of_dev_pm_ops,
+ 	},
+ 	.probe = sdhci_esdhc_probe,
+diff --git a/drivers/mmc/host/sdhci-pci-o2micro.c b/drivers/mmc/host/sdhci-pci-o2micro.c
+index 51d55a87a..059034e83 100644
+--- a/drivers/mmc/host/sdhci-pci-o2micro.c
++++ b/drivers/mmc/host/sdhci-pci-o2micro.c
+@@ -147,6 +147,8 @@ static int sdhci_o2_get_cd(struct mmc_host *mmc)
+ 
+ 	if (!(sdhci_readw(host, O2_PLL_DLL_WDT_CONTROL1) & O2_PLL_LOCK_STATUS))
+ 		sdhci_o2_enable_internal_clock(host);
++	else
++		sdhci_o2_wait_card_detect_stable(host);
+ 
+ 	return !!(sdhci_readl(host, SDHCI_PRESENT_STATE) & SDHCI_CARD_PRESENT);
+ }
+-- 
+2.25.1
+

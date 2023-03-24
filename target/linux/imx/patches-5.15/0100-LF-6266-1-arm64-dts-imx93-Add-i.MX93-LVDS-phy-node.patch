@@ -1,0 +1,44 @@
+From 3f572d9fd0e8ff28cf82095c01d25a30b43b244a Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Tue, 31 May 2022 15:18:34 +0800
+Subject: [PATCH 100/274] LF-6266-1 arm64: dts: imx93: Add i.MX93 LVDS phy node
+
+This patch adds i.MX93 LVDS phy device tree node.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index fd23fa1d0..32e0def65 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -975,6 +975,22 @@ dphy: dphy {
+ 			};
+ 		};
+ 
++		ldb_phy: phy@4ac10024 {
++			compatible = "fsl,imx93-lvds-phy";
++			#address-cells = <1>;
++			#size-cells = <0>;
++			gpr = <&media_blk_ctrl>;
++			clocks = <&clk IMX93_CLK_MEDIA_APB>;
++			clock-names = "apb";
++			power-domains = <&mediamix>;
++			status = "disabled";
++
++			ldb_phy1: port@0 {
++				reg = <0>;
++				#phy-cells = <0>;
++			};
++		};
++
+ 		dsi: dsi@4ae10000 {
+ 			compatible = "fsl,imx93-mipi-dsi";
+ 			reg = <0x4ae10000 0x4000>;
+-- 
+2.25.1
+

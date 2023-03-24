@@ -1,0 +1,61 @@
+From 641c9a9e5b427b2befb6a5956d0c971483b11b84 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 27 Sep 2022 16:46:04 +0800
+Subject: [PATCH 018/274] MLK-25896-02 input: bbnsm_pwrkey Add bbnsm power key
+ support
+
+The on/off logic inside the BBNSM allows for connecting directly
+into a PMIC or other voltage regulator device. The module has an
+button input signal and a wakeup request input signal. It also
+has two interrupts (set_pwr_off_irq and set_pwr_on_irq) and an
+active-low PMIC enable (pmic_en_b) output.
+
+Add the power key support for the ON/OFF button function found in
+BBNSM module.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+
+t #
+---
+ drivers/input/keyboard/Kconfig  | 11 +++++++++++
+ drivers/input/keyboard/Makefile |  1 +
+ 2 files changed, 12 insertions(+)
+
+diff --git a/drivers/input/keyboard/Kconfig b/drivers/input/keyboard/Kconfig
+index e402915cc..7873d7598 100644
+--- a/drivers/input/keyboard/Kconfig
++++ b/drivers/input/keyboard/Kconfig
+@@ -452,6 +452,17 @@ config KEYBOARD_SNVS_PWRKEY
+ 	  To compile this driver as a module, choose M here; the
+ 	  module will be called snvs_pwrkey.
+ 
++config KEYBOARD_BBNSM_PWRKEY
++	tristate "NXP BBNSM Power Key Driver"
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on OF
++	help
++	  This is the bbnsm powerkey driver for the NXP i.MX application
++	  processors.
++
++	  To compile this driver as a module, choose M here; the
++	  module will be called bbnsm_pwrkey.
++
+ config KEYBOARD_IMX
+ 	tristate "IMX keypad support"
+ 	depends on ARCH_MXC || COMPILE_TEST
+diff --git a/drivers/input/keyboard/Makefile b/drivers/input/keyboard/Makefile
+index 1d689fdd5..00b7b6a94 100644
+--- a/drivers/input/keyboard/Makefile
++++ b/drivers/input/keyboard/Makefile
+@@ -59,6 +59,7 @@ obj-$(CONFIG_KEYBOARD_QT2160)		+= qt2160.o
+ obj-$(CONFIG_KEYBOARD_SAMSUNG)		+= samsung-keypad.o
+ obj-$(CONFIG_KEYBOARD_SH_KEYSC)		+= sh_keysc.o
+ obj-$(CONFIG_KEYBOARD_SNVS_PWRKEY)	+= snvs_pwrkey.o
++obj-$(CONFIG_KEYBOARD_BBNSM_PWRKEY)	+= bbnsm_pwrkey.o
+ obj-$(CONFIG_KEYBOARD_SPEAR)		+= spear-keyboard.o
+ obj-$(CONFIG_KEYBOARD_STMPE)		+= stmpe-keypad.o
+ obj-$(CONFIG_KEYBOARD_STOWAWAY)		+= stowaway.o
+-- 
+2.25.1
+

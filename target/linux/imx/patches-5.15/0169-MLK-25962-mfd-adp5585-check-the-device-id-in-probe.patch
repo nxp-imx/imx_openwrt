@@ -1,0 +1,42 @@
+From efda736e5dcff37e1a61a7cb5dfb0d2e35aaac2d Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Fri, 24 Jun 2022 15:42:04 +0800
+Subject: [PATCH 169/274] MLK-25962 mfd: adp5585: check the device id in probe
+
+Check the device id, to make sure the device is connected, then
+create the virtual function devices. This can avoid unnecessary
+error log when the adp5585 is not connected.
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Clark Wang <xiaoning.wang@nxp.com>
+---
+ drivers/mfd/adp5585.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/mfd/adp5585.c b/drivers/mfd/adp5585.c
+index 50b8d2872..6501ffa80 100644
+--- a/drivers/mfd/adp5585.c
++++ b/drivers/mfd/adp5585.c
+@@ -83,6 +83,8 @@ static int adp5585_i2c_probe(struct i2c_client *i2c,
+ 				const struct i2c_device_id *id)
+ {
+ 	struct adp5585_dev *adp5585;
++	u8 reg;
++	int ret;
+ 
+ 	adp5585 = devm_kzalloc(&i2c->dev, sizeof(struct adp5585_dev),
+ 				GFP_KERNEL);
+@@ -95,6 +97,10 @@ static int adp5585_i2c_probe(struct i2c_client *i2c,
+ 	adp5585->read_reg = adp5585_i2c_read_reg;
+ 	adp5585->write_reg = adp5585_i2c_write_reg;
+ 
++	ret = adp5585_i2c_read_reg(adp5585, ADP5585_ID, &reg);
++	if (ret)
++		return ret;
++
+ 	return devm_mfd_add_devices(adp5585->dev, PLATFORM_DEVID_AUTO,
+ 				    adp5585_devs, ARRAY_SIZE(adp5585_devs),
+ 				    NULL, 0, NULL);
+-- 
+2.25.1
+

@@ -1,0 +1,273 @@
+From bf29f042425ea3890501c96664d3e7ed875ccd3e Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 28 Sep 2022 10:06:30 +0800
+Subject: [PATCH 036/274] usb: typec: tcpci: add falling edge irq type support
+
+As the GPIO expander on imx93 evk can not support level
+input as interrupt event, only edge change can be supported,
+but PTN5110 only support low level as event trigger, so add
+a flag irq_falling_edge to work around this to make PTN5110
+work on imx93 evk.
+
+Signed-off-by: Li Jun <jun.li@nxp.com>
+---
+ drivers/usb/typec/tcpm/tcpci.c | 114 ++++++++++++++++++++++++++++++---
+ 1 file changed, 106 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/usb/typec/tcpm/tcpci.c b/drivers/usb/typec/tcpm/tcpci.c
+index 64e248117..8b0d35d82 100644
+--- a/drivers/usb/typec/tcpm/tcpci.c
++++ b/drivers/usb/typec/tcpm/tcpci.c
+@@ -10,6 +10,8 @@
+ #include <linux/module.h>
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/of_irq.h>
+ #include <linux/property.h>
+ #include <linux/regmap.h>
+ #include <linux/usb/pd.h>
+@@ -44,6 +46,8 @@ struct tcpci {
+ 
+ 	struct tcpc_dev tcpc;
+ 	struct tcpci_data *data;
++	unsigned int irq_mask;
++	bool irq_falling_edge;
+ };
+ 
+ struct tcpci_chip {
+@@ -180,9 +184,6 @@ static int tcpci_start_toggling(struct tcpc_dev *tcpc,
+ 	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
+ 	unsigned int reg = TCPC_ROLE_CTRL_DRP;
+ 
+-	if (port_type != TYPEC_PORT_DRP)
+-		return -EOPNOTSUPP;
+-
+ 	/* Handle vendor drp toggling */
+ 	if (tcpci->data->start_drp_toggling) {
+ 		ret = tcpci->data->start_drp_toggling(tcpci, tcpci->data, cc);
+@@ -494,6 +495,32 @@ static bool tcpci_is_vbus_vsafe0v(struct tcpc_dev *tcpc)
+ 	return !!(reg & TCPC_EXTENDED_STATUS_VSAFE0V);
+ }
+ 
++static int tcpci_vbus_force_discharge(struct tcpc_dev *tcpc, bool enable)
++{
++	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
++	unsigned int reg;
++	int ret;
++
++	if (enable)
++		regmap_write(tcpci->regmap,
++			TCPC_VBUS_VOLTAGE_ALARM_LO_CFG, 0x1c);
++	else
++		regmap_write(tcpci->regmap,
++			TCPC_VBUS_VOLTAGE_ALARM_LO_CFG, 0);
++
++	regmap_read(tcpci->regmap, TCPC_POWER_CTRL, &reg);
++
++	if (enable)
++		reg |= TCPC_POWER_CTRL_FORCEDISCH;
++	else
++		reg &= ~TCPC_POWER_CTRL_FORCEDISCH;
++	ret = regmap_write(tcpci->regmap, TCPC_POWER_CTRL, reg);
++	if (ret < 0)
++		return ret;
++
++	return 0;
++}
++
+ static int tcpci_set_vbus(struct tcpc_dev *tcpc, bool source, bool sink)
+ {
+ 	struct tcpci *tcpci = tcpc_to_tcpci(tcpc);
+@@ -522,6 +549,9 @@ static int tcpci_set_vbus(struct tcpc_dev *tcpc, bool source, bool sink)
+ 			return ret;
+ 	}
+ 
++	if (!source && !sink)
++		tcpci_vbus_force_discharge(tcpc, true);
++
+ 	if (source) {
+ 		ret = regmap_write(tcpci->regmap, TCPC_COMMAND,
+ 				   TCPC_CMD_SRC_VBUS_DEFAULT);
+@@ -628,6 +658,9 @@ static int tcpci_init(struct tcpc_dev *tcpc)
+ 	if (ret < 0)
+ 		return ret;
+ 
++	/* Clear fault condition */
++	regmap_write(tcpci->regmap, TCPC_FAULT_STATUS, 0x80);
++
+ 	if (tcpci->controls_vbus)
+ 		reg = TCPC_POWER_STATUS_VBUS_PRES;
+ 	else
+@@ -644,7 +677,8 @@ static int tcpci_init(struct tcpc_dev *tcpc)
+ 
+ 	reg = TCPC_ALERT_TX_SUCCESS | TCPC_ALERT_TX_FAILED |
+ 		TCPC_ALERT_TX_DISCARDED | TCPC_ALERT_RX_STATUS |
+-		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS;
++		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS |
++		TCPC_ALERT_V_ALARM_LO | TCPC_ALERT_FAULT;
+ 	if (tcpci->controls_vbus)
+ 		reg |= TCPC_ALERT_POWER_STATUS;
+ 	/* Enable VSAFE0V status interrupt when detecting VSAFE0V is supported */
+@@ -655,17 +689,20 @@ static int tcpci_init(struct tcpc_dev *tcpc)
+ 		if (ret < 0)
+ 			return ret;
+ 	}
++	tcpci->irq_mask = reg;
++
+ 	return tcpci_write16(tcpci, TCPC_ALERT_MASK, reg);
+ }
+ 
+ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ {
+-	u16 status;
++	u16 status = 0;
+ 	int ret;
+ 	unsigned int raw;
+ 
+ 	tcpci_read16(tcpci, TCPC_ALERT, &status);
+ 
++recheck:
+ 	/*
+ 	 * Clear alert status for everything except RX_STATUS, which shouldn't
+ 	 * be cleared until we have successfully retrieved message.
+@@ -678,7 +715,10 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 		tcpm_cc_change(tcpci->port);
+ 
+ 	if (status & TCPC_ALERT_POWER_STATUS) {
++		/* Read power status to clear the event */
++		regmap_read(tcpci->regmap, TCPC_POWER_STATUS, &raw);
+ 		regmap_read(tcpci->regmap, TCPC_POWER_STATUS_MASK, &raw);
++
+ 		/*
+ 		 * If power status mask has been reset, then the TCPC
+ 		 * has reset.
+@@ -689,6 +729,9 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 			tcpm_vbus_change(tcpci->port);
+ 	}
+ 
++	if (status & TCPC_ALERT_V_ALARM_LO)
++		tcpci_vbus_force_discharge(&tcpci->tcpc, false);
++
+ 	if (status & TCPC_ALERT_RX_STATUS) {
+ 		struct pd_message msg;
+ 		unsigned int cnt, payload_cnt;
+@@ -728,6 +771,13 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 			tcpm_vbus_change(tcpci->port);
+ 	}
+ 
++	/* Clear the fault status anyway */
++	if (status & TCPC_ALERT_FAULT) {
++		regmap_read(tcpci->regmap, TCPC_FAULT_STATUS, &raw);
++		regmap_write(tcpci->regmap, TCPC_FAULT_STATUS,
++				raw | TCPC_FAULT_STATUS_CLEAR);
++	}
++
+ 	if (status & TCPC_ALERT_RX_HARD_RST)
+ 		tcpm_pd_hard_reset(tcpci->port);
+ 
+@@ -738,6 +788,12 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
+ 	else if (status & TCPC_ALERT_TX_FAILED)
+ 		tcpm_pd_transmit_complete(tcpci->port, TCPC_TX_FAILED);
+ 
++	if (tcpci->irq_falling_edge) {
++		tcpci_read16(tcpci, TCPC_ALERT, &status);
++		if (status & tcpci->irq_mask)
++			goto recheck;
++	}
++
+ 	return IRQ_HANDLED;
+ }
+ EXPORT_SYMBOL_GPL(tcpci_irq);
+@@ -834,6 +890,7 @@ static int tcpci_probe(struct i2c_client *client,
+ 		       const struct i2c_device_id *i2c_id)
+ {
+ 	struct tcpci_chip *chip;
++	unsigned long irq_flags, irq_type;
+ 	int err;
+ 	u16 val = 0;
+ 
+@@ -857,15 +914,25 @@ static int tcpci_probe(struct i2c_client *client,
+ 	if (IS_ERR(chip->tcpci))
+ 		return PTR_ERR(chip->tcpci);
+ 
++	irq_set_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
++
++	irq_type = irqd_get_trigger_type(irq_get_irq_data(client->irq));
++	if (irq_type == IRQF_TRIGGER_FALLING) {
++		irq_flags = IRQF_ONESHOT | IRQF_TRIGGER_FALLING;
++		chip->tcpci->irq_falling_edge = true;
++	} else {
++		irq_flags = IRQF_ONESHOT | IRQF_TRIGGER_LOW;
++	}
+ 	err = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+-					_tcpci_irq,
+-					IRQF_ONESHOT | IRQF_TRIGGER_LOW,
++					_tcpci_irq, irq_flags,
+ 					dev_name(&client->dev), chip);
+ 	if (err < 0) {
+ 		tcpci_unregister_port(chip->tcpci);
+ 		return err;
+ 	}
+ 
++	device_set_wakeup_capable(chip->tcpci->dev, true);
++
+ 	return 0;
+ }
+ 
+@@ -877,13 +944,43 @@ static int tcpci_remove(struct i2c_client *client)
+ 	/* Disable chip interrupts before unregistering port */
+ 	err = tcpci_write16(chip->tcpci, TCPC_ALERT_MASK, 0);
+ 	if (err < 0)
+-		dev_warn(&client->dev, "Failed to disable irqs (%pe)\n", ERR_PTR(err));
++		return err;
+ 
+ 	tcpci_unregister_port(chip->tcpci);
++	irq_clear_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
++
++	return 0;
++}
++
++static int __maybe_unused tcpci_suspend(struct device *dev)
++{
++	struct i2c_client *i2c = to_i2c_client(dev);
++
++	if (device_may_wakeup(dev))
++		enable_irq_wake(i2c->irq);
++	else
++		disable_irq(i2c->irq);
++
++	return 0;
++}
++
++
++static int __maybe_unused tcpci_resume(struct device *dev)
++{
++	struct i2c_client *i2c = to_i2c_client(dev);
++
++	if (device_may_wakeup(dev))
++		disable_irq_wake(i2c->irq);
++	else
++		enable_irq(i2c->irq);
+ 
+ 	return 0;
+ }
+ 
++static const struct dev_pm_ops tcpci_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(tcpci_suspend, tcpci_resume)
++};
++
+ static const struct i2c_device_id tcpci_id[] = {
+ 	{ "tcpci", 0 },
+ 	{ }
+@@ -901,6 +998,7 @@ MODULE_DEVICE_TABLE(of, tcpci_of_match);
+ static struct i2c_driver tcpci_i2c_driver = {
+ 	.driver = {
+ 		.name = "tcpci",
++		.pm = &tcpci_pm_ops,
+ 		.of_match_table = of_match_ptr(tcpci_of_match),
+ 	},
+ 	.probe = tcpci_probe,
+-- 
+2.25.1
+

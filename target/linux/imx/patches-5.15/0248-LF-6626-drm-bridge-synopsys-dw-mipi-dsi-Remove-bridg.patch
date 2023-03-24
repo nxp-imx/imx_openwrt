@@ -1,0 +1,44 @@
+From 8967dc1cada23e620f9c05a18930358cda3fba49 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Wed, 20 Jul 2022 13:55:56 +0800
+Subject: [PATCH 248/274] LF-6626 drm/bridge: synopsys: dw-mipi-dsi: Remove
+ bridge in __dw_mipi_dsi_remove()
+
+The bridge is added in __dw_mipi_dsi_probe(), so it should be
+removed in  __dw_mipi_dsi_remove().  Otherwise, it will be left
+in the global bridge list and leaked to drivers which try to
+find the bridge.
+
+Fixes: c206c7faeb32 ("drm/bridge: dw-mipi-dsi: Find the possible DSI devices")
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+index bf124c2d4..e642c1558 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+@@ -387,8 +387,6 @@ static int dw_mipi_dsi_host_detach(struct mipi_dsi_host *host,
+ 
+ 	drm_of_panel_bridge_remove(host->dev->of_node, 1, 0);
+ 
+-	drm_bridge_remove(&dsi->bridge);
+-
+ 	return 0;
+ }
+ 
+@@ -1224,6 +1222,8 @@ __dw_mipi_dsi_probe(struct platform_device *pdev,
+ 
+ static void __dw_mipi_dsi_remove(struct dw_mipi_dsi *dsi)
+ {
++	drm_bridge_remove(&dsi->bridge);
++
+ 	mipi_dsi_host_unregister(&dsi->dsi_host);
+ 
+ 	pm_runtime_disable(dsi->dev);
+-- 
+2.25.1
+

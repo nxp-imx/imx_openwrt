@@ -1,0 +1,66 @@
+From 96aab0b53f1f53ee6bda2245540e552837dfda25 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Tue, 19 Jul 2022 15:32:24 +0800
+Subject: [PATCH 244/274] MLK-25996 i2c: imx-lpi2c: enable runtime pm of i2c
+ temporarily when do system suspend/resume
+
+When do system suspend/resume, the runtime pm will be disabled after
+dpm_suspend_late() and before dpm_resume_early(). If still need some
+i2c transfers between these two phases, it will failed to request runtime
+wakeup. Then data transfer will failed.
+So enable runtime pm temporarily when try to do i2c transfer.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ drivers/i2c/busses/i2c-imx-lpi2c.c | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/i2c/busses/i2c-imx-lpi2c.c b/drivers/i2c/busses/i2c-imx-lpi2c.c
+index e1c4f746e..805f2f82f 100644
+--- a/drivers/i2c/busses/i2c-imx-lpi2c.c
++++ b/drivers/i2c/busses/i2c-imx-lpi2c.c
+@@ -296,11 +296,20 @@ static int lpi2c_imx_config(struct lpi2c_imx_struct *lpi2c_imx)
+ static int lpi2c_imx_master_enable(struct lpi2c_imx_struct *lpi2c_imx)
+ {
+ 	unsigned int temp;
++	bool enable_runtime_pm = false;
+ 	int ret;
+ 
++	if (!pm_runtime_enabled(lpi2c_imx->adapter.dev.parent)) {
++		pm_runtime_enable(lpi2c_imx->adapter.dev.parent);
++		enable_runtime_pm = true;
++	}
++
+ 	ret = pm_runtime_resume_and_get(lpi2c_imx->adapter.dev.parent);
+-	if (ret < 0)
++	if (ret < 0) {
++		if (enable_runtime_pm)
++			pm_runtime_disable(lpi2c_imx->adapter.dev.parent);
+ 		return ret;
++	}
+ 
+ 	temp = MCR_RST;
+ 	writel(temp, lpi2c_imx->base + LPI2C_MCR);
+@@ -314,12 +323,18 @@ static int lpi2c_imx_master_enable(struct lpi2c_imx_struct *lpi2c_imx)
+ 	temp |= MCR_MEN;
+ 	writel(temp, lpi2c_imx->base + LPI2C_MCR);
+ 
++	if (enable_runtime_pm)
++		pm_runtime_disable(lpi2c_imx->adapter.dev.parent);
++
+ 	return 0;
+ 
+ rpm_put:
+ 	pm_runtime_mark_last_busy(lpi2c_imx->adapter.dev.parent);
+ 	pm_runtime_put_autosuspend(lpi2c_imx->adapter.dev.parent);
+ 
++	if (enable_runtime_pm)
++		pm_runtime_disable(lpi2c_imx->adapter.dev.parent);
++
+ 	return ret;
+ }
+ 
+-- 
+2.25.1
+

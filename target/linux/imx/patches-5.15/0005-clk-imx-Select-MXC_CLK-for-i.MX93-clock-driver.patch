@@ -1,0 +1,38 @@
+From 61bdf03d86bf40752a30d91fd64fbfb6c495c1f9 Mon Sep 17 00:00:00 2001
+From: Abel Vesa <abel.vesa@nxp.com>
+Date: Tue, 15 Mar 2022 10:24:46 +0200
+Subject: [PATCH 005/274] clk: imx: Select MXC_CLK for i.MX93 clock driver
+
+Most of the i.MX clock generic API is built by selecting MXC_CLK.
+Without it, the i.MX93 clock driver will fail to build:
+
+aarch64-linux-gnu-ld: drivers/clk/imx/clk-imx93.o:
+in function `imx93_clocks_probe': clk-imx93.c:(.text+0xa8):
+undefined reference to `imx_obtain_fixed_clk_hw'
+
+So fix this by selecting MXC_CLK for the CLK_IMX93.
+
+Fixes: 24defbe194b6 ("clk: imx: add i.MX93 clk")
+Signed-off-by: Abel Vesa <abel.vesa@nxp.com>
+Reported-by: kernel test robot <lkp@intel.com>
+Link: https://lore.kernel.org/r/20220315082446.3120850-1-abel.vesa@nxp.com
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+---
+ drivers/clk/imx/Kconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/clk/imx/Kconfig b/drivers/clk/imx/Kconfig
+index 456ebba30..935792e3c 100644
+--- a/drivers/clk/imx/Kconfig
++++ b/drivers/clk/imx/Kconfig
+@@ -102,5 +102,6 @@ config CLK_IMX8QXP
+ config CLK_IMX93
+ 	tristate "IMX93 CCM Clock Driver"
+ 	depends on ARCH_MXC || COMPILE_TEST
++	select MXC_CLK
+ 	help
+ 	    Build the driver for i.MX93 CCM Clock Driver
+-- 
+2.25.1
+

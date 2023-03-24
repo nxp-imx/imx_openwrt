@@ -1,0 +1,49 @@
+From 7bb915cfe6b4e069d2030609c8488a0919e018c2 Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Mon, 20 Jun 2022 14:27:18 +0800
+Subject: [PATCH 163/274] MLK-25956: ASoC: fsl_sai: Fix fsl_sai build warning:
+ incompatible-pointer-types
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Use u64 type instead of unsigned long to call do_div function.
+
+It fixes buildig warning when the target is aarch32:
+
+In file included from ./arch/arm/include/asm/div64.h:107,
+                 from ./include/linux/math.h:5,
+                 from ./include/linux/kernel.h:15,
+                 from ./include/linux/clk.h:13,
+                 from sound/soc/fsl/fsl_sai.c:7:
+sound/soc/fsl/fsl_sai.c: In function ‘fsl_sai_startup’:
+./include/asm-generic/div64.h:222:35: warning: comparison of distinct pointer types lacks a cast
+  222 |         (void)(((typeof((n)) *)0) == ((uint64_t *)0));  \
+      |                                   ^~
+sound/soc/fsl/fsl_sai.c:882:37: note: in expansion of macro ‘do_div’
+  882 |                                     do_div(clk_rate[j], fsl_sai_rates[i]) == 0) {
+      |                                     ^~~~~~
+
+Fixes: 6a05f8185aef ("MLK-25954: ASoC: fsl_sai: Add rate constraint")
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ sound/soc/fsl/fsl_sai.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sound/soc/fsl/fsl_sai.c b/sound/soc/fsl/fsl_sai.c
+index 5b23949c6..69e56d52f 100644
+--- a/sound/soc/fsl/fsl_sai.c
++++ b/sound/soc/fsl/fsl_sai.c
+@@ -858,7 +858,7 @@ static int fsl_sai_startup(struct snd_pcm_substream *substream,
+ 	struct fsl_sai *sai = snd_soc_dai_get_drvdata(cpu_dai);
+ 	bool tx = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
+ 	int ret, i, j, k = 0;
+-	unsigned long clk_rate[2];
++	u64 clk_rate[2];
+ 
+ 	/*
+ 	 * EDMA controller needs period size to be a multiple of
+-- 
+2.25.1
+

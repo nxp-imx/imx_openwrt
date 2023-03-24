@@ -1,0 +1,39 @@
+From a7c5ee971c42fc17b19212808a35f5b140f0df8a Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Tue, 24 May 2022 20:20:22 +0800
+Subject: [PATCH 045/274] MLK-25917-4 arm64: dts: imx93-11x11-evk: add adp5585
+ support
+
+Add MFD adp5585 support, and also add a sub-device: adp5585-gpio
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index dae30a768..11258e912 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -164,6 +164,17 @@ pcal6524: gpio@22 {
+ 		interrupt-parent = <&gpio3>;
+ 		interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
+ 	};
++
++	adp5585: mfd@34 {
++		compatible = "adi,adp5585";
++		reg = <0x34>;
++
++		adp5585gpio: gpio@34 {
++			compatible = "adp5585-gpio";
++			gpio-controller;
++			#gpio-cells = <2>;
++		};
++	};
+ };
+ 
+ &lpuart1 { /* console */
+-- 
+2.25.1
+

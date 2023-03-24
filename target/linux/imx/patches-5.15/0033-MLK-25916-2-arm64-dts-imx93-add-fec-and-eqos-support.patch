@@ -1,0 +1,217 @@
+From 5fe2af9800118b25fecd33b5f08782d5da1cc0f6 Mon Sep 17 00:00:00 2001
+From: Clark Wang <xiaoning.wang@nxp.com>
+Date: Tue, 24 May 2022 10:35:23 +0800
+Subject: [PATCH 033/274] MLK-25916-2 arm64: dts: imx93: add fec and eqos
+ support
+
+Enable FEC and EQoS functions.
+Move mu1/mu2 to an alphabetically sorted position.
+
+Signed-off-by: Clark Wang <xiaoning.wang@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+---
+ .../boot/dts/freescale/imx93-11x11-evk.dts    | 88 ++++++++++++++++++-
+ arch/arm64/boot/dts/freescale/imx93.dtsi      | 56 ++++++++++++
+ 2 files changed, 142 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 69786c326..ecfb020bd 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -27,12 +27,50 @@ reg_usdhc2_vmmc: regulator-usdhc2 {
+ 	};
+ };
+ 
+-&mu1 {
++&eqos {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_eqos>;
++	phy-mode = "rgmii-id";
++	phy-handle = <&ethphy1>;
+ 	status = "okay";
++
++	mdio {
++		compatible = "snps,dwmac-mdio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		clock-frequency = <5000000>;
++
++		ethphy1: ethernet-phy@1 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <1>;
++			eee-broken-1000t;
++			rtl821x,aldps-disable;
++			rtl821x,clkout-disable;
++		};
++	};
+ };
+ 
+-&mu2 {
++&fec {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_fec>;
++	phy-mode = "rgmii-id";
++	phy-handle = <&ethphy2>;
++	fsl,magic-packet;
+ 	status = "okay";
++
++	mdio {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		clock-frequency = <5000000>;
++
++		ethphy2: ethernet-phy@2 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <2>;
++			eee-broken-1000t;
++			rtl821x,aldps-disable;
++			rtl821x,clkout-disable;
++		};
++	};
+ };
+ 
+ &lpuart1 { /* console */
+@@ -41,6 +79,14 @@ &lpuart1 { /* console */
+ 	status = "okay";
+ };
+ 
++&mu1 {
++	status = "okay";
++};
++
++&mu2 {
++	status = "okay";
++};
++
+ &usdhc1 {
+ 	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+ 	pinctrl-0 = <&pinctrl_usdhc1>;
+@@ -65,6 +111,44 @@ &usdhc2 {
+ };
+ 
+ &iomuxc {
++	pinctrl_eqos: eqosgrp {
++		fsl,pins = <
++			MX93_PAD_ENET1_MDC__ENET_QOS_MDC			0x57e
++			MX93_PAD_ENET1_MDIO__ENET_QOS_MDIO			0x57e
++			MX93_PAD_ENET1_RD0__ENET_QOS_RGMII_RD0			0x57e
++			MX93_PAD_ENET1_RD1__ENET_QOS_RGMII_RD1			0x57e
++			MX93_PAD_ENET1_RD2__ENET_QOS_RGMII_RD2			0x57e
++			MX93_PAD_ENET1_RD3__ENET_QOS_RGMII_RD3			0x57e
++			MX93_PAD_ENET1_RXC__CCM_ENET_QOS_CLOCK_GENERATE_RX_CLK	0x5fe
++			MX93_PAD_ENET1_RX_CTL__ENET_QOS_RGMII_RX_CTL		0x57e
++			MX93_PAD_ENET1_TD0__ENET_QOS_RGMII_TD0			0x57e
++			MX93_PAD_ENET1_TD1__ENET_QOS_RGMII_TD1			0x57e
++			MX93_PAD_ENET1_TD2__ENET_QOS_RGMII_TD2			0x57e
++			MX93_PAD_ENET1_TD3__ENET_QOS_RGMII_TD3			0x57e
++			MX93_PAD_ENET1_TXC__CCM_ENET_QOS_CLOCK_GENERATE_TX_CLK	0x5fe
++			MX93_PAD_ENET1_TX_CTL__ENET_QOS_RGMII_TX_CTL		0x57e
++		>;
++	};
++
++	pinctrl_fec: fecgrp {
++		fsl,pins = <
++			MX93_PAD_ENET2_MDC__ENET1_MDC			0x57e
++			MX93_PAD_ENET2_MDIO__ENET1_MDIO			0x57e
++			MX93_PAD_ENET2_RD0__ENET1_RGMII_RD0		0x57e
++			MX93_PAD_ENET2_RD1__ENET1_RGMII_RD1		0x57e
++			MX93_PAD_ENET2_RD2__ENET1_RGMII_RD2		0x57e
++			MX93_PAD_ENET2_RD3__ENET1_RGMII_RD3		0x57e
++			MX93_PAD_ENET2_RXC__ENET1_RGMII_RXC		0x5fe
++			MX93_PAD_ENET2_RX_CTL__ENET1_RGMII_RX_CTL	0x57e
++			MX93_PAD_ENET2_TD0__ENET1_RGMII_TD0		0x57e
++			MX93_PAD_ENET2_TD1__ENET1_RGMII_TD1		0x57e
++			MX93_PAD_ENET2_TD2__ENET1_RGMII_TD2		0x57e
++			MX93_PAD_ENET2_TD3__ENET1_RGMII_TD3		0x57e
++			MX93_PAD_ENET2_TXC__ENET1_RGMII_TXC		0x5fe
++			MX93_PAD_ENET2_TX_CTL__ENET1_RGMII_TX_CTL	0x57e
++		>;
++	};
++
+ 	pinctrl_uart1: uart1grp {
+ 		fsl,pins = <
+ 			MX93_PAD_UART1_RXD__LPUART1_RX			0x31e
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index a03b00914..1b65b3b89 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -17,6 +17,8 @@ / {
+ 	#size-cells = <2>;
+ 
+ 	aliases {
++		ethernet0 = &fec;
++		ethernet1 = &eqos;
+ 		mmc0 = &usdhc1;
+ 		mmc1 = &usdhc2;
+ 		mmc2 = &usdhc3;
+@@ -210,6 +212,11 @@ aips2: bus@42000000 {
+ 			#size-cells = <1>;
+ 			ranges;
+ 
++			wakeupmix_gpr: blk-ctrl-wakeupmix@42420000 {
++				compatible = "syscon";
++				reg = <0x42420000 0x1000>;
++			};
++
+ 			mu2: mailbox@42440000 {
+ 				compatible = "fsl,imx93-mu", "fsl,imx8ulp-mu";
+ 				reg = <0x42440000 0x10000>;
+@@ -308,6 +315,55 @@ usdhc2: mmc@42860000 {
+ 				status = "disabled";
+ 			};
+ 
++			fec: ethernet@42890000 {
++				compatible = "fsl,imx93-fec", "fsl,imx8mp-fec", "fsl,imx8mq-fec";
++				reg = <0x42890000 0x10000>;
++				interrupts = <GIC_SPI 179 IRQ_TYPE_LEVEL_HIGH>,
++					     <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>,
++					     <GIC_SPI 181 IRQ_TYPE_LEVEL_HIGH>,
++					     <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_WAKEUP_AXI>,
++					 <&clk IMX93_CLK_WAKEUP_AXI>,
++					 <&clk IMX93_CLK_ENET_TIMER1>,
++					 <&clk IMX93_CLK_ENET_REF>,
++					 <&clk IMX93_CLK_ENET_REF_PHY>;
++				clock-names = "ipg", "ahb", "ptp",
++					      "enet_clk_ref", "enet_out";
++				assigned-clocks = <&clk IMX93_CLK_ENET_TIMER1>,
++						  <&clk IMX93_CLK_ENET_REF>,
++						  <&clk IMX93_CLK_ENET_REF_PHY>;
++				assigned-clock-parents = <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>,
++							 <&clk IMX93_CLK_SYS_PLL_PFD0_DIV2>,
++							 <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>;
++				assigned-clock-rates = <100000000>, <250000000>, <50000000>;
++				fsl,num-tx-queues = <3>;
++				fsl,num-rx-queues = <3>;
++				fsl,wakeup_irq = <2>;
++				status = "disabled";
++			};
++
++			eqos: ethernet@428a0000 {
++				compatible = "nxp,imx93-dwmac-eqos", "snps,dwmac-5.10a";
++				reg = <0x428a0000 0x10000>;
++				interrupts = <GIC_SPI 183 IRQ_TYPE_LEVEL_HIGH>,
++					     <GIC_SPI 184 IRQ_TYPE_LEVEL_HIGH>;
++				interrupt-names = "eth_wake_irq", "macirq";
++				clocks = <&clk IMX93_CLK_WAKEUP_AXI>,
++					 <&clk IMX93_CLK_WAKEUP_AXI>,
++					 <&clk IMX93_CLK_ENET_TIMER2>,
++					 <&clk IMX93_CLK_ENET>,
++					 <&clk IMX93_CLK_WAKEUP_AXI>;
++				clock-names = "stmmaceth", "pclk", "ptp_ref", "tx", "mem";
++				assigned-clocks = <&clk IMX93_CLK_ENET_TIMER2>,
++						  <&clk IMX93_CLK_ENET>;
++				assigned-clock-parents = <&clk IMX93_CLK_SYS_PLL_PFD1_DIV2>,
++							 <&clk IMX93_CLK_SYS_PLL_PFD0_DIV2>;
++				assigned-clock-rates = <100000000>, <250000000>;
++				intf_mode = <&wakeupmix_gpr 0x28>;
++				clk_csr = <0>;
++				status = "disabled";
++			};
++
+ 			usdhc3: mmc@428b0000 {
+ 				compatible = "fsl,imx93-usdhc", "fsl,imx8mm-usdhc";
+ 				reg = <0x428b0000 0x10000>;
+-- 
+2.25.1
+

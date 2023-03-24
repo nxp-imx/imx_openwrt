@@ -1,0 +1,31 @@
+From 86c65eb361fd9bb594d66e9f6637af9c6129bd90 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 30 May 2022 11:02:20 +0800
+Subject: [PATCH 068/274] LF-6250-3 arm64: imx_v8_defconfig: Build in i.MX93
+ Synopsys DesignWare MIPI DPHY driver
+
+This patch changes imx_v8_defconfig to build in
+i.MX93 Synopsys DesignWare MIPI DPHY driver.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index 6ff545aec..46e584123 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -934,6 +934,7 @@ CONFIG_PHY_MIXEL_LVDS=y
+ CONFIG_PHY_MIXEL_LVDS_COMBO=y
+ CONFIG_PHY_CADENCE_SALVO=y
+ CONFIG_PHY_FSL_IMX8MP_LVDS=y
++CONFIG_PHY_FSL_IMX93_MIPI_DPHY=y
+ CONFIG_PHY_MIXEL_MIPI_DPHY=y
+ CONFIG_PHY_SAMSUNG_HDMI_PHY=y
+ CONFIG_PHY_QCOM_USB_HS=y
+-- 
+2.25.1
+

@@ -1,0 +1,32 @@
+From 5f817c0615b31b1b2829d6a807abc592f217321e Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Thu, 9 Jun 2022 15:28:08 +0800
+Subject: [PATCH 153/274] MLK-25937: arm64: dts: imx93-11x11-evk-mqs: Disable
+ sound-bt-sco
+
+Disable sound-bt-sco since sai1 used by sound-mqs conflicts.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
+index f9885de1c..cbe8afff4 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
+@@ -20,6 +20,10 @@ sound-micfil {
+ 		status = "disabled";
+ 	};
+ 
++	sound-bt-sco {
++		status = "disabled";
++	};
++
+ 	sound-mqs {
+ 		compatible = "fsl,imx6sx-sdb-mqs",
+ 			     "fsl,imx-audio-mqs";
+-- 
+2.25.1
+

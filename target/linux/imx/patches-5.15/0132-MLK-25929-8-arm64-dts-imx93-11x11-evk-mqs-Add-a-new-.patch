@@ -1,0 +1,98 @@
+From 3b4b7d4aab7b82a54c5ca812371fbeed4d939d90 Mon Sep 17 00:00:00 2001
+From: Chancel Liu <chancel.liu@nxp.com>
+Date: Fri, 22 Apr 2022 12:55:41 +0800
+Subject: [PATCH 132/274] MLK-25929-8: arm64: dts: imx93-11x11-evk-mqs: Add a
+ new dts to enable sound-mqs
+
+PDM and MQS1 are controlled by an analog switch. Only one of them can
+work at a time. Here we add a new dts file to select mqs sound card.
+MQS1 is connected to sai1.
+
+Reviewed-by: Shengjiu Wang <shengjiu.wang@nxp.com>
+Signed-off-by: Chancel Liu <chancel.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile        |  2 +-
+ .../dts/freescale/imx93-11x11-evk-mqs.dts     | 59 +++++++++++++++++++
+ 2 files changed, 60 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index f39195b03..ba5bc9dad 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -245,6 +245,6 @@ dtb-$(CONFIG_ARCH_MXC) += imx8dxl-evk-root.dtb imx8dxl-evk-inmate.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb imx93-11x11-evk-rpmsg.dtb \
+ 			  imx93-11x11-evk-lpspi.dtb imx93-11x11-evk-lpspi-slave.dtb \
+ 			  imx93-11x11-evk-i3c.dtb imx93-11x11-evk-rm67199.dtb \
+-			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb
++			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb imx93-11x11-evk-mqs.dtb
+ dtb-$(CONFIG_ARCH_S32) += s32v234-evb.dtb \
+ 			  s32v234-sbc.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
+new file mode 100644
+index 000000000..f9885de1c
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-mqs.dts
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++/ {
++	reg_audio_switch: regulator-audio-switch {
++		compatible = "regulator-fixed";
++		regulator-name = "audio-switch";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&adp5585gpio 2 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		regulator-always-on;
++	};
++
++	sound-micfil {
++		status = "disabled";
++	};
++
++	sound-mqs {
++		compatible = "fsl,imx6sx-sdb-mqs",
++			     "fsl,imx-audio-mqs";
++		model = "mqs-audio";
++		audio-cpu = <&sai1>;
++		audio-codec = <&mqs1>;
++	};
++};
++
++&sai1 {
++	#sound-dai-cells = <0>;
++	assigned-clocks = <&clk IMX93_CLK_SAI1>;
++	assigned-clock-parents = <&clk IMX93_CLK_AUDIO_PLL>;
++	assigned-clock-rates = <24576000>;
++	status = "okay";
++};
++
++&mqs1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_mqs1>;
++	clocks = <&clk IMX93_CLK_MQS1_GATE>;
++	clock-names = "mclk";
++	status = "okay";
++};
++
++&micfil {
++	status = "disabled";
++};
++
++&iomuxc {
++	pinctrl_mqs1: mqs1grp {
++		fsl,pins = <
++			MX93_PAD_PDM_CLK__MQS1_LEFT			0x31e
++			MX93_PAD_PDM_BIT_STREAM0__MQS1_RIGHT	0x31e
++		>;
++	};
++};
+-- 
+2.25.1
+

@@ -1,0 +1,35 @@
+From 03d9324e80a929065f0fe1c6a5c775369d132ec6 Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Wed, 16 Mar 2022 15:42:40 +0800
+Subject: [PATCH 044/274] MLK-25917-3 arm64: imx_v8_defconfig: Build in adp5585
+ mfd and gpio driver
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Jun Li <jun.li@nxp.com>
+---
+ arch/arm64/configs/imx_v8_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/configs/imx_v8_defconfig b/arch/arm64/configs/imx_v8_defconfig
+index 315545795..20b47eefc 100644
+--- a/arch/arm64/configs/imx_v8_defconfig
++++ b/arch/arm64/configs/imx_v8_defconfig
+@@ -445,6 +445,7 @@ CONFIG_GPIO_XGENE=y
+ CONFIG_GPIO_MAX732X=y
+ CONFIG_GPIO_PCA953X=y
+ CONFIG_GPIO_PCA953X_IRQ=y
++CONFIG_GPIO_ADP5585=y
+ CONFIG_GPIO_BD9571MWV=m
+ CONFIG_GPIO_MAX77620=y
+ CONFIG_GPIO_SL28CPLD=m
+@@ -483,6 +484,7 @@ CONFIG_IMX_SC_WDT=y
+ CONFIG_IMX7ULP_WDT=y
+ CONFIG_ARM_SMC_WATCHDOG=y
+ CONFIG_XEN_WDT=y
++CONFIG_MFD_ADP5585=y
+ CONFIG_MFD_BD9571MWV=y
+ CONFIG_MFD_AXP20X_I2C=y
+ CONFIG_MFD_IMX_MIX=y
+-- 
+2.25.1
+

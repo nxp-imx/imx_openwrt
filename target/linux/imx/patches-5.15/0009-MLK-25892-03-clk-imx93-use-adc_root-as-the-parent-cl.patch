@@ -1,0 +1,35 @@
+From 727736ac114c4d6a09bcb94b7b35939e4b9a4d5d Mon Sep 17 00:00:00 2001
+From: Haibo Chen <haibo.chen@nxp.com>
+Date: Fri, 22 Apr 2022 14:43:03 +0800
+Subject: [PATCH 009/274] MLK-25892-03 clk: imx93: use adc_root as the parent
+ clock of adc1
+
+When debug, find after system boot up, all adc register operation
+will trigger system hang, this is because the internal adc ipg
+clock is gate off. In dts, only reference the IMX93_CLK_ADC1_GATE,
+which is adc1, no one touch the adc_root, so adc_root will be gate
+off automatically after system boot up.
+
+Signed-off-by: Haibo Chen <haibo.chen@nxp.com>
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ drivers/clk/imx/clk-imx93.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index edcc87661..172cd56c9 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -150,7 +150,7 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_A55_GATE,		"a55",		"a55_root",		0x8000, },
+ 	/* M33 critical clk for system run */
+ 	{ IMX93_CLK_CM33_GATE,		"cm33",		"m33_root",		0x8040, CLK_IS_CRITICAL },
+-	{ IMX93_CLK_ADC1_GATE,		"adc1",		"osc_24m",		0x82c0, },
++	{ IMX93_CLK_ADC1_GATE,		"adc1",		"adc_root",		0x82c0, },
+ 	{ IMX93_CLK_WDOG1_GATE,		"wdog1",	"osc_24m",		0x8300, },
+ 	{ IMX93_CLK_WDOG2_GATE,		"wdog2",	"osc_24m",		0x8340, },
+ 	{ IMX93_CLK_WDOG3_GATE,		"wdog3",	"osc_24m",		0x8380, },
+-- 
+2.25.1
+

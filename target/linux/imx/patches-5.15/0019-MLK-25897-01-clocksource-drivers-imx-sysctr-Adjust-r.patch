@@ -1,0 +1,40 @@
+From 6916d95f28510e3906c8fefe48e79653d3767649 Mon Sep 17 00:00:00 2001
+From: Jacky Bai <ping.bai@nxp.com>
+Date: Wed, 18 May 2022 13:11:11 +0800
+Subject: [PATCH 019/274] MLK-25897-01 clocksource/drivers/imx-sysctr: Adjust
+ rate only when divider is used
+
+For the system counter module that used by i.MX platform, due to
+the design consideration, On some platform, the coounter's clock
+frequency is further divided by 3 from OSC, but on some platform
+like i.MX9, the clock is directly from OSC, no such internal 1/3
+divider, so update the driver to only adjust the rate for divider
+used case.
+
+Signed-off-by: Jacky Bai <ping.bai@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+Reviewed-by: Ye Li <ye.li@nxp.com>
+---
+ drivers/clocksource/timer-imx-sysctr.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clocksource/timer-imx-sysctr.c b/drivers/clocksource/timer-imx-sysctr.c
+index 18b90fc56..59ec95287 100644
+--- a/drivers/clocksource/timer-imx-sysctr.c
++++ b/drivers/clocksource/timer-imx-sysctr.c
+@@ -134,8 +134,10 @@ static int __init sysctr_timer_init(struct device_node *np)
+ 	if (ret)
+ 		return ret;
+ 
+-	/* system counter clock is divided by 3 internally */
+-	to_sysctr.of_clk.rate /= SYS_CTR_CLK_DIV;
++	/* check if need to adjust the rate */
++	if (!of_property_read_bool(np, "no-divider"))
++		/* system counter clock is divided by 3 internally */
++		to_sysctr.of_clk.rate /= SYS_CTR_CLK_DIV;
+ 
+ 	sys_ctr_base = timer_of_base(&to_sysctr);
+ 	cmpcr = readl(sys_ctr_base + CMPCR);
+-- 
+2.25.1
+

@@ -1,0 +1,71 @@
+From 13d374ccb56d071801fe15d807b21757dccf1926 Mon Sep 17 00:00:00 2001
+From: Xiongfeng Wang <wangxiongfeng2@huawei.com>
+Date: Wed, 16 Mar 2022 09:19:38 +0100
+Subject: [PATCH 202/274] media: amphion: Add missing of_node_put() in
+ vpu_core_parse_dt()
+
+of_parse_phandle() will increment the refcount of the returned
+device_node. Calling of_node_put() to avoid the refcount leak.
+
+Link: https://lore.kernel.org/linux-media/20220316081938.80819-1-wangxiongfeng2@huawei.com
+Signed-off-by: Xiongfeng Wang <wangxiongfeng2@huawei.com>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/vpu_core.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/media/platform/amphion/vpu_core.c b/drivers/media/platform/amphion/vpu_core.c
+index 016554387..1da20335b 100644
+--- a/drivers/media/platform/amphion/vpu_core.c
++++ b/drivers/media/platform/amphion/vpu_core.c
+@@ -529,11 +529,14 @@ static int vpu_core_parse_dt(struct vpu_core *core, struct device_node *np)
+ 	}
+ 	if (of_address_to_resource(node, 0, &res)) {
+ 		dev_err(core->dev, "boot-region of_address_to_resource error\n");
++		of_node_put(node);
+ 		return -EINVAL;
+ 	}
+ 	core->fw.phys = res.start;
+ 	core->fw.length = resource_size(&res);
+ 
++	of_node_put(node);
++
+ 	node = of_parse_phandle(np, "memory-region", 1);
+ 	if (!node) {
+ 		dev_err(core->dev, "rpc-region of_parse_phandle error\n");
+@@ -541,6 +544,7 @@ static int vpu_core_parse_dt(struct vpu_core *core, struct device_node *np)
+ 	}
+ 	if (of_address_to_resource(node, 0, &res)) {
+ 		dev_err(core->dev, "rpc-region of_address_to_resource error\n");
++		of_node_put(node);
+ 		return -EINVAL;
+ 	}
+ 	core->rpc.phys = res.start;
+@@ -549,6 +553,7 @@ static int vpu_core_parse_dt(struct vpu_core *core, struct device_node *np)
+ 	if (core->rpc.length < core->res->rpc_size + core->res->fwlog_size) {
+ 		dev_err(core->dev, "the rpc-region <%pad, 0x%x> is not enough\n",
+ 			&core->rpc.phys, core->rpc.length);
++		of_node_put(node);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -560,6 +565,7 @@ static int vpu_core_parse_dt(struct vpu_core *core, struct device_node *np)
+ 	if (ret != VPU_CORE_MEMORY_UNCACHED) {
+ 		dev_err(core->dev, "rpc region<%pad, 0x%x> isn't uncached\n",
+ 			&core->rpc.phys, core->rpc.length);
++		of_node_put(node);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -571,6 +577,8 @@ static int vpu_core_parse_dt(struct vpu_core *core, struct device_node *np)
+ 	core->act.length = core->rpc.length - core->res->rpc_size - core->log.length;
+ 	core->rpc.length = core->res->rpc_size;
+ 
++	of_node_put(node);
++
+ 	return 0;
+ }
+ 
+-- 
+2.25.1
+

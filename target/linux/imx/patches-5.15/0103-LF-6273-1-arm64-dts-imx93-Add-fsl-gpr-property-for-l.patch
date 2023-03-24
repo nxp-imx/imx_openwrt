@@ -1,0 +1,35 @@
+From fdbc84151c836ea12324d6f52446209b299e3f39 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Wed, 1 Jun 2022 13:04:51 +0800
+Subject: [PATCH 103/274] LF-6273-1 arm64: dts: imx93: Add 'fsl,gpr' property
+ for lcdif node
+
+As a temporary solution, we need to get the media_blk_ctrl phandle
+through the added 'fsl,gpr' lcdif node property to control lcdif
+QoS and cache in the lcdif driver to achieve better system performance
+and lcdif memory access performance.  In the future, we'll use proper
+and generic APIs in the lcdif driver to do the control instead of
+accessing the mediamix block control register by our own.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index 9ca17c692..b228f95f8 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -1058,6 +1058,7 @@ lcdif: lcd-controller@4ae30000 {
+ 			compatible = "fsl,imx93-lcdif";
+ 			reg = <0x4ae30000 0x10000>;
+ 			interrupts = <GIC_SPI 176 IRQ_TYPE_LEVEL_HIGH>;
++			fsl,gpr = <&media_blk_ctrl>;
+ 			clocks = <&clk IMX93_CLK_MEDIA_DISP_PIX>,
+ 				 <&clk IMX93_CLK_MEDIA_AXI>,
+ 				 <&clk IMX93_CLK_LCDIF_GATE>;
+-- 
+2.25.1
+

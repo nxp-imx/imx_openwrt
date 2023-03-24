@@ -1,0 +1,39 @@
+From c067dabf123b88309c374b97119df59202dec100 Mon Sep 17 00:00:00 2001
+From: YueHaibing <yuehaibing@huawei.com>
+Date: Fri, 18 Mar 2022 04:03:05 +0100
+Subject: [PATCH 201/274] media: platform: amphion: Fix build error without
+ MAILBOX
+
+while COMPILE_TEST is y and MAILBOX is n, build fails:
+
+ERROR: modpost: "mbox_request_channel_byname" [drivers/media/platform/amphion/amphion-vpu.ko] undefined!
+ERROR: modpost: "mbox_free_channel" [drivers/media/platform/amphion/amphion-vpu.ko] undefined!
+ERROR: modpost: "mbox_send_message" [drivers/media/platform/amphion/amphion-vpu.ko] undefined!
+
+Adding a MAILBOX dependency in VIDEO_AMPHION_VPU to fix this.
+
+Link: https://lore.kernel.org/linux-media/20220318030305.39120-1-yuehaibing@huawei.com
+Fixes: 52b3a219dd4a ("media: platform: amphion: move config to its own file")
+Signed-off-by: YueHaibing <yuehaibing@huawei.com>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+---
+ drivers/media/platform/amphion/Kconfig | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/amphion/Kconfig b/drivers/media/platform/amphion/Kconfig
+index e0e809896..4a363e07c 100644
+--- a/drivers/media/platform/amphion/Kconfig
++++ b/drivers/media/platform/amphion/Kconfig
+@@ -7,8 +7,7 @@ config VIDEO_AMPHION_VPU
+ 	depends on V4L_MEM2MEM_DRIVERS
+ 	depends on ARCH_MXC || COMPILE_TEST
+ 	depends on MEDIA_SUPPORT
+-	depends on VIDEO_DEV
+-	depends on VIDEO_V4L2
++	depends on VIDEO_DEV && MAILBOX
+ 	select MEDIA_CONTROLLER
+ 	select V4L2_MEM2MEM_DEV
+ 	select VIDEOBUF2_DMA_CONTIG
+-- 
+2.25.1
+

@@ -1,0 +1,41 @@
+From 3340d7df8dae3b09b7c1c42eb53c68803321638a Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 10:13:57 +0800
+Subject: [PATCH 109/274] LF-6244-04: arm64: imx93dtsi: add PXP device node for
+ iMX93 platform
+
+Add PXP device node for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index b228f95f8..d2400e129 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -858,6 +858,19 @@ usdhc3: mmc@428b0000 {
+ 				fsl,tuning-step= <2>;
+ 				status = "disabled";
+ 			};
++
++			epxp: epxp@4ae20000 {
++				compatible = "fsl,imx93-pxp-dma", "fsl,imx8ulp-pxp-dma";
++				reg = <0x4ae20000 0x10000>;
++				interrupts = <GIC_SPI 173 IRQ_TYPE_LEVEL_HIGH>,
++					     <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>;
++				clocks = <&clk IMX93_CLK_MEDIA_APB>,
++					 <&clk IMX93_CLK_MEDIA_AXI>;
++				clock-names = "pxp_ipg", "pxp_axi";
++				pxp-gpr = <&media_blk_ctrl>;
++				power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_PXP>;
++				status = "disabled";
++			};
+ 		};
+ 
+ 		gpio2: gpio@43810080 {
+-- 
+2.25.1
+

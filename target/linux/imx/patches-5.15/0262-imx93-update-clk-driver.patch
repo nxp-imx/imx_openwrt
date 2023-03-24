@@ -1,0 +1,393 @@
+From 360b1fbb2db0a3706031e71c6f657f6b6669a90a Mon Sep 17 00:00:00 2001
+From: shuyang <shuyang.guan@nxp.com>
+Date: Wed, 2 Nov 2022 12:57:21 +0800
+Subject: [PATCH 262/274] imx93: update clk driver
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/clk/imx/clk-composite-93.c      | 171 +++++++++++++++++++++++-
+ drivers/clk/imx/clk-fracn-gppll.c       |   3 +-
+ drivers/clk/imx/clk-imx93.c             |  37 ++---
+ drivers/clk/imx/clk.h                   |  10 +-
+ include/dt-bindings/clock/imx93-clock.h |   6 +-
+ 5 files changed, 197 insertions(+), 30 deletions(-)
+
+diff --git a/drivers/clk/imx/clk-composite-93.c b/drivers/clk/imx/clk-composite-93.c
+index b44619aa5..74a66b020 100644
+--- a/drivers/clk/imx/clk-composite-93.c
++++ b/drivers/clk/imx/clk-composite-93.c
+@@ -9,22 +9,180 @@
+ #include <linux/errno.h>
+ #include <linux/export.h>
+ #include <linux/io.h>
++#include <linux/iopoll.h>
+ #include <linux/slab.h>
+ 
+ #include "clk.h"
+ 
++#define TIMEOUT_US	500U
++
+ #define CCM_DIV_SHIFT	0
+ #define CCM_DIV_WIDTH	8
+ #define CCM_MUX_SHIFT	8
+ #define CCM_MUX_MASK	3
+ #define CCM_OFF_SHIFT	24
++#define CCM_BUSY_SHIFT	28
+ 
++#define STAT_OFFSET	0x4
+ #define AUTHEN_OFFSET	0x30
+ #define TZ_NS_SHIFT	9
+ #define TZ_NS_MASK	BIT(9)
+ 
++#define WHITE_LIST_SHIFT	16
++
++static int imx93_clk_composite_wait_ready(struct clk_hw *hw, void __iomem *reg)
++{
++	int ret;
++	u32 val;
++
++	ret = readl_poll_timeout_atomic(reg + STAT_OFFSET, val, !(val & BIT(CCM_BUSY_SHIFT)),
++					0, TIMEOUT_US);
++	if (ret)
++		pr_err("Slice[%s] busy timeout\n", clk_hw_get_name(hw));
++
++	return ret;
++}
++
++static void imx93_clk_composite_gate_endisable(struct clk_hw *hw, int enable)
++{
++	struct clk_gate *gate = to_clk_gate(hw);
++	unsigned long flags;
++	u32 reg;
++
++	if (gate->lock)
++		spin_lock_irqsave(gate->lock, flags);
++
++	reg = readl(gate->reg);
++
++	if (enable)
++		reg &= ~BIT(gate->bit_idx);
++	else
++		reg |= BIT(gate->bit_idx);
++
++	writel(reg, gate->reg);
++
++	imx93_clk_composite_wait_ready(hw, gate->reg);
++
++	if (gate->lock)
++		spin_unlock_irqrestore(gate->lock, flags);
++}
++
++static int imx93_clk_composite_gate_enable(struct clk_hw *hw)
++{
++	imx93_clk_composite_gate_endisable(hw, 1);
++
++	return 0;
++}
++
++static void imx93_clk_composite_gate_disable(struct clk_hw *hw)
++{
++	imx93_clk_composite_gate_endisable(hw, 0);
++}
++
++static const struct clk_ops imx93_clk_composite_gate_ops = {
++	.enable = imx93_clk_composite_gate_enable,
++	.disable = imx93_clk_composite_gate_disable,
++	.is_enabled = clk_gate_is_enabled,
++};
++
++static unsigned long
++imx93_clk_composite_divider_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
++{
++	return clk_divider_ops.recalc_rate(hw, parent_rate);
++}
++
++static long
++imx93_clk_composite_divider_round_rate(struct clk_hw *hw, unsigned long rate, unsigned long *prate)
++{
++	return clk_divider_ops.round_rate(hw, rate, prate);
++}
++
++static int
++imx93_clk_composite_divider_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	return clk_divider_ops.determine_rate(hw, req);
++}
++
++static int imx93_clk_composite_divider_set_rate(struct clk_hw *hw, unsigned long rate,
++						unsigned long parent_rate)
++{
++	struct clk_divider *divider = to_clk_divider(hw);
++	int value;
++	unsigned long flags = 0;
++	u32 val;
++	int ret;
++
++	value = divider_get_val(rate, parent_rate, divider->table, divider->width, divider->flags);
++	if (value < 0)
++		return value;
++
++	if (divider->lock)
++		spin_lock_irqsave(divider->lock, flags);
++
++	val = readl(divider->reg);
++	val &= ~(clk_div_mask(divider->width) << divider->shift);
++	val |= (u32)value << divider->shift;
++	writel(val, divider->reg);
++
++	ret = imx93_clk_composite_wait_ready(hw, divider->reg);
++
++	if (divider->lock)
++		spin_unlock_irqrestore(divider->lock, flags);
++
++	return ret;
++}
++
++static const struct clk_ops imx93_clk_composite_divider_ops = {
++	.recalc_rate = imx93_clk_composite_divider_recalc_rate,
++	.round_rate = imx93_clk_composite_divider_round_rate,
++	.determine_rate = imx93_clk_composite_divider_determine_rate,
++	.set_rate = imx93_clk_composite_divider_set_rate,
++};
++
++static u8 imx93_clk_composite_mux_get_parent(struct clk_hw *hw)
++{
++	return clk_mux_ops.get_parent(hw);
++}
++
++static int imx93_clk_composite_mux_set_parent(struct clk_hw *hw, u8 index)
++{
++	struct clk_mux *mux = to_clk_mux(hw);
++	u32 val = clk_mux_index_to_val(mux->table, mux->flags, index);
++	unsigned long flags = 0;
++	u32 reg;
++	int ret;
++
++	if (mux->lock)
++		spin_lock_irqsave(mux->lock, flags);
++
++	reg = readl(mux->reg);
++	reg &= ~(mux->mask << mux->shift);
++	val = val << mux->shift;
++	reg |= val;
++	writel(reg, mux->reg);
++
++	ret = imx93_clk_composite_wait_ready(hw, mux->reg);
++
++	if (mux->lock)
++		spin_unlock_irqrestore(mux->lock, flags);
++
++	return ret;
++}
++
++static int
++imx93_clk_composite_mux_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	return clk_mux_ops.determine_rate(hw, req);
++}
++
++static const struct clk_ops imx93_clk_composite_mux_ops = {
++	.get_parent = imx93_clk_composite_mux_get_parent,
++	.set_parent = imx93_clk_composite_mux_set_parent,
++	.determine_rate = imx93_clk_composite_mux_determine_rate,
++};
++
+ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *parent_names,
+-					 int num_parents, void __iomem *reg,
++					 int num_parents, void __iomem *reg, u32 domain_id,
+ 					 unsigned long flags)
+ {
+ 	struct clk_hw *hw = ERR_PTR(-ENOMEM), *mux_hw;
+@@ -33,6 +191,7 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 	struct clk_gate *gate = NULL;
+ 	struct clk_mux *mux = NULL;
+ 	bool clk_ro = false;
++	u32 authen;
+ 
+ 	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+ 	if (!mux)
+@@ -55,7 +214,8 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 	div->lock = &imx_ccm_lock;
+ 	div->flags = CLK_DIVIDER_ROUND_CLOSEST;
+ 
+-	if (!(readl(reg + AUTHEN_OFFSET) & TZ_NS_MASK))
++	authen = readl(reg + AUTHEN_OFFSET);
++	if (!(authen & TZ_NS_MASK) || !(authen & BIT(WHITE_LIST_SHIFT + domain_id)))
+ 		clk_ro = true;
+ 
+ 	if (clk_ro) {
+@@ -74,9 +234,10 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 		gate->flags = CLK_GATE_SET_TO_DISABLE;
+ 
+ 		hw = clk_hw_register_composite(NULL, name, parent_names, num_parents,
+-					       mux_hw, &clk_mux_ops, div_hw,
+-					       &clk_divider_ops, gate_hw,
+-					       &clk_gate_ops, flags | CLK_SET_RATE_NO_REPARENT);
++					       mux_hw, &imx93_clk_composite_mux_ops, div_hw,
++					       &imx93_clk_composite_divider_ops, gate_hw,
++					       &imx93_clk_composite_gate_ops,
++					       flags | CLK_SET_RATE_NO_REPARENT);
+ 	}
+ 
+ 	if (IS_ERR(hw))
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 352b8c542..d782dde22 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -153,8 +153,7 @@ static unsigned long clk_fracn_gppll_recalc_rate(struct clk_hw *hw, unsigned lon
+ 	if (rate)
+ 		return (unsigned long)rate;
+ 
+-	if (!rdiv)
+-		rdiv = rdiv + 1;
++	rdiv = rdiv + 1;
+ 
+ 	switch (odiv) {
+ 	case 0:
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index be58483c1..992451d6f 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -19,6 +19,7 @@
+ static u32 share_count_sai1;
+ static u32 share_count_sai2;
+ static u32 share_count_sai3;
++static u32 share_count_mub;
+ 
+ enum clk_sel {
+ 	LOW_SPEED_IO_SEL,
+@@ -151,6 +152,7 @@ static const struct imx93_clk_ccgr {
+ 	char *parent_name;
+ 	u32 off;
+ 	unsigned long flags;
++	u32 *shared_count;
+ } ccgr_array[] = {
+ 	{ IMX93_CLK_A55_GATE,		"a55",		"a55_root",		0x8000, },
+ 	/* M33 critical clk for system run */
+@@ -163,8 +165,10 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_WDOG5_GATE,		"wdog5",	"osc_24m",		0x8400, },
+ 	{ IMX93_CLK_SEMA1_GATE,		"sema1",	"bus_aon_root",		0x8440, },
+ 	{ IMX93_CLK_SEMA2_GATE,		"sema2",	"bus_wakeup_root",	0x8480, },
+-	{ IMX93_CLK_MU_A_GATE,		"mu_a",		"bus_aon_root",		0x84c0, },
+-	{ IMX93_CLK_MU_B_GATE,		"mu_b",		"bus_aon_root",		0x8500, },
++	{ IMX93_CLK_MU1_A_GATE,		"mu1_a",	"bus_aon_root",		0x84c0, CLK_IGNORE_UNUSED },
++	{ IMX93_CLK_MU2_A_GATE,		"mu2_a",	"bus_wakeup_root",	0x84c0, CLK_IGNORE_UNUSED },
++	{ IMX93_CLK_MU1_B_GATE,		"mu1_b",	"bus_aon_root",		0x8500, 0, &share_count_mub },
++	{ IMX93_CLK_MU2_B_GATE,		"mu2_b",	"bus_wakeup_root",	0x8500, 0, &share_count_mub },
+ 	{ IMX93_CLK_EDMA1_GATE,		"edma1",	"m33_root",		0x8540, },
+ 	{ IMX93_CLK_EDMA2_GATE,		"edma2",	"wakeup_axi_root",	0x8580, },
+ 	{ IMX93_CLK_FLEXSPI1_GATE,	"flexspi",	"flexspi_root",		0x8640, },
+@@ -215,6 +219,12 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_USDHC1_GATE,	"usdhc1",	"usdhc1_root",		0x9380, },
+ 	{ IMX93_CLK_USDHC2_GATE,	"usdhc2",	"usdhc2_root",		0x93c0, },
+ 	{ IMX93_CLK_USDHC3_GATE,	"usdhc3",	"usdhc3_root",		0x9400, },
++	{ IMX93_CLK_SAI1_GATE,          "sai1",         "sai1_root",            0x9440, 0, &share_count_sai1},
++	{ IMX93_CLK_SAI1_IPG,		"sai1_ipg_clk", "bus_aon_root",		0x9440, 0, &share_count_sai1},
++	{ IMX93_CLK_SAI2_GATE,          "sai2",         "sai2_root",            0x9480, 0, &share_count_sai2},
++	{ IMX93_CLK_SAI2_IPG,		"sai2_ipg_clk", "bus_wakeup_root",	0x9480, 0, &share_count_sai2},
++	{ IMX93_CLK_SAI3_GATE,          "sai3",         "sai3_root",            0x94c0, 0, &share_count_sai3},
++	{ IMX93_CLK_SAI3_IPG,		"sai3_ipg_clk", "bus_wakeup_root",	0x94c0, 0, &share_count_sai3},
+ 	{ IMX93_CLK_MIPI_CSI_GATE,	"mipi_csi",	"media_apb_root",	0x9580, },
+ 	{ IMX93_CLK_MIPI_DSI_GATE,	"mipi_dsi",	"media_apb_root",	0x95c0, },
+ 	{ IMX93_CLK_LVDS_GATE,		"lvds",		"media_ldb_root",	0x9600, },
+@@ -223,16 +233,16 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_ISI_GATE,		"isi",		"media_apb_root",	0x96c0, },
+ 	{ IMX93_CLK_NIC_MEDIA_GATE,	"nic_media",	"media_axi_root",	0x9700, },
+ 	{ IMX93_CLK_USB_CONTROLLER_GATE, "usb_controller", "hsio_root",		0x9a00, },
+-	{ IMX93_CLK_USB_TEST_60M_GATE,	"usb_test_60m",	"hsio_usb_test_60m_root", 0x9a40, },
++	{ IMX93_CLK_USB_TEST_60M_GATE,	"usb_test_60m",	"hsio_usb_test_60m_root", 0x9a40, CLK_IGNORE_UNUSED },
+ 	{ IMX93_CLK_HSIO_TROUT_24M_GATE, "hsio_trout_24m", "osc_24m",		0x9a80, },
+ 	{ IMX93_CLK_PDM_GATE,		"pdm",		"pdm_root",		0x9ac0, },
+ 	{ IMX93_CLK_MQS1_GATE,		"mqs1",		"sai1_root",		0x9b00, },
+ 	{ IMX93_CLK_MQS2_GATE,		"mqs2",		"sai3_root",		0x9b40, },
+ 	{ IMX93_CLK_AUD_XCVR_GATE,	"aud_xcvr",	"audio_xcvr_root",	0x9b80, },
+ 	{ IMX93_CLK_SPDIF_GATE,		"spdif",	"spdif_root",		0x9c00, },
+-	{ IMX93_CLK_HSIO_32K_GATE,	"hsio_32k",	"osc_32k",		0x9dc0, },
+-	{ IMX93_CLK_ENET1_GATE,		"enet1",	"enet_root",		0x9e00, },
+-	{ IMX93_CLK_ENET_QOS_GATE,	"enet_qos",	"wakeup_axi_root",	0x9e40, },
++	{ IMX93_CLK_HSIO_32K_GATE,	"hsio_32k",	"osc_32k",		0x9dc0, CLK_IGNORE_UNUSED, },
++	{ IMX93_CLK_ENET1_GATE,		"enet1",	"wakeup_axi_root",	0x9e00, CLK_IGNORE_UNUSED, },
++	{ IMX93_CLK_ENET_QOS_GATE,	"enet_qos",	"wakeup_axi_root",	0x9e40, CLK_IGNORE_UNUSED, },
+ 	{ IMX93_CLK_SYS_CNT_GATE,	"sys_cnt",	"osc_24m",		0x9e80, },
+ 	{ IMX93_CLK_TSTMR1_GATE,	"tstmr1",	"bus_aon_root",		0x9ec0, },
+ 	{ IMX93_CLK_TSTMR2_GATE,	"tstmr2",	"bus_wakeup_root",	0x9f00, },
+@@ -323,25 +333,16 @@ static int imx93_clocks_probe(struct platform_device *pdev)
+ 		root = &root_array[i];
+ 		clks[root->clk] = imx93_clk_composite_flags(root->name,
+ 							    parent_names[root->sel],
+-							    4, base + root->off,
++							    4, base + root->off, 3,
+ 							    root->flags);
+ 	}
+ 
+ 	for (i = 0; i < ARRAY_SIZE(ccgr_array); i++) {
+ 		ccgr = &ccgr_array[i];
+-		clks[ccgr->clk] = imx_clk_hw_gate4_flags(ccgr->name,
+-							 ccgr->parent_name,
+-							 base + ccgr->off, 0,
+-							 ccgr->flags);
++		clks[ccgr->clk] = imx93_clk_gate(NULL, ccgr->name, ccgr->parent_name, ccgr->flags,
++						 base + ccgr->off, 0, 1, 1, 3, ccgr->shared_count);
+ 	}
+ 
+-	clks[IMX93_CLK_SAI1_GATE] = imx_clk_hw_gate2_shared2("sai1_mclk", "sai1_root", base + 0x9440, 0, &share_count_sai1);
+-	clks[IMX93_CLK_SAI1_IPG] = imx_clk_hw_gate2_shared2("sai1_ipg_clk", "bus_aon_root", base + 0x9440, 0, &share_count_sai1);
+-	clks[IMX93_CLK_SAI2_GATE] = imx_clk_hw_gate2_shared2("sai2_mclk", "sai2_root", base + 0x9480, 0, &share_count_sai2);
+-	clks[IMX93_CLK_SAI2_IPG] = imx_clk_hw_gate2_shared2("sai2_ipg_clk", "bus_wakeup_root", base + 0x9480, 0, &share_count_sai2);
+-	clks[IMX93_CLK_SAI3_GATE] = imx_clk_hw_gate2_shared2("sai3_mclk", "sai3_root", base + 0x94c0, 0, &share_count_sai3);
+-	clks[IMX93_CLK_SAI3_IPG] = imx_clk_hw_gate2_shared2("sai3_ipg_clk", "bus_wakeup_root", base + 0x94c0, 0, &share_count_sai3);
+-
+ 	imx_check_clk_hws(clks, IMX93_CLK_END);
+ 
+ 	ret = of_clk_add_hw_provider(np, of_clk_hw_onecell_get, clk_hw_data);
+diff --git a/drivers/clk/imx/clk.h b/drivers/clk/imx/clk.h
+index a84a481bb..e28b25c1b 100644
+--- a/drivers/clk/imx/clk.h
++++ b/drivers/clk/imx/clk.h
+@@ -8,6 +8,7 @@
+ #include <soc/imx/src.h>
+ 
+ extern spinlock_t imx_ccm_lock;
++extern bool mcore_booted;
+ 
+ void imx_check_clocks(struct clk *clks[], unsigned int count);
+ void imx_check_clk_hws(struct clk_hw *clks[], unsigned int count);
+@@ -693,14 +694,15 @@ struct clk_hw *imx93_clk_composite_flags(const char *name,
+ 					 const char * const *parent_names,
+ 					 int num_parents,
+ 					 void __iomem *reg,
++					 u32 domain_id,
+ 					 unsigned long flags);
+-#define imx93_clk_composite(name, parent_names, num_parents, reg) \
+-	imx93_clk_composite_flags(name, parent_names, num_parents, reg, \
++#define imx93_clk_composite(name, parent_names, num_parents, reg, domain_id) \
++	imx93_clk_composite_flags(name, parent_names, num_parents, reg, domain_id \
+ 				  CLK_SET_RATE_NO_REPARENT | CLK_OPS_PARENT_ENABLE)
+ 
+ struct clk_hw *imx93_clk_gate(struct device *dev, const char *name, const char *parent_name,
+-                  unsigned long flags, void __iomem *reg, u32 bit_idx, u32 val,
+-                  u32 mask, u32 domain_id, unsigned int *share_count);
++			      unsigned long flags, void __iomem *reg, u32 bit_idx, u32 val,
++			      u32 mask, u32 domain_id, unsigned int *share_count);
+ 
+ struct clk_hw *imx_clk_hw_divider_gate(const char *name, const char *parent_name,
+ 		unsigned long flags, void __iomem *reg, u8 shift, u8 width,
+diff --git a/include/dt-bindings/clock/imx93-clock.h b/include/dt-bindings/clock/imx93-clock.h
+index 50caa9124..19bc32788 100644
+--- a/include/dt-bindings/clock/imx93-clock.h
++++ b/include/dt-bindings/clock/imx93-clock.h
+@@ -199,6 +199,10 @@
+ #define IMX93_CLK_SAI1_IPG		190
+ #define IMX93_CLK_SAI2_IPG		191
+ #define IMX93_CLK_SAI3_IPG		192
+-#define IMX93_CLK_END			193
++#define IMX93_CLK_MU1_A_GATE		193
++#define IMX93_CLK_MU1_B_GATE		194
++#define IMX93_CLK_MU2_A_GATE		195
++#define IMX93_CLK_MU2_B_GATE		196
++#define IMX93_CLK_END			197
+ 
+ #endif
+-- 
+2.25.1
+

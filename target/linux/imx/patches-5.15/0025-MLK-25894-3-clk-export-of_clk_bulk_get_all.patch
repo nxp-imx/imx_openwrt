@@ -1,0 +1,51 @@
+From c00d372e6fb68a3ed8d6e9eb1e55aedbb5f60645 Mon Sep 17 00:00:00 2001
+From: Peng Fan <peng.fan@nxp.com>
+Date: Mon, 16 May 2022 18:07:08 +0800
+Subject: [PATCH 025/274] MLK-25894-3 clk: export of_clk_bulk_get_all
+
+Export of_clk_bulk_get_all, so drivers could use this API.
+
+Signed-off-by: Peng Fan <peng.fan@nxp.com>
+Reviewed-by: Jacky Bai <ping.bai@nxp.com>
+---
+ drivers/clk/clk-bulk.c | 3 ++-
+ include/linux/clk.h    | 2 ++
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/clk/clk-bulk.c b/drivers/clk/clk-bulk.c
+index e9e16425c..470155856 100644
+--- a/drivers/clk/clk-bulk.c
++++ b/drivers/clk/clk-bulk.c
+@@ -43,7 +43,7 @@ static int __must_check of_clk_bulk_get(struct device_node *np, int num_clks,
+ 	return ret;
+ }
+ 
+-static int __must_check of_clk_bulk_get_all(struct device_node *np,
++int __must_check of_clk_bulk_get_all(struct device_node *np,
+ 					    struct clk_bulk_data **clks)
+ {
+ 	struct clk_bulk_data *clk_bulk;
+@@ -68,6 +68,7 @@ static int __must_check of_clk_bulk_get_all(struct device_node *np,
+ 
+ 	return num_clks;
+ }
++EXPORT_SYMBOL_GPL(of_clk_bulk_get_all);
+ 
+ void clk_bulk_put(int num_clks, struct clk_bulk_data *clks)
+ {
+diff --git a/include/linux/clk.h b/include/linux/clk.h
+index 266e8de3c..f6e710420 100644
+--- a/include/linux/clk.h
++++ b/include/linux/clk.h
+@@ -372,6 +372,8 @@ int __must_check clk_bulk_get(struct device *dev, int num_clks,
+ int __must_check clk_bulk_get_all(struct device *dev,
+ 				  struct clk_bulk_data **clks);
+ 
++int __must_check of_clk_bulk_get_all(struct device_node *np,
++				     struct clk_bulk_data **clks);
+ /**
+  * clk_bulk_get_optional - lookup and obtain a number of references to clock producer
+  * @dev: device for clock "consumer"
+-- 
+2.25.1
+

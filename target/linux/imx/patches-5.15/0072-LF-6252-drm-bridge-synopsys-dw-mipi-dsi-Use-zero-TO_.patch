@@ -1,0 +1,33 @@
+From 762572ed02d6b2179b8fca0d1dc2a2547e1c492a Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Mon, 16 May 2022 15:15:51 +0800
+Subject: [PATCH 072/274] LF-6252 drm/bridge: synopsys: dw-mipi-dsi: Use zero
+ TO_CLK_DIVISION
+
+As a workaround for 1920x1080@60 ADV7535 HDMI output driven by i.MX93.
+Otherwise, SMPTE color pattern can only show the first several
+lines and all the other lines show a same color.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+index 56c3fd08c..43fe9ebc9 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+@@ -654,7 +654,7 @@ static void dw_mipi_dsi_init(struct dw_mipi_dsi *dsi)
+ 	 * timeout clock division should be computed with the
+ 	 * high speed transmission counter timeout and byte lane...
+ 	 */
+-	dsi_write(dsi, DSI_CLKMGR_CFG, TO_CLK_DIVISION(10) |
++	dsi_write(dsi, DSI_CLKMGR_CFG, TO_CLK_DIVISION(0) |
+ 		  TX_ESC_CLK_DIVISION(esc_clk_division));
+ }
+ 
+-- 
+2.25.1
+

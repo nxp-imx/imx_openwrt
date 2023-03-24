@@ -1,0 +1,38 @@
+From 900acadd8be95c0751f0829801a4d9588fb54243 Mon Sep 17 00:00:00 2001
+From: Ming Qian <ming.qian@nxp.com>
+Date: Thu, 24 Feb 2022 11:10:11 +0800
+Subject: [PATCH 196/274] MAINTAINERS: add AMPHION VPU CODEC V4L2 driver entry
+
+Add AMPHION VPU CODEC v4l2 driver entry
+
+Signed-off-by: Ming Qian <ming.qian@nxp.com>
+Signed-off-by: Shijie Qin <shijie.qin@nxp.com>
+Signed-off-by: Zhou Peng <eagle.zhou@nxp.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+---
+ MAINTAINERS | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 942e0b173..59da61213 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -1013,6 +1013,15 @@ S:	Maintained
+ F:	Documentation/hid/amd-sfh*
+ F:	drivers/hid/amd-sfh-hid/
+ 
++AMPHION VPU CODEC V4L2 DRIVER
++M:	Ming Qian <ming.qian@nxp.com>
++M:	Shijie Qin <shijie.qin@nxp.com>
++M:	Zhou Peng <eagle.zhou@nxp.com>
++L:	linux-media@vger.kernel.org
++S:	Maintained
++F:	Documentation/devicetree/bindings/media/amphion,vpu.yaml
++F:	drivers/media/platform/amphion/
++
+ AMS AS73211 DRIVER
+ M:	Christian Eggers <ceggers@arri.de>
+ L:	linux-iio@vger.kernel.org
+-- 
+2.25.1
+

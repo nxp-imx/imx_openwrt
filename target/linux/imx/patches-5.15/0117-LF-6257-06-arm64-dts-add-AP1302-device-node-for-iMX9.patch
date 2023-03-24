@@ -1,0 +1,62 @@
+From 4be9f1ef4a146dea761dff6988a4b064416991d6 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 15:13:23 +0800
+Subject: [PATCH 117/274] LF-6257-06: arm64: dts: add AP1302 device node for
+ iMX93 platform
+
+Add AP1302 device node for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts | 11 +++++++++++
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts     | 11 +++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+index 14f354082..f03b7875e 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-i3c.dts
+@@ -117,6 +117,17 @@ adp5585gpio_isp: gpio-isp@34 {
+ 			#gpio-cells = <2>;
+ 		};
+ 	};
++
++	ap1302: ap1302_mipi@3c {
++		compatible = "onsemi,ap1302";
++		reg = <0x3c 0x00 0x50>;
++		reset-gpios   = <&adp5585gpio 0 GPIO_ACTIVE_LOW>;
++		isp_en-gpios  = <&adp5585gpio_isp 2 GPIO_ACTIVE_HIGH>;
++		DVDD-supply   = <&reg_dvdd_1v2>;
++		VDDIO-supply  = <&reg_vddio_1v8>;
++		AVDD-supply   = <&reg_avdd_2v8>;
++		status = "okay";
++	};
+ };
+ 
+ &iomuxc {
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index e6aa11d2a..bf2190cf7 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -283,6 +283,17 @@ adp5585gpio_isp: gpio-isp@34 {
+ 			#gpio-cells = <2>;
+ 		};
+ 	};
++
++	ap1302: ap1302_mipi@3c {
++		compatible = "onsemi,ap1302";
++		reg = <0x3c>;
++		reset-gpios   = <&adp5585gpio 0 GPIO_ACTIVE_LOW>;
++		isp_en-gpios  = <&adp5585gpio_isp 2 GPIO_ACTIVE_HIGH>;
++		DVDD-supply   = <&reg_dvdd_1v2>;
++		VDDIO-supply  = <&reg_vddio_1v8>;
++		AVDD-supply   = <&reg_avdd_2v8>;
++		status = "okay";
++	};
+ };
+ 
+ &lpi2c2 {
+-- 
+2.25.1
+

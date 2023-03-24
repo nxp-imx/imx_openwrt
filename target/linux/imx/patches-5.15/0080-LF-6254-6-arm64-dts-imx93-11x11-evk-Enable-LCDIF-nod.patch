@@ -1,0 +1,34 @@
+From 8277a5751f421b2abbef1a26148a5afaf0cc41a1 Mon Sep 17 00:00:00 2001
+From: Liu Ying <victor.liu@nxp.com>
+Date: Thu, 17 Mar 2022 14:30:35 +0800
+Subject: [PATCH 080/274] LF-6254-6 arm64: dts: imx93-11x11-evk: Enable LCDIF
+ node
+
+This patch enables LCDIF node on i.MX93 11x11 EVK platform.
+
+Cc: Sandor Yu <Sandor.yu@nxp.com>
+Reviewed-by: Sandor Yu <Sandor.yu@nxp.com>
+Signed-off-by: Liu Ying <victor.liu@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+index 567ad908b..42f8f4ce8 100644
+--- a/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk.dts
+@@ -107,6 +107,11 @@ &flexcan2 {
+ 	status = "okay";
+ };
+ 
++&lcdif {
++	status = "okay";
++	assigned-clock-rates = <445333333>, <148444444>, <400000000>, <133333333>;
++};
++
+ /*
+  * When add, delete or change any target device setting in &lpi2c1,
+  * please synchronize the changes to the &i3c1 bus in imx93-11x11-evk-i3c.dts.
+-- 
+2.25.1
+

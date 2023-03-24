@@ -1,0 +1,36 @@
+From 2e97be072baa437004ac418cf0ed51e24fde62b0 Mon Sep 17 00:00:00 2001
+From: "Guoniu.zhou" <guoniu.zhou@nxp.com>
+Date: Mon, 30 May 2022 12:39:48 +0800
+Subject: [PATCH 112/274] LF-6257-01: arm64: dtsi: add camera device node for
+ iMX93 platform
+
+Add camera device node for iMX93 platform
+
+Signed-off-by: Guoniu.zhou <guoniu.zhou@nxp.com>
+Reviewed-by: Robby Cai <robby.cai@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/imx93.dtsi | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx93.dtsi b/arch/arm64/boot/dts/freescale/imx93.dtsi
+index d2400e129..fe52c2558 100644
+--- a/arch/arm64/boot/dts/freescale/imx93.dtsi
++++ b/arch/arm64/boot/dts/freescale/imx93.dtsi
+@@ -871,6 +871,14 @@ epxp: epxp@4ae20000 {
+ 				power-domains = <&media_blk_ctrl IMX93_MEDIABLK_PD_PXP>;
+ 				status = "disabled";
+ 			};
++
++			cameradev: camera {
++				compatible = "fsl,mxc-md", "simple-bus";
++				#address-cells = <1>;
++				#size-cells = <1>;
++				ranges;
++				status = "disabled";
++			};
+ 		};
+ 
+ 		gpio2: gpio@43810080 {
+-- 
+2.25.1
+
