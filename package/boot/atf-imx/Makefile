@@ -5,46 +5,60 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=2.7
-PKG_RELEASE:=$(AUTORELEASE)
-PKG_HASH:=7d2020a3ba557c4a74112bfd943fc0aa
 
-include $(INCLUDE_DIR)/trusted-firmware-a.mk
+PKG_NAME:=atf-imx93
+PKG_VERSION:=v5.15
+PKG_RELEASE:=$(AUTORELEASE)
+
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=http://source.codeaurora.org/external/imx/imx-atf
+PKG_SOURCE_VERSION:=imx_5.15.32_imx93_er1
+
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/host-build.mk
 
-define Trusted-Firmware-A/Default
+define Package/atf-imx8m/Default
+  SECTION:=boot
+  CATEGORY:=Boot Loaders
+  TITLE:=NXP i.MX8M SD Boot Trusted Firmware
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX9
   BUILD_TARGET:=imx
   BUILD_SUBTARGET:=cortexa53
-  TFA_IMAGE:=bl31.bin
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
-define Trusted-Firmware-A/atf-imx8mp
-  NAME:=NXP IMX8M mini evk board
-  BUILD_DEVICES:=imx8mplus
+define Package/atf-imx8mp
+  $(call Package/atf-imx8m/Default)
   VARIANT:=imx8mp
 endef
 
-define Trusted-Firmware-A/atf-imx8mm
-  NAME:=NXP IMX8M mini evk board
-  BUILD_DEVICES:=imx8mmini
+define Package/atf-imx8mm
+  $(call Package/atf-imx8m/Default)
   VARIANT:=imx8mm
 endef
 
-TFA_TARGETS:= \
-	atf-imx8mp \
-	atf-imx8mm
+define Package/atf-imx8mn
+  $(call Package/atf-imx8m/Default)
+  VARIANT:=imx8mn
+endef
 
-TFA_MAKE_FLAGS += \
+define Package/atf-imx8mq
+  $(call Package/atf-imx8m/Default)
+  VARIANT:=imx8mq
+endef
+
+define Package/atf-imx93
+  $(call Package/atf-imx8m/Default)
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX9
+  VARIANT:=imx93
+endef
+
+MAKE_VARS = \
+	CROSS_COMPILE="$(TARGET_CROSS)"
+
+MAKE_FLAGS += \
 	PLAT=$(BUILD_VARIANT) \
 	bl31
-
-define Host/Compile
-endef
-
-define Host/Install
-endef
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
@@ -52,4 +66,8 @@ define Build/InstallDev
 		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 endef
 
-$(eval $(call BuildPackage/Trusted-Firmware-A))
+$(eval $(call BuildPackage,atf-imx8mp))
+$(eval $(call BuildPackage,atf-imx8mm))
+$(eval $(call BuildPackage,atf-imx8mn))
+$(eval $(call BuildPackage,atf-imx8mq))
+$(eval $(call BuildPackage,atf-imx93))

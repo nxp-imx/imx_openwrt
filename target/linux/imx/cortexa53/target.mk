@@ -3,7 +3,7 @@
 # Copyright 2022 NXP
 
 ARCH:=aarch64
-BOARDNAME:=NXP i.MX8 boards
+BOARDNAME:=NXP i.MX8/9 boards
 KERNELNAME:=Image
 
 define Target/Description

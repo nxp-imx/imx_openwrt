@@ -7,10 +7,15 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=2022.01
+PKG_NAME:=uboot-imx
+PKG_VERSION:=22.04
 PKG_RELEASE:=$(AUTORELEASE)
 
-PKG_HASH:=81b4543227db228c03f8a1bf5ddbc813b0bb8f6555ce46064ef721a6fc680413
+PKG_SOURCE_PROTO:=git
+#PKG_SOURCE_URL:=http://source.codeaurora.org/external/imx/uboot-imx
+PKG_SOURCE_URL:=ssh://git@bitbucket.sw.nxp.com/imx/uboot-imx.git
+PKG_SOURCE_VERSION:=imx_5.15.32_imx93_er1
+#PKG_MIRROR_HASH:=874e871755ef84ebbf35cc247f0979ec18ed1946e4dca71006a83463b2899db1
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
@@ -80,17 +85,32 @@ define U-Boot/imx8mm
   DEPENDS:=@TARGET_imx_cortexa53
 endef
 
+define U-Boot/imx93
+  BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx93
+  NAME:=imx8mmini lpddr4 board
+  UBOOT_CONFIG:=imx93_11x11_evk
+  ENV_NAME:=imx93-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX9
+  DTB_NAME:=imx93-11x11-evk.dtb
+  ENV_SIZE:=0x4000
+  DEPENDS:=@TARGET_imx_cortexa53
+endef
+
 UBOOT_TARGETS := \
 	apalis_imx6 \
 	mx6cuboxi \
 	imx6ull \
 	wandboard \
 	imx8mp \
-	imx8mm
+	imx8mm \
+	imx93
 
 ifeq ($(SUBTARGET),cortexa53)
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+	$(CP) $(PKG_BUILD_DIR)/u-boot.bin \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
 		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 	$(CP) $(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
