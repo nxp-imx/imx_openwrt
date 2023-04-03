@@ -1,0 +1,21 @@
+NXP Software Content Register
+
+Release Name:     imx_5.15.32_imx93_er1
+Version:          v2023.04_5.15.32
+Release Location: https://github.com/nxp/imx_openwrt -b imx_5.15.32_imx93_er1
+
+
+
+
+--------------------------------------------
+Packages
+--------------------------------------------
+Package:                   imx_openwrt
+version:				v2023.04_5.15.32 
+Outgoing License:          GPL-2.0-only
+License File:              COPYING
+Type of content:           Source
+Description and comments:  patches to support i.mx93 platforms
+Release Location: 	   https://github.com/nxp/imx_openwrt -b imx_5.15.32_imx93_er1
+Origin: 		   NXP (GPL-2.0-only)
+			   OpenWRT  (GPL-2.0-only)  https://github.com/openwrt/openwrt
