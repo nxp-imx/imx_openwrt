@@ -12,7 +12,7 @@ PKG_VERSION:=lf-5.15.5-1.0.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://source.codeaurora.org/external/imx/uboot-imx
+PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
 PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
 PKG_MIRROR_HASH:=fdb2086a1182b2c96e8c8dcfb795f004
 

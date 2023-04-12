@@ -10,7 +10,7 @@ PKG_VERSION:=lf-5.15.5-1.0.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://source.codeaurora.org/external/imx/imx-atf
+PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-atf.git
 PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
 PKG_MIRROR_HASH:=0ed19fc34a11824cecc874ce09f4031b
 PKG_FLAGS:=nonshared
