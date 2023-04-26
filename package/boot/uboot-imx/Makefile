@@ -10,7 +10,7 @@ PKG_VERSION:=imx_v2020.04_5.4.70_2.3.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://source.codeaurora.org/external/imx/uboot-imx
+PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
 PKG_SOURCE_VERSION:=imx_v2020.04_5.4.70_2.3.0
 PKG_MIRROR_HASH:=874e871755ef84ebbf35cc247f0979ec18ed1946e4dca71006a83463b2899db1
 
