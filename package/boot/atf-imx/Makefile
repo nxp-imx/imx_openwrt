@@ -11,7 +11,7 @@ PKG_VERSION:=v5.15
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=http://source.codeaurora.org/external/imx/imx-atf
+PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-atf.git
 PKG_SOURCE_VERSION:=imx_5.15.32_imx93_er1
 
 include $(INCLUDE_DIR)/package.mk

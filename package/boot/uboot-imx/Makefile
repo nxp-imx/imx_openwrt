@@ -12,10 +12,8 @@ PKG_VERSION:=22.04
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-#PKG_SOURCE_URL:=http://source.codeaurora.org/external/imx/uboot-imx
-PKG_SOURCE_URL:=ssh://git@bitbucket.sw.nxp.com/imx/uboot-imx.git
+PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
 PKG_SOURCE_VERSION:=imx_5.15.32_imx93_er1
-#PKG_MIRROR_HASH:=874e871755ef84ebbf35cc247f0979ec18ed1946e4dca71006a83463b2899db1
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk

@@ -9,9 +9,8 @@ PKG_VERSION:=imx_5.15.32_imx93_er1
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://source.codeaurora.org/external/imx/imx-mkimage.git
+PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-mkimage.git
 PKG_SOURCE_VERSION:=imx_5.15.32_imx93_er1
-#PKG_MIRROR_HASH:=fdb2086a1182b2c96e8c8dcfb795f004
 
 PKG_FLAGS:=nonshared
 
