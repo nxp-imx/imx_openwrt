@@ -1,0 +1,122 @@
+From f3730d8cb0a77d0738aec22a5167df3f797baeab Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 30 May 2023 16:09:45 +0800
+Subject: [PATCH 15/20] imx8: update gpio driver
+
+---
+ drivers/gpio/Kconfig        | 30 ++++++++++++++++++++++++++++--
+ drivers/gpio/gpio-pca953x.c |  7 ++++++-
+ 2 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index 7b9def6b1..52b717954 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -100,7 +100,7 @@ config GPIO_GENERIC
+ 	tristate
+ 
+ config GPIO_REGMAP
+-	select REGMAP
++	depends on REGMAP
+ 	tristate
+ 
+ # put drivers in the right section, in alphabetical order
+@@ -439,6 +439,12 @@ config GPIO_MXC
+ 	select GPIO_GENERIC
+ 	select GENERIC_IRQ_CHIP
+ 
++config GPIO_SCU
++	def_bool y
++	depends on IMX_SCU
++	help
++	  Say Y here to enable the imx8 gpio over SCFW MISC API
++
+ config GPIO_MXS
+ 	bool "Freescale MXS GPIO support" if COMPILE_TEST
+ 	depends on ARCH_MXS || COMPILE_TEST
+@@ -446,6 +452,13 @@ config GPIO_MXS
+ 	select GPIO_GENERIC
+ 	select GENERIC_IRQ_CHIP
+ 
++config GPIO_MXC_PAD_WAKEUP
++	def_bool y
++	depends on IMX_SCU
++	select GPIO_MXC
++	help
++	  Say Y here to enable the imx8 gpio pad wakeup
++
+ config GPIO_OCTEON
+ 	tristate "Cavium OCTEON GPIO"
+ 	depends on CAVIUM_OCTEON_SOC
+@@ -664,7 +677,7 @@ config GPIO_UNIPHIER
+ 
+ config GPIO_VF610
+ 	def_bool y
+-	depends on ARCH_MXC && SOC_VF610
++	depends on ARCH_MXC
+ 	select GPIOLIB_IRQCHIP
+ 	help
+ 	  Say yes here to support Vybrid vf610 GPIOs.
+@@ -679,6 +692,12 @@ config GPIO_VISCONTI
+ 	help
+ 	  Say yes here to support GPIO on Tohisba Visconti.
+ 
++config GPIO_IMX_RPMSG
++	tristate "NXP i.MX7ULP RPMSG GPIO support"
++	depends on ARCH_MXC && RPMSG && GPIOLIB
++	help
++	  This driver support i.MX7ULP RPMSG virtual GPIOs.
++
+ config GPIO_VR41XX
+ 	tristate "NEC VR4100 series General-purpose I/O Uint support"
+ 	depends on CPU_VR41XX
+@@ -1107,6 +1126,13 @@ config GPIO_ADP5520
+ 	  This option enables support for on-chip GPIO found
+ 	  on Analog Devices ADP5520 PMICs.
+ 
++config GPIO_ADP5585
++	tristate "GPIO Support for ADP5585"
++	depends on MFD_ADP5585
++	help
++	  This option enables support for on-chip GPIO found
++	  on Analog Devices ADP5585.
++
+ config GPIO_ALTERA_A10SR
+ 	tristate "Altera Arria10 System Resource GPIO"
+ 	depends on MFD_ALTERA_A10SR
+diff --git a/drivers/gpio/gpio-pca953x.c b/drivers/gpio/gpio-pca953x.c
+index 4860bf3b7..ac848ebe0 100644
+--- a/drivers/gpio/gpio-pca953x.c
++++ b/drivers/gpio/gpio-pca953x.c
+@@ -20,6 +20,7 @@
+ #include <linux/platform_data/pca953x.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
++#include <linux/reset.h>
+ #include <linux/slab.h>
+ 
+ #include <asm/unaligned.h>
+@@ -897,8 +898,8 @@ static int pca953x_irq_setup(struct pca953x_chip *chip,
+ static int device_pca95xx_init(struct pca953x_chip *chip, u32 invert)
+ {
+ 	DECLARE_BITMAP(val, MAX_LINE);
+-	u8 regaddr;
+ 	int ret;
++	u8 regaddr;
+ 
+ 	regaddr = pca953x_recalc_addr(chip, chip->regs->output, 0);
+ 	ret = regcache_sync_region(chip->regmap, regaddr,
+@@ -1053,6 +1054,10 @@ static int pca953x_probe(struct i2c_client *client,
+ 	lockdep_set_subclass(&chip->i2c_lock,
+ 			     i2c_adapter_depth(client->adapter));
+ 
++	ret = device_reset(&client->dev);
++	if (ret == -EPROBE_DEFER)
++		return -EPROBE_DEFER;
++
+ 	/* initialize cached registers from their original values.
+ 	 * we can't share this chip with another i2c master.
+ 	 */
+-- 
+2.25.1
+

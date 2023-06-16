@@ -1,0 +1,39 @@
+From 1c4d979e1bdb1b6d86e39a00bfb91fd268dd44b8 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 28 Jun 2022 14:26:12 +0800
+Subject: [PATCH 03/20] fix the compiling error
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ arch/arm64/kvm/hyp/nvhe/gen-hyprel.c | 1 +
+ scripts/Makefile                     | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c b/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
+index 6bc88a756..99506facd 100644
+--- a/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
++++ b/arch/arm64/kvm/hyp/nvhe/gen-hyprel.c
+@@ -36,6 +36,7 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
++#include <uapi/linux/elf-em.h>
+ 
+ #include <generated/autoconf.h>
+ 
+diff --git a/scripts/Makefile b/scripts/Makefile
+index e2a239829..2f96f4d45 100644
+--- a/scripts/Makefile
++++ b/scripts/Makefile
+@@ -21,7 +21,7 @@ HOSTCFLAGS_asn1_compiler.o = -I$(srctree)/include
+ HOSTCFLAGS_sign-file.o = $(CRYPTO_CFLAGS)
+ HOSTLDLIBS_sign-file = $(CRYPTO_LIBS)
+ HOSTCFLAGS_extract-cert.o = $(CRYPTO_CFLAGS)
+-HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS)
++HOSTLDLIBS_extract-cert = $(CRYPTO_LIBS) -lpthread
+ 
+ ifdef CONFIG_UNWINDER_ORC
+ ifeq ($(ARCH),x86_64)
+-- 
+2.25.1
+

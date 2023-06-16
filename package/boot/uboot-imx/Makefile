@@ -7,10 +7,14 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=2022.01
-PKG_RELEASE:=5
+PKG_NAME:=uboot-imx
+PKG_VERSION:=lf-5.15.5-1.0.0
+PKG_RELEASE:=$(AUTORELEASE)
 
-PKG_HASH:=81b4543227db228c03f8a1bf5ddbc813b0bb8f6555ce46064ef721a6fc680413
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
+PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
+PKG_MIRROR_HASH:=fdb2086a1182b2c96e8c8dcfb795f004
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
@@ -26,6 +30,7 @@ define U-Boot/apalis_imx6
   UBOOT_MAKE_FLAGS+=SPL u-boot.img u-boot-with-spl.imx
   BUILD_SUBTARGET:=cortexa9
   BUILD_DEVICES:=toradex_apalis
+  UBOOT_MAKE_FLAGS += u-boot.imx
 endef
 
 define U-Boot/mx6cuboxi
@@ -34,6 +39,7 @@ define U-Boot/mx6cuboxi
   UBOOT_MAKE_FLAGS+=SPL u-boot-dtb.img
   BUILD_SUBTARGET:=cortexa9
   BUILD_DEVICES:=solidrun_cubox-i
+  UBOOT_MAKE_FLAGS += u-boot.imx
 endef
 
 define U-Boot/pico-pi-imx7d
@@ -42,27 +48,99 @@ define U-Boot/pico-pi-imx7d
   UBOOT_MAKE_FLAGS+=SPL u-boot-dtb.img
   BUILD_SUBTARGET:=cortexa7
   BUILD_DEVICES:=technexion_imx7d-pico-pi
+  UBOOT_MAKE_FLAGS += u-boot.imx
 endef
 
 define U-Boot/wandboard
   NAME:=Wandboard Dual Lite/Quad/Solo
   BUILD_SUBTARGET:=cortexa9
   BUILD_DEVICES:=wandboard_dual
+  UBOOT_MAKE_FLAGS += u-boot.imx
+endef
+
+define U-Boot/imx8mp
+  NAME:=imx8mplus lpddr4 board
+  BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=imx8
+  UBOOT_CONFIG:=imx8mp_evk
+  ENV_NAME:=imx8mp-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DTB_NAME:=imx8mp-evk.dtb
+  DEPENDS:=+imx-mkimage
+  ENV_SIZE:=0x4000
+endef
+
+define U-Boot/imx8mm
+  NAME:=imx8mmini lpddr4 board
+  BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=imx8
+  UBOOT_CONFIG:=imx8mm_evk
+  ENV_NAME:=imx8mm-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DTB_NAME:=imx8mm-evk.dtb
+  DEPENDS:=+imx-mkimage
+  ENV_SIZE:=0x4000
+endef
+
+define U-Boot/imx8mn
+  NAME:=imx8mnano lpddr4 board
+  BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=imx8
+  UBOOT_CONFIG:=imx8mn_evk
+  ENV_NAME:=imx8mn-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DTB_NAME:=imx8mn-evk.dtb
+  DEPENDS:=+imx-mkimage
+  ENV_SIZE:=0x4000
+endef
+
+define U-Boot/imx8mq
+  NAME:=imx8mquad lpddr4 board
+  BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=imx8
+  UBOOT_CONFIG:=imx8mq_evk
+  ENV_NAME:=imx8mq-sdboot
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  DTB_NAME:=imx8mq-evk.dtb
+  DEPENDS:=+imx-mkimage
+  ENV_SIZE:=0x4000
 endef
 
 UBOOT_TARGETS := \
 	apalis_imx6 \
 	mx6cuboxi \
 	pico-pi-imx7d \
-	wandboard
+	wandboard \
+	imx8mp \
+	imx8mm \
+	imx8mn \
+	imx8mq
 
-UBOOT_MAKE_FLAGS += u-boot.imx
-
+ifeq ($(SUBTARGET),imx8)
+define Build/InstallDev
+	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
+		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)/mkimage_uboot
+	$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
+		-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
+		files/$(ENV_NAME)-uEnv.txt
+endef
+else
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 	$(foreach img,$(UBOOT_IMAGE), \
 		$(CP) $(PKG_BUILD_DIR)/$(img) $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-$(img); \
 	)
+endef
+endif
+
+define Package/u-boot/install/default
 endef
 
 $(eval $(call BuildPackage/U-Boot))

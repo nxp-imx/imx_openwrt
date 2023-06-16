@@ -1,0 +1,1708 @@
+From 35668d7a6f429e11d12989f4498c5dfd58ff86ed Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 14 Jun 2023 10:04:40 +0800
+Subject: [PATCH 10/20] Add pmic pca9450 driver for imx8mp
+
+Signed-off-by: shuyang <shuyang.guan@nxp.com>
+---
+ drivers/mfd/Kconfig                   |  43 ++
+ drivers/mfd/Makefile                  |   5 +
+ drivers/mfd/adp5585.c                 | 145 +++++++
+ drivers/mfd/fp9931-core.c             | 163 +++++++
+ drivers/mfd/imx-mix.c                 |  48 +++
+ drivers/regulator/Kconfig             |  21 +
+ drivers/regulator/Makefile            |   3 +
+ drivers/regulator/fp9931-regulator.c  | 586 ++++++++++++++++++++++++++
+ drivers/regulator/pca9450-regulator.c | 233 +++++++++-
+ include/linux/mfd/adp5585.h           | 100 +++++
+ include/linux/mfd/fp9931.h            |  74 ++++
+ include/linux/regulator/pca9450.h     |   1 +
+ 12 files changed, 1420 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/mfd/adp5585.c
+ create mode 100644 drivers/mfd/fp9931-core.c
+ create mode 100644 drivers/mfd/imx-mix.c
+ create mode 100644 drivers/regulator/fp9931-regulator.c
+ create mode 100644 include/linux/mfd/adp5585.h
+ create mode 100644 include/linux/mfd/fp9931.h
+
+diff --git a/drivers/mfd/Kconfig b/drivers/mfd/Kconfig
+index ef550d33a..b63014caf 100644
+--- a/drivers/mfd/Kconfig
++++ b/drivers/mfd/Kconfig
+@@ -20,6 +20,15 @@ config MFD_CS5535
+ 	  This is the core driver for CS5535/CS5536 MFD functions.  This is
+ 	  necessary for using the board's GPIO and MFGPT functionality.
+ 
++config MFD_ADP5585
++	tristate "ADI ADP5585 core functions"
++	select MFD_CORE
++	depends on I2C && OF
++
++	help
++	  This is ADI adp5585 core support, implement the support for
++	  communication through i2c bus.
++
+ config MFD_ALTERA_A10SR
+ 	bool "Altera Arria10 DevKit System Resource chip"
+ 	depends on ARCH_INTEL_SOCFPGA && SPI_MASTER=y && OF
+@@ -498,6 +507,24 @@ config MFD_MX25_TSADC
+ 	  i.MX25 processors. They consist of a conversion queue for general
+ 	  purpose ADC and a queue for Touchscreens.
+ 
++config MFD_IMX_MIX
++	tristate "NXP i.MX Generic Mix Control Driver"
++	depends on OF || COMPILE_TEST
++	help
++	  Enable generic mixes support. On some i.MX platforms, there are
++	  devices that are a mix of multiple functionalities like reset
++	  controllers, clock controllers and some others. In order to split
++	  those functionalities between the right drivers, this MFD populates
++	  with virtual devices based on what's found in the devicetree node,
++	  leaving the rest of the behavior control to the dedicated driver.
++
++config MFD_MXC_HDMI
++	tristate "Freescale HDMI Core"
++	select MFD_CORE
++	help
++	  This is the core driver for the Freescale i.MX6 on-chip HDMI.
++	  This MFD driver connects with the video and audio drivers for HDMI.
++
+ config MFD_HI6421_PMIC
+ 	tristate "HiSilicon Hi6421 PMU/Codec IC"
+ 	depends on OF
+@@ -795,6 +822,22 @@ config MFD_MAX14577
+ 	  additional drivers must be enabled in order to use the functionality
+ 	  of the device.
+ 
++config MFD_MAX17135
++	tristate "Maxim MAX17135 EPD PMIC core"
++	depends on I2C
++
++	help
++	  This is the MAX17135 PMIC support. It includes
++	  core support for communication with the MAX17135 chip.
++
++config MFD_FP9931
++	tristate "Fitipower FP9931 EPD PMIC Core"
++	depends on I2C && OF
++
++	help
++	  This is the FP9931 PMIC support. It includes
++	  core support for communication with the FP9931 chip.
++
+ config MFD_MAX77620
+ 	bool "Maxim Semiconductor MAX77620 and MAX20024 PMIC Support"
+ 	depends on I2C=y
+diff --git a/drivers/mfd/Makefile b/drivers/mfd/Makefile
+index 2ba6646e8..6d0d62922 100644
+--- a/drivers/mfd/Makefile
++++ b/drivers/mfd/Makefile
+@@ -114,6 +114,8 @@ obj-$(CONFIG_MFD_TWL4030_AUDIO)	+= twl4030-audio.o
+ obj-$(CONFIG_TWL6040_CORE)	+= twl6040.o
+ 
+ obj-$(CONFIG_MFD_MX25_TSADC)	+= fsl-imx25-tsadc.o
++obj-$(CONFIG_MFD_IMX_MIX)	+= imx-mix.o
++obj-$(CONFIG_MFD_MXC_HDMI)	+= mxc-hdmi-core.o
+ 
+ obj-$(CONFIG_MFD_MC13XXX)	+= mc13xxx-core.o
+ obj-$(CONFIG_MFD_MC13XXX_SPI)	+= mc13xxx-spi.o
+@@ -159,6 +161,8 @@ obj-$(CONFIG_MFD_DA9063)	+= da9063.o
+ obj-$(CONFIG_MFD_DA9150)	+= da9150-core.o
+ 
+ obj-$(CONFIG_MFD_MAX14577)	+= max14577.o
++obj-$(CONFIG_MFD_MAX17135)	+= max17135-core.o
++obj-$(CONFIG_MFD_FP9931)	+= fp9931-core.o
+ obj-$(CONFIG_MFD_MAX77620)	+= max77620.o
+ obj-$(CONFIG_MFD_MAX77650)	+= max77650.o
+ obj-$(CONFIG_MFD_MAX77686)	+= max77686.o
+@@ -183,6 +187,7 @@ obj-$(CONFIG_MFD_DB8500_PRCMU)	+= db8500-prcmu.o
+ obj-$(CONFIG_AB8500_CORE)	+= ab8500-core.o ab8500-sysctrl.o
+ obj-$(CONFIG_MFD_TIMBERDALE)    += timberdale.o
+ obj-$(CONFIG_PMIC_ADP5520)	+= adp5520.o
++obj-$(CONFIG_MFD_ADP5585)	+= adp5585.o
+ obj-$(CONFIG_MFD_KEMPLD)	+= kempld-core.o
+ obj-$(CONFIG_MFD_INTEL_QUARK_I2C_GPIO)	+= intel_quark_i2c_gpio.o
+ obj-$(CONFIG_LPC_SCH)		+= lpc_sch.o
+diff --git a/drivers/mfd/adp5585.c b/drivers/mfd/adp5585.c
+new file mode 100644
+index 000000000..6501ffa80
+--- /dev/null
++++ b/drivers/mfd/adp5585.c
+@@ -0,0 +1,145 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* ADP5585 IO Expander, Key controller core driver.
++ *
++ * Copyright 2022 NXP
++ */
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/i2c.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/mfd/core.h>
++#include <linux/mfd/adp5585.h>
++
++static const struct mfd_cell adp5585_devs[] = {
++	{
++		.name = "adp5585-gpio",
++		.of_compatible = "adp5585-gpio",
++	},
++	{
++		.name = "adp5585-pwm",
++		.of_compatible = "adp5585-pwm",
++	},
++};
++
++static int adp5585_i2c_read_reg(struct adp5585_dev *adp5585, u8 reg, u8 *val)
++{
++	struct i2c_client *i2c = adp5585->i2c_client;
++	struct i2c_msg xfer[2];
++	int ret;
++
++	/* Write register */
++	xfer[0].addr = i2c->addr;
++	xfer[0].flags = 0;
++	xfer[0].len = 1;
++	xfer[0].buf = &reg;
++
++	/* Read data */
++	xfer[1].addr = i2c->addr;
++	xfer[1].flags = I2C_M_RD;
++	xfer[1].len = 1;
++	xfer[1].buf = val;
++
++	ret = i2c_transfer(i2c->adapter, xfer, 2);
++	if (ret == 2) {
++		return 0;
++	} else {
++		dev_err(&i2c->dev,
++			"Failed to read reg 0x%02x, ret is %d\n",
++			reg, ret);
++		if ( ret >=0)
++			return -EIO;
++		else
++			return ret;
++	}
++}
++
++static int adp5585_i2c_write_reg(struct adp5585_dev *adp5585, u8 reg, u8 val)
++{
++	struct i2c_client *i2c = adp5585->i2c_client;
++	u8 msg[2];
++	int ret;
++
++	msg[0] = reg;
++	msg[1] = val;
++	ret = i2c_master_send(i2c, msg, 2);
++	if (ret == 2) {
++		return 0;
++	} else {
++		dev_err(&i2c->dev,
++			"Failed to write reg 0x%02x, ret is %d\n",
++			reg, ret);
++		if ( ret >=0)
++			return -EIO;
++		else
++			return ret;
++	}
++}
++
++static int adp5585_i2c_probe(struct i2c_client *i2c,
++				const struct i2c_device_id *id)
++{
++	struct adp5585_dev *adp5585;
++	u8 reg;
++	int ret;
++
++	adp5585 = devm_kzalloc(&i2c->dev, sizeof(struct adp5585_dev),
++				GFP_KERNEL);
++	if (adp5585 == NULL)
++		return -ENOMEM;
++
++	i2c_set_clientdata(i2c, adp5585);
++	adp5585->dev = &i2c->dev;
++	adp5585->i2c_client = i2c;
++	adp5585->read_reg = adp5585_i2c_read_reg;
++	adp5585->write_reg = adp5585_i2c_write_reg;
++
++	ret = adp5585_i2c_read_reg(adp5585, ADP5585_ID, &reg);
++	if (ret)
++		return ret;
++
++	return devm_mfd_add_devices(adp5585->dev, PLATFORM_DEVID_AUTO,
++				    adp5585_devs, ARRAY_SIZE(adp5585_devs),
++				    NULL, 0, NULL);
++}
++
++static const struct i2c_device_id adp5585_i2c_id[] = {
++	{ "adp5585", 0 },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(i2c, adp5585_i2c_id);
++
++static const struct of_device_id adp5585_of_match[] = {
++	{.compatible = "adi,adp5585", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, adp5585_of_match);
++
++static struct i2c_driver adp5585_i2c_driver = {
++	.driver = {
++		   .name = "adp5585",
++		   .of_match_table = of_match_ptr(adp5585_of_match),
++	},
++	.probe = adp5585_i2c_probe,
++	.id_table = adp5585_i2c_id,
++};
++
++static int __init adp5585_i2c_init(void)
++{
++	return i2c_add_driver(&adp5585_i2c_driver);
++}
++/* init early so consumer devices can complete system boot */
++subsys_initcall(adp5585_i2c_init);
++
++static void __exit adp5585_i2c_exit(void)
++{
++	i2c_del_driver(&adp5585_i2c_driver);
++}
++module_exit(adp5585_i2c_exit);
++
++MODULE_DESCRIPTION("ADP5585 core driver");
++MODULE_AUTHOR("Haibo Chen <haibo.chen@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/mfd/fp9931-core.c b/drivers/mfd/fp9931-core.c
+new file mode 100644
+index 000000000..ee51ef9b2
+--- /dev/null
++++ b/drivers/mfd/fp9931-core.c
+@@ -0,0 +1,163 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Fitipower FP9931 PMIC core driver
++ *
++ * Copyright 2021 NXP
++ */
++
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/mfd/core.h>
++#include <linux/mfd/fp9931.h>
++#include <linux/module.h>
++
++static const unsigned short normal_i2c[] = {
++	0x18, I2C_CLIENT_END
++};
++
++static struct mfd_cell fp9931_devs[] = {
++	{ .name = "fp9931-pmic",  },
++	{ .name = "fp9931-hwmon", },
++};
++
++int fp9931_reg_read(struct i2c_client *client, int reg, u8 *val)
++{
++	int ret;
++
++	ret = i2c_smbus_read_byte_data(client, reg);
++	if (ret < 0) {
++		dev_err(&client->dev, "Unable to read reg %d : %d\n",
++			reg, ret);
++		return ret;
++	}
++
++	*val = ret;
++
++	return 0;
++}
++EXPORT_SYMBOL(fp9931_reg_read);
++
++int fp9931_reg_write(struct i2c_client *client, int reg, u8 val)
++{
++	int ret;
++
++	ret = i2c_smbus_write_byte_data(client, reg, val);
++	if (ret < 0)
++		dev_err(&client->dev, "Unable to write to reg %d with %u : %d\n",
++			reg, val, ret);
++
++	return ret;
++}
++EXPORT_SYMBOL(fp9931_reg_write);
++
++static int fp9931_detect(struct i2c_client *client,
++			 struct i2c_board_info *info)
++{
++	int ret;
++	u8 tmst_value;
++	s8 temperature;
++	struct i2c_adapter *adapter = client->adapter;
++
++	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
++		return -ENODEV;
++
++	ret = fp9931_reg_read(client, FP9931_TMST_VALUE, &tmst_value);
++	if (ret)
++		return ret;
++	temperature = tmst_value;
++
++	dev_info(&client->dev,
++		 "detect temperature is : %d Celsius Degree\n",
++		 temperature);
++
++	return 0;
++}
++
++static int fp9931_probe(struct i2c_client *client,
++			const struct i2c_device_id *id)
++{
++	int ret;
++	struct fp9931 *fp9931;
++	struct device *dev = &client->dev;
++
++	fp9931 = devm_kzalloc(dev, sizeof(*fp9931), GFP_KERNEL);
++	if (!fp9931)
++		return -ENOMEM;
++
++	fp9931->dev = dev;
++	fp9931->client = client;
++
++	i2c_set_clientdata(client, fp9931);
++
++	/* call detect here, since the .detect function of
++	 * i2c_driver won't be called if the driver's class
++	 * and adapter's class do not match.
++	 */
++	ret = fp9931_detect(client, NULL);
++	if (ret)
++		return ret;
++
++	fp9931->pdata = devm_kzalloc(dev, sizeof(*fp9931->pdata), GFP_KERNEL);
++	if (!fp9931->pdata)
++		return -ENOMEM;
++
++	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE, fp9931_devs,
++				   ARRAY_SIZE(fp9931_devs), NULL, 0, NULL);
++	if (ret) {
++		dev_err(dev, "Failed to add pmic subdevices: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int fp9931_remove(struct i2c_client *i2c)
++{
++	/* nothing needs to be done */
++
++	return 0;
++}
++
++static const struct i2c_device_id fp9931_id[] = {
++	{ "fp9931", 0 },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(i2c, fp9931_id);
++
++static const struct of_device_id fp9931_dt_ids[] = {
++	{
++		.compatible = "fitipower,fp9931",
++	},
++	{	/* sentinel */	}
++};
++MODULE_DEVICE_TABLE(of, fp9931_dt_ids);
++
++static struct i2c_driver fp9931_driver = {
++	.driver = {
++		.name  = "fp9931",
++		.owner = THIS_MODULE,
++		.of_match_table = fp9931_dt_ids,
++	},
++	.probe  = fp9931_probe,
++	.remove = fp9931_remove,
++	.id_table = fp9931_id,
++	.detect = fp9931_detect,
++	.address_list = normal_i2c,
++};
++
++static int __init fp9931_init(void)
++{
++	return i2c_add_driver(&fp9931_driver);
++}
++
++static void __init fp9931_exit(void)
++{
++	i2c_del_driver(&fp9931_driver);
++}
++
++subsys_initcall(fp9931_init);
++module_exit(fp9931_exit);
++
++MODULE_DESCRIPTION("PF9931 PMIC core driver");
++MODULE_AUTHOR("Fancy Fang <chen.fang@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/mfd/imx-mix.c b/drivers/mfd/imx-mix.c
+new file mode 100644
+index 000000000..4ea456ffd
+--- /dev/null
++++ b/drivers/mfd/imx-mix.c
+@@ -0,0 +1,48 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright 2019 NXP.
++ */
++
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++#include <linux/platform_device.h>
++#include <linux/of_platform.h>
++
++#include <linux/mfd/core.h>
++
++static int imx_mix_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct resource *res;
++	void __iomem *base;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	dev_set_drvdata(dev, base);
++
++	return devm_of_platform_populate(dev);
++}
++
++static const struct of_device_id imx_mix_of_match[] = {
++	{ .compatible = "fsl,imx8mp-mix" },
++	{ /* Sentinel */ },
++};
++MODULE_DEVICE_TABLE(of, imx_mix_of_match);
++
++static struct platform_driver imx_mix_driver = {
++	.probe = imx_mix_probe,
++	.driver = {
++		.name = "imx-mix",
++		.of_match_table = of_match_ptr(imx_mix_of_match),
++	},
++};
++module_platform_driver(imx_mix_driver);
+diff --git a/drivers/regulator/Kconfig b/drivers/regulator/Kconfig
+index 4fd13b062..0a8f60af5 100644
+--- a/drivers/regulator/Kconfig
++++ b/drivers/regulator/Kconfig
+@@ -546,6 +546,10 @@ config REGULATOR_MAX1586
+ 	  regulator via I2C bus. The provided regulator is suitable
+ 	  for PXA27x chips to control VCC_CORE and VCC_USIM voltages.
+ 
++config REGULATOR_MAX17135
++	tristate "Maxim MAX17135 Regulator Support"
++	depends on MFD_MAX17135
++
+ config REGULATOR_MAX77620
+ 	tristate "Maxim 77620/MAX20024 voltage regulator"
+ 	depends on MFD_MAX77620 || COMPILE_TEST
+@@ -672,6 +676,15 @@ config REGULATOR_MAX77826
+ 	  It includes support for control of output voltage. This
+ 	  regulator is found on the Samsung Galaxy S5 (klte) smartphone.
+ 
++config REGULATOR_FP9931
++	tristate "Fitipower FP9931 Regulator Support"
++	depends on MFD_FP9931
++	help
++	  This driver controls a Fitipower 9931 regulator via I2C bus.
++	  The regulator includes LDOs, BUCK, BUCK-BOOST, Charge-Pump
++	  and VCOM Buffer regulators. It can support for control of
++	  output voltage.
++
+ config REGULATOR_MC13XXX_CORE
+ 	tristate
+ 
+@@ -878,6 +891,14 @@ config REGULATOR_PF8X00
+ 	  on the NXP PF8100/PF8121A/PF8200 PMIC. The module will be named
+ 	  "pf8x00-regulator".
+ 
++config REGULATOR_PF1550_RPMSG
++	tristate "Freescale PF1550 rpmsg regulator driver"
++	depends on RPMSG
++	help
++	  This driver controls a PF1550 regulator which connected in M4
++	  side via RPMSG.The regulators include three switch and three
++	  ldo.
++
+ config REGULATOR_PFUZE100
+ 	tristate "Freescale PFUZE100/200/3000/3001 regulator driver"
+ 	depends on I2C && OF
+diff --git a/drivers/regulator/Makefile b/drivers/regulator/Makefile
+index 9e382b50a..3a4549c77 100644
+--- a/drivers/regulator/Makefile
++++ b/drivers/regulator/Makefile
+@@ -67,6 +67,7 @@ obj-$(CONFIG_REGULATOR_LTC3589) += ltc3589.o
+ obj-$(CONFIG_REGULATOR_LTC3676) += ltc3676.o
+ obj-$(CONFIG_REGULATOR_MAX14577) += max14577-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX1586) += max1586.o
++obj-$(CONFIG_REGULATOR_MAX17135) += max17135-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX77620) += max77620-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX77650) += max77650-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX8649)	+= max8649.o
+@@ -82,6 +83,7 @@ obj-$(CONFIG_REGULATOR_MAX77686) += max77686-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX77693) += max77693-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX77802) += max77802-regulator.o
+ obj-$(CONFIG_REGULATOR_MAX77826) += max77826-regulator.o
++obj-$(CONFIG_REGULATOR_FP9931) += fp9931-regulator.o
+ obj-$(CONFIG_REGULATOR_MC13783) += mc13783-regulator.o
+ obj-$(CONFIG_REGULATOR_MC13892) += mc13892-regulator.o
+ obj-$(CONFIG_REGULATOR_MC13XXX_CORE) +=  mc13xxx-regulator-core.o
+@@ -108,6 +110,7 @@ obj-$(CONFIG_REGULATOR_QCOM_USB_VBUS) += qcom_usb_vbus-regulator.o
+ obj-$(CONFIG_REGULATOR_PALMAS) += palmas-regulator.o
+ obj-$(CONFIG_REGULATOR_PCA9450) += pca9450-regulator.o
+ obj-$(CONFIG_REGULATOR_PF8X00) += pf8x00-regulator.o
++obj-$(CONFIG_REGULATOR_PF1550_RPMSG) += pf1550-regulator-rpmsg.o
+ obj-$(CONFIG_REGULATOR_PFUZE100) += pfuze100-regulator.o
+ obj-$(CONFIG_REGULATOR_PV88060) += pv88060-regulator.o
+ obj-$(CONFIG_REGULATOR_PV88080) += pv88080-regulator.o
+diff --git a/drivers/regulator/fp9931-regulator.c b/drivers/regulator/fp9931-regulator.c
+new file mode 100644
+index 000000000..356848538
+--- /dev/null
++++ b/drivers/regulator/fp9931-regulator.c
+@@ -0,0 +1,586 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Fitipower FP9931 PMIC regulator driver
++ *
++ * Copyright 2021 NXP
++ */
++
++#include <linux/bitfield.h>
++#include <linux/delay.h>
++#include <linux/gpio.h>
++#include <linux/mfd/fp9931.h>
++#include <linux/module.h>
++#include <linux/of_gpio.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++#include <linux/platform_device.h>
++
++struct fp9931_data {
++	int num_regulators;
++	struct fp9931 *fp9931;
++	struct regulator_dev **rdev;
++};
++
++/* array size is 0x40 */
++const static int fp9931_vpos_vneg_voltages[] = {
++	/* in uV */
++	7040000,
++	7040000,
++	7040000,
++	7040000,
++	7040000,
++	7260000,		/* 0x05 */
++	7490000,
++	7710000,
++	7930000,
++	8150000,
++	8380000,
++	8600000,
++	8820000,
++	9040000,
++	9270000,
++	9490000,
++	9710000,
++	9940000,
++	10160000,
++	10380000,
++	10600000,
++	10830000,
++	11050000,
++	11270000,
++	11490000,
++	11720000,
++	11940000,
++	12160000,
++	12380000,
++	12610000,
++	12830000,
++	13050000,
++	13280000,
++	13500000,
++	13720000,
++	13940000,
++	14170000,
++	14390000,
++	14610000,
++	14830000,
++	15060000,		/* 0x28 */
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++	15060000,
++};
++
++/* trigger to power on VGL, VNEG, VGH, VPOS automatically */
++static int fp9931_display_enable(struct regulator_dev *rdev)
++{
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	gpio_set_value(fp9931->gpio_pmic_wakeup, 1);
++
++	/* TODO: wait for power good */
++	mdelay(15);
++
++	return 0;
++}
++
++static int fp9931_display_disable(struct regulator_dev *rdev)
++{
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	gpio_set_value(fp9931->gpio_pmic_wakeup, 0);
++
++	mdelay(500);
++
++	return 0;
++}
++
++static int fp9931_display_is_enabled(struct regulator_dev *rdev)
++{
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	return !!gpio_get_value(fp9931->gpio_pmic_wakeup);
++}
++
++static int fp9931_display_set_soft_start(struct regulator_dev *rdev)
++{
++	int ret;
++	u8 control_reg1;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_CONTROL_REG1, &control_reg1);
++	if (ret)
++		return ret;
++
++	control_reg1 &= ~CONTROL_REG1_SS_TIME;
++	control_reg1 |= FIELD_PREP(CONTROL_REG1_SS_TIME, fp9931->ss_time);
++
++	return fp9931_reg_write(fp9931->client, FP9931_CONTROL_REG1, control_reg1);
++}
++
++static int fp9931_v3p3_enable(struct regulator_dev *rdev)
++{
++	int ret;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++	u8 control_reg1;
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_CONTROL_REG1, &control_reg1);
++	if (ret)
++		return ret;
++
++	control_reg1 |= CONTROL_REG1_V3P3_EN;
++
++	return fp9931_reg_write(fp9931->client, FP9931_CONTROL_REG1, control_reg1);
++}
++
++static int fp9931_v3p3_disable(struct regulator_dev *rdev)
++{
++	int ret;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++	u8 control_reg1;
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_CONTROL_REG1, &control_reg1);
++	if (ret)
++		return ret;
++
++	control_reg1 &= ~CONTROL_REG1_V3P3_EN;
++
++	return fp9931_reg_write(fp9931->client, FP9931_CONTROL_REG1, control_reg1);
++}
++
++static int fp9931_v3p3_is_enabled(struct regulator_dev *rdev)
++{
++	int ret;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++	u8 control_reg1;
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_CONTROL_REG1, &control_reg1);
++	if (ret)
++		return ret;
++
++	return !!(control_reg1 & CONTROL_REG1_V3P3_EN);
++}
++
++static int fp9931_vcom_get_voltage_sel(struct regulator_dev *rdev)
++{
++	int ret;
++	u8 vcom_setting;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_VCOM_SETTING, &vcom_setting);
++	if (ret)
++		return ret;
++
++	if (!vcom_setting)
++		return -EINVAL;
++
++	return --vcom_setting;
++}
++
++static int fp9931_vcom_set_voltage_sel(struct regulator_dev *rdev,
++				       unsigned selector)
++{
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	if (++selector > 0xFF)
++		return -EINVAL;
++
++	return fp9931_reg_write(fp9931->client, FP9931_VCOM_SETTING, selector);
++}
++
++/* VCOM = 0V + [(-5 / 255) * N]V, N = 1~255 (0 is meaningless) */
++static int fp9931_vcom_list_voltage(struct regulator_dev *rdev,
++				    unsigned selector)
++{
++	int vol_uV;
++
++	if (++selector > 0xFF)
++		return -EINVAL;
++
++	vol_uV = selector * 1000 * 1000;
++
++	return DIV_ROUND_CLOSEST(vol_uV * 5, 255);
++}
++
++static int fp9931_vpos_vneg_get_voltage_sel(struct regulator_dev *rdev)
++{
++	int ret;
++	u8 vpos_vneg_setting;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	ret = fp9931_reg_read(fp9931->client, FP9931_VPOS_VNEG_SETTING,
++			      &vpos_vneg_setting);
++	if (ret)
++		return ret;
++
++	return FIELD_GET(VPOS_VNEG_SETTING, vpos_vneg_setting);
++}
++
++static int fp9931_vpos_vneg_set_voltage_sel(struct regulator_dev *rdev,
++					    unsigned selector)
++{
++	u8 vpos_vneg_setting;
++	struct fp9931 *fp9931 = rdev_get_drvdata(rdev);
++
++	if (unlikely(selector > VPOS_VNEG_SETTING))
++		return -EINVAL;
++
++	vpos_vneg_setting = FIELD_PREP(VPOS_VNEG_SETTING, selector);
++
++	return fp9931_reg_write(fp9931->client,
++				FP9931_VPOS_VNEG_SETTING, vpos_vneg_setting);
++}
++
++static struct regulator_ops fp9931_display_ops = {
++	.enable			= fp9931_display_enable,
++	.disable		= fp9931_display_disable,
++	.is_enabled		= fp9931_display_is_enabled,
++	.set_soft_start		= fp9931_display_set_soft_start,
++};
++
++static struct regulator_ops fp9931_v3p3_ops = {
++	.enable			= fp9931_v3p3_enable,
++	.disable		= fp9931_v3p3_disable,
++	.is_enabled		= fp9931_v3p3_is_enabled,
++};
++
++static struct regulator_ops fp9931_vcom_ops = {
++	.get_voltage_sel	= fp9931_vcom_get_voltage_sel,
++	.set_voltage_sel	= fp9931_vcom_set_voltage_sel,
++	.list_voltage		= fp9931_vcom_list_voltage,
++};
++
++static struct regulator_ops fp9931_vpos_ops = {
++	.get_voltage_sel	= fp9931_vpos_vneg_get_voltage_sel,
++	.set_voltage_sel	= fp9931_vpos_vneg_set_voltage_sel,
++	.list_voltage		= regulator_list_voltage_table,
++};
++
++static struct regulator_ops fp9931_vneg_ops = {
++	.get_voltage_sel	= fp9931_vpos_vneg_get_voltage_sel,
++	.set_voltage_sel	= fp9931_vpos_vneg_set_voltage_sel,
++	.list_voltage		= regulator_list_voltage_table,
++};
++
++static struct regulator_ops fp9931_vgh_ops = {
++};
++
++static struct regulator_ops fp9931_vgl_ops = {
++};
++
++static struct regulator_desc fp9931_reg[] = {
++	{
++		.name		= "DISPLAY",
++		.id		= FP9931_DISPLAY,
++		.ops		= &fp9931_display_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "VPOS-LDO",
++		.id		= FP9931_VPOS,
++		.ops		= &fp9931_vpos_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.n_voltages	= ARRAY_SIZE(fp9931_vpos_vneg_voltages),
++		.volt_table	= fp9931_vpos_vneg_voltages,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "VNEG-LDO",
++		.id		= FP9931_VNEG,
++		.ops		= &fp9931_vneg_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.n_voltages	= ARRAY_SIZE(fp9931_vpos_vneg_voltages),
++		.volt_table	= fp9931_vpos_vneg_voltages,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "VGH-CHARGE-PUMP",
++		.id		= FP9931_VGH,
++		.ops		= &fp9931_vgh_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "VGL-CHARGE-PUMP",
++		.id		= FP9931_VGL,
++		.ops		= &fp9931_vgl_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "VCOM",
++		.id		= FP9931_VCOM,
++		.ops		= &fp9931_vcom_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.n_voltages	= 255,
++		.owner		= THIS_MODULE,
++	},
++	{
++		.name		= "V3P3",
++		.id		= FP9931_V3P3,
++		.ops		= &fp9931_v3p3_ops,
++		.type		= REGULATOR_VOLTAGE,
++		.owner		= THIS_MODULE,
++	},
++};
++
++#define GET_DELAY_TIME_PROPERTY(prop, field) \
++do { \
++	int ret = of_property_read_u32(fp9931->dev->of_node, \
++				       prop, &fp9931->field); \
++	if (ret < 0) 				\
++		return ret;			\
++\
++	switch (fp9931->field) {		\
++	case 0:					\
++	case 1:					\
++	case 2:					\
++		break;				\
++	case 4:					\
++		fp9931->field = 0x3;		\
++		break;				\
++	default:				\
++		return -EINVAL;			\
++	}					\
++} while (0);
++
++static int fp9931_of_get_time_properties(struct fp9931 *fp9931)
++{
++	int ret;
++
++	GET_DELAY_TIME_PROPERTY("vgl-pwrup",  vgl_pwrup);
++	GET_DELAY_TIME_PROPERTY("vneg-pwrup", vneg_pwrup);
++	GET_DELAY_TIME_PROPERTY("vgh-pwrup",  vgh_pwrup);
++	GET_DELAY_TIME_PROPERTY("vpos-pwrup", vpos_pwrup);
++
++	ret = of_property_read_u32(fp9931->dev->of_node, "ss-time",
++				   &fp9931->ss_time);
++	if (ret < 0)
++		return ret;
++
++	switch(fp9931->ss_time) {
++	case 3:
++		fp9931->ss_time = 0x0;
++		break;
++	case 4:
++		fp9931->ss_time = 0x1;
++		break;
++	case 5:
++		fp9931->ss_time = 0x2;
++		break;
++	case 6:
++		fp9931->ss_time = 0x3;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int fp9931_pmic_dt_parse_pdata(struct platform_device *pdev,
++				      struct fp9931_platform_data *pdata)
++{
++	struct fp9931 *fp9931 = dev_get_drvdata(pdev->dev.parent);
++	struct device_node *pmic_np, *regulators_np, *reg_np;
++	struct fp9931_regulator_data *rdata;
++	int i, ret;
++
++	pmic_np = of_node_get(fp9931->dev->of_node);
++	if (!pmic_np) {
++		dev_err(&pdev->dev, "could not find pmic sub-node\n");
++		return -ENODEV;
++	}
++
++	regulators_np = of_find_node_by_name(pmic_np, "regulators");
++	if (!regulators_np) {
++		dev_err(&pdev->dev, "could not find regulators sub-node\n");
++		of_node_put(pmic_np);
++		return -EINVAL;
++	}
++
++	pdata->num_regulators = of_get_child_count(regulators_np);
++
++	rdata = devm_kzalloc(&pdev->dev,
++			     sizeof(*rdata) * pdata->num_regulators,
++			     GFP_KERNEL);
++	if (!rdata) {
++		dev_err(&pdev->dev, "failed to allocate memory for regulator data\n");
++		of_node_put(regulators_np);
++		return -ENOMEM;
++	}
++
++	pdata->regulators = rdata;
++	for_each_child_of_node(regulators_np, reg_np) {
++		for (i = 0; i < ARRAY_SIZE(fp9931_reg); i++)
++			if (!of_node_cmp(reg_np->name, fp9931_reg[i].name))
++				break;
++
++		if (i == ARRAY_SIZE(fp9931_reg)) {
++			dev_warn(&pdev->dev, "unknown regulator %s\n", reg_np->name);
++			continue;
++		}
++
++		rdata->id = i;
++		rdata->initdata = of_get_regulator_init_data(&pdev->dev,
++							     reg_np,
++							     &fp9931_reg[i]);
++		if (!rdata->initdata) {
++			dev_err(&pdev->dev, "failed to get regulator init data\n");
++			return -ENOMEM;
++		}
++
++		rdata->reg_node = reg_np;
++		rdata++;
++	}
++	of_node_put(regulators_np);
++
++	ret = fp9931_of_get_time_properties(fp9931);
++	if (ret)
++		return ret;
++
++	fp9931->gpio_pmic_wakeup = of_get_named_gpio(pmic_np,
++					"gpio-pmic-wakeup", 0);
++	if (!gpio_is_valid(fp9931->gpio_pmic_wakeup)) {
++		dev_err(&pdev->dev, "no epdc pmic wakeup pin available\n");
++		return fp9931->gpio_pmic_wakeup;
++	}
++	ret = devm_gpio_request_one(&pdev->dev, fp9931->gpio_pmic_wakeup,
++				    GPIOF_OUT_INIT_LOW, "epdc-pmic-wake");
++	if (ret < 0)
++		return ret;
++
++	/* If 'gpio_pmic_wakeup' is high previously, after this gpio
++	 * is pull-down, the I2C reg write will not work as expected
++	 * (the value cannot be written to FP9931 correctly). And add
++	 * 500ms delay can solve this problem.
++	 */
++	mdelay(500);
++
++	fp9931->gpio_pmic_pwrgood = of_get_named_gpio(pmic_np,
++					"gpio-pmic-pwrgood", 0);
++	if (!gpio_is_valid(fp9931->gpio_pmic_pwrgood)) {
++		dev_err(&pdev->dev, "no epdc pmic pwrgood pin available\n");
++		return fp9931->gpio_pmic_pwrgood;
++	}
++	return devm_gpio_request_one(&pdev->dev, fp9931->gpio_pmic_pwrgood,
++				     GPIOF_IN, "epdc-pwrstat");
++}
++
++/*
++ * Config power on delay times for VGL, VNEG, VGH and VPOS.
++ * The delay times are not ramp-delays. So config this in
++ * probe.
++ */
++static int fp9931_config_power_on_delays(struct fp9931 *fp9931)
++{
++	u8 poweron_delay;
++
++	poweron_delay = FIELD_PREP(PWRON_DELAY_tDLY1, fp9931->vgl_pwrup)  |
++			FIELD_PREP(PWRON_DELAY_tDLY2, fp9931->vneg_pwrup) |
++			FIELD_PREP(PWRON_DELAY_tDLY3, fp9931->vgh_pwrup)  |
++			FIELD_PREP(PWRON_DELAY_tDLY4, fp9931->vpos_pwrup);
++	return fp9931_reg_write(fp9931->client, FP9931_PWRON_DELAY, poweron_delay);
++}
++
++static int fp9931_regulator_probe(struct platform_device *pdev)
++{
++	struct fp9931 *fp9931 = dev_get_drvdata(pdev->dev.parent);
++	struct fp9931_platform_data *pdata = fp9931->pdata;
++	struct fp9931_data *priv;
++	struct regulator_dev **rdev;
++	struct regulator_config config = { };
++	int size, i, ret = 0;
++
++	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	ret = fp9931_pmic_dt_parse_pdata(pdev, pdata);
++	if (ret)
++		return ret;
++
++	size = sizeof(*rdev) * pdata->num_regulators;
++	rdev = devm_kzalloc(&pdev->dev, size, GFP_KERNEL);
++	if (!rdev)
++		return -ENOMEM;
++
++	priv->rdev = rdev;
++	priv->num_regulators = pdata->num_regulators;
++	platform_set_drvdata(pdev, priv);
++
++	for (i = 0; i < pdata->num_regulators; i++) {
++		int id = pdata->regulators[i].id;
++
++		config.dev = &pdev->dev;
++		config.init_data = pdata->regulators[i].initdata;
++		config.driver_data = fp9931;
++		config.of_node = pdata->regulators[i].reg_node;
++
++		rdev[i] = devm_regulator_register(&pdev->dev, &fp9931_reg[id],
++						  &config);
++		if (IS_ERR(rdev[i])) {
++			dev_err(&pdev->dev, "register regulator %s failed\n",
++				fp9931_reg[id].name);
++			return PTR_ERR(rdev[i]);
++		}
++	}
++
++	return fp9931_config_power_on_delays(fp9931);
++}
++
++static int fp9931_regulator_remove(struct platform_device *pdev)
++{
++	return 0;
++}
++
++static const struct platform_device_id fp9931_pmic_id[] = {
++	{ "fp9931-pmic", 0 },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(platform, fp9931_pmic_id);
++
++static struct platform_driver fp9931_regulator_driver = {
++	.probe  = fp9931_regulator_probe,
++	.remove = fp9931_regulator_remove,
++	.id_table = fp9931_pmic_id,
++	.driver = {
++		.name = "fp9931-pmic",
++	},
++};
++
++static int __init fp9931_regulator_init(void)
++{
++	return platform_driver_register(&fp9931_regulator_driver);
++}
++subsys_initcall_sync(fp9931_regulator_init);
++
++static void __exit fp9931_regulator_exit(void)
++{
++	platform_driver_unregister(&fp9931_regulator_driver);
++}
++module_exit(fp9931_regulator_exit);
++
++MODULE_DESCRIPTION("FP9931 regulator driver");
++MODULE_AUTHOR("Fancy Fang <chen.fang@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/regulator/pca9450-regulator.c b/drivers/regulator/pca9450-regulator.c
+index 556074d7f..e7408598c 100644
+--- a/drivers/regulator/pca9450-regulator.c
++++ b/drivers/regulator/pca9450-regulator.c
+@@ -232,6 +232,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.ramp_mask = BUCK1_RAMP_MASK,
+ 			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
+ 			.n_ramp_values = ARRAY_SIZE(pca9450_dvs_buck_ramp_table),
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 			.of_parse_cb = pca9450_set_dvs_levels,
+ 		},
+@@ -257,6 +258,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.vsel_mask = BUCK2OUT_DVS0_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK2CTRL,
+ 			.enable_mask = BUCK2_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ_STBYREQ,
+ 			.ramp_reg = PCA9450_REG_BUCK2CTRL,
+ 			.ramp_mask = BUCK2_RAMP_MASK,
+ 			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
+@@ -286,6 +288,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.vsel_mask = BUCK3OUT_DVS0_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK3CTRL,
+ 			.enable_mask = BUCK3_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.ramp_reg = PCA9450_REG_BUCK3CTRL,
+ 			.ramp_mask = BUCK3_RAMP_MASK,
+ 			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
+@@ -315,6 +318,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.vsel_mask = BUCK4OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK4CTRL,
+ 			.enable_mask = BUCK4_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -333,6 +337,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.vsel_mask = BUCK5OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK5CTRL,
+ 			.enable_mask = BUCK5_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -351,6 +356,7 @@ static const struct pca9450_regulator_desc pca9450a_regulators[] = {
+ 			.vsel_mask = BUCK6OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK6CTRL,
+ 			.enable_mask = BUCK6_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -466,6 +472,7 @@ static const struct pca9450_regulator_desc pca9450bc_regulators[] = {
+ 			.vsel_mask = BUCK1OUT_DVS0_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK1CTRL,
+ 			.enable_mask = BUCK1_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.ramp_reg = PCA9450_REG_BUCK1CTRL,
+ 			.ramp_mask = BUCK1_RAMP_MASK,
+ 			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
+@@ -495,6 +502,7 @@ static const struct pca9450_regulator_desc pca9450bc_regulators[] = {
+ 			.vsel_mask = BUCK2OUT_DVS0_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK2CTRL,
+ 			.enable_mask = BUCK2_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ_STBYREQ,
+ 			.ramp_reg = PCA9450_REG_BUCK2CTRL,
+ 			.ramp_mask = BUCK2_RAMP_MASK,
+ 			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
+@@ -524,6 +532,7 @@ static const struct pca9450_regulator_desc pca9450bc_regulators[] = {
+ 			.vsel_mask = BUCK4OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK4CTRL,
+ 			.enable_mask = BUCK4_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -542,6 +551,7 @@ static const struct pca9450_regulator_desc pca9450bc_regulators[] = {
+ 			.vsel_mask = BUCK5OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK5CTRL,
+ 			.enable_mask = BUCK5_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -560,6 +570,215 @@ static const struct pca9450_regulator_desc pca9450bc_regulators[] = {
+ 			.vsel_mask = BUCK6OUT_MASK,
+ 			.enable_reg = PCA9450_REG_BUCK6CTRL,
+ 			.enable_mask = BUCK6_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "ldo1",
++			.of_match = of_match_ptr("LDO1"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_LDO1,
++			.ops = &pca9450_ldo_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_LDO1_VOLTAGE_NUM,
++			.linear_ranges = pca9450_ldo1_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_ldo1_volts),
++			.vsel_reg = PCA9450_REG_LDO1CTRL,
++			.vsel_mask = LDO1OUT_MASK,
++			.enable_reg = PCA9450_REG_LDO1CTRL,
++			.enable_mask = LDO1_EN_MASK,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "ldo2",
++			.of_match = of_match_ptr("LDO2"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_LDO2,
++			.ops = &pca9450_ldo_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_LDO2_VOLTAGE_NUM,
++			.linear_ranges = pca9450_ldo2_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_ldo2_volts),
++			.vsel_reg = PCA9450_REG_LDO2CTRL,
++			.vsel_mask = LDO2OUT_MASK,
++			.enable_reg = PCA9450_REG_LDO2CTRL,
++			.enable_mask = LDO2_EN_MASK,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "ldo3",
++			.of_match = of_match_ptr("LDO3"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_LDO3,
++			.ops = &pca9450_ldo_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_LDO3_VOLTAGE_NUM,
++			.linear_ranges = pca9450_ldo34_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_ldo34_volts),
++			.vsel_reg = PCA9450_REG_LDO3CTRL,
++			.vsel_mask = LDO3OUT_MASK,
++			.enable_reg = PCA9450_REG_LDO3CTRL,
++			.enable_mask = LDO3_EN_MASK,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "ldo4",
++			.of_match = of_match_ptr("LDO4"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_LDO4,
++			.ops = &pca9450_ldo_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_LDO4_VOLTAGE_NUM,
++			.linear_ranges = pca9450_ldo34_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_ldo34_volts),
++			.vsel_reg = PCA9450_REG_LDO4CTRL,
++			.vsel_mask = LDO4OUT_MASK,
++			.enable_reg = PCA9450_REG_LDO4CTRL,
++			.enable_mask = LDO4_EN_MASK,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "ldo5",
++			.of_match = of_match_ptr("LDO5"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_LDO5,
++			.ops = &pca9450_ldo_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_LDO5_VOLTAGE_NUM,
++			.linear_ranges = pca9450_ldo5_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_ldo5_volts),
++			.vsel_reg = PCA9450_REG_LDO5CTRL_H,
++			.vsel_mask = LDO5HOUT_MASK,
++			.enable_reg = PCA9450_REG_LDO5CTRL_H,
++			.enable_mask = LDO5H_EN_MASK,
++			.owner = THIS_MODULE,
++		},
++	},
++};
++
++static const struct pca9450_regulator_desc pca9451a_regulators[] = {
++	{
++		.desc = {
++			.name = "buck1",
++			.of_match = of_match_ptr("BUCK1"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_BUCK1,
++			.ops = &pca9450_dvs_buck_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_BUCK1_VOLTAGE_NUM,
++			.linear_ranges = pca9450_dvs_buck_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_dvs_buck_volts),
++			.vsel_reg = PCA9450_REG_BUCK1OUT_DVS0,
++			.vsel_mask = BUCK1OUT_DVS0_MASK,
++			.enable_reg = PCA9450_REG_BUCK1CTRL,
++			.enable_mask = BUCK1_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
++			.ramp_mask = BUCK1_RAMP_MASK,
++			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
++			.n_ramp_values = ARRAY_SIZE(pca9450_dvs_buck_ramp_table),
++			.owner = THIS_MODULE,
++			.of_parse_cb = pca9450_set_dvs_levels,
++		},
++		.dvs = {
++			.run_reg = PCA9450_REG_BUCK1OUT_DVS0,
++			.run_mask = BUCK1OUT_DVS0_MASK,
++			.standby_reg = PCA9450_REG_BUCK1OUT_DVS1,
++			.standby_mask = BUCK1OUT_DVS1_MASK,
++		},
++	},
++	{
++		.desc = {
++			.name = "buck2",
++			.of_match = of_match_ptr("BUCK2"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_BUCK2,
++			.ops = &pca9450_dvs_buck_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_BUCK2_VOLTAGE_NUM,
++			.linear_ranges = pca9450_dvs_buck_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_dvs_buck_volts),
++			.vsel_reg = PCA9450_REG_BUCK2OUT_DVS0,
++			.vsel_mask = BUCK2OUT_DVS0_MASK,
++			.enable_reg = PCA9450_REG_BUCK2CTRL,
++			.enable_mask = BUCK2_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ_STBYREQ,
++			.ramp_mask = BUCK2_RAMP_MASK,
++			.ramp_delay_table = pca9450_dvs_buck_ramp_table,
++			.n_ramp_values = ARRAY_SIZE(pca9450_dvs_buck_ramp_table),
++			.owner = THIS_MODULE,
++			.of_parse_cb = pca9450_set_dvs_levels,
++		},
++		.dvs = {
++			.run_reg = PCA9450_REG_BUCK2OUT_DVS0,
++			.run_mask = BUCK2OUT_DVS0_MASK,
++			.standby_reg = PCA9450_REG_BUCK2OUT_DVS1,
++			.standby_mask = BUCK2OUT_DVS1_MASK,
++		},
++	},
++	{
++		.desc = {
++			.name = "buck4",
++			.of_match = of_match_ptr("BUCK4"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_BUCK4,
++			.ops = &pca9450_buck_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_BUCK4_VOLTAGE_NUM,
++			.linear_ranges = pca9450_buck_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_buck_volts),
++			.vsel_reg = PCA9450_REG_BUCK4OUT,
++			.vsel_mask = BUCK4OUT_MASK,
++			.enable_reg = PCA9450_REG_BUCK4CTRL,
++			.enable_mask = BUCK4_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "buck5",
++			.of_match = of_match_ptr("BUCK5"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_BUCK5,
++			.ops = &pca9450_buck_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_BUCK5_VOLTAGE_NUM,
++			.linear_ranges = pca9450_buck_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_buck_volts),
++			.vsel_reg = PCA9450_REG_BUCK5OUT,
++			.vsel_mask = BUCK5OUT_MASK,
++			.enable_reg = PCA9450_REG_BUCK5CTRL,
++			.enable_mask = BUCK5_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
++			.owner = THIS_MODULE,
++		},
++	},
++	{
++		.desc = {
++			.name = "buck6",
++			.of_match = of_match_ptr("BUCK6"),
++			.regulators_node = of_match_ptr("regulators"),
++			.id = PCA9450_BUCK6,
++			.ops = &pca9450_buck_regulator_ops,
++			.type = REGULATOR_VOLTAGE,
++			.n_voltages = PCA9450_BUCK6_VOLTAGE_NUM,
++			.linear_ranges = pca9450_buck_volts,
++			.n_linear_ranges = ARRAY_SIZE(pca9450_buck_volts),
++			.vsel_reg = PCA9450_REG_BUCK6OUT,
++			.vsel_mask = BUCK6OUT_MASK,
++			.enable_reg = PCA9450_REG_BUCK6CTRL,
++			.enable_mask = BUCK6_ENMODE_MASK,
++			.enable_val = BUCK_ENMODE_ONREQ,
+ 			.owner = THIS_MODULE,
+ 		},
+ 	},
+@@ -722,6 +941,10 @@ static int pca9450_i2c_probe(struct i2c_client *i2c,
+ 		regulator_desc = pca9450bc_regulators;
+ 		pca9450->rcnt = ARRAY_SIZE(pca9450bc_regulators);
+ 		break;
++	case PCA9450_TYPE_PCA9451A:
++		regulator_desc = pca9451a_regulators;
++		pca9450->rcnt = ARRAY_SIZE(pca9451a_regulators);
++		break;
+ 	default:
+ 		dev_err(&i2c->dev, "Unknown device type");
+ 		return -EINVAL;
+@@ -748,7 +971,8 @@ static int pca9450_i2c_probe(struct i2c_client *i2c,
+ 
+ 	/* Check your board and dts for match the right pmic */
+ 	if (((device_id >> 4) != 0x1 && type == PCA9450_TYPE_PCA9450A) ||
+-	    ((device_id >> 4) != 0x3 && type == PCA9450_TYPE_PCA9450BC)) {
++	    ((device_id >> 4) != 0x3 && type == PCA9450_TYPE_PCA9450BC) ||
++	    ((device_id >> 4) != 0x9 && type == PCA9450_TYPE_PCA9451A)) {
+ 		dev_err(&i2c->dev, "Device id(%x) mismatched\n",
+ 			device_id >> 4);
+ 		return -EINVAL;
+@@ -823,7 +1047,8 @@ static int pca9450_i2c_probe(struct i2c_client *i2c,
+ 	}
+ 
+ 	dev_info(&i2c->dev, "%s probed.\n",
+-		type == PCA9450_TYPE_PCA9450A ? "pca9450a" : "pca9450bc");
++		type == PCA9450_TYPE_PCA9450A ? "pca9450a" :
++		(type == PCA9450_TYPE_PCA9451A ? "pca9451a" : "pca9450bc"));
+ 
+ 	return 0;
+ }
+@@ -841,6 +1066,10 @@ static const struct of_device_id pca9450_of_match[] = {
+ 		.compatible = "nxp,pca9450c",
+ 		.data = (void *)PCA9450_TYPE_PCA9450BC,
+ 	},
++	{
++		.compatible = "nxp,pca9451a",
++		.data = (void *)PCA9450_TYPE_PCA9451A,
++	},
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, pca9450_of_match);
+diff --git a/include/linux/mfd/adp5585.h b/include/linux/mfd/adp5585.h
+new file mode 100644
+index 000000000..18090267e
+--- /dev/null
++++ b/include/linux/mfd/adp5585.h
+@@ -0,0 +1,100 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Analog Devices ADP5585 I/O Expander, keypad controller,
++ * PWM contorller.
++ *
++ * Copyright 2022 NXP
++ */
++
++#ifndef __ADP5585_H_
++#define __ADP5585_H_
++
++#define ADP5585_ID			0x00
++#define ADP5585_INT_STATUS		0x01
++#define ADP5585_STATUS			0x02
++#define ADP5585_FIFO_1			0x03
++#define ADP5585_FIFO_2			0x04
++#define ADP5585_FIFO_3			0x05
++#define ADP5585_FIFO_4			0x06
++#define ADP5585_FIFO_5			0x07
++#define ADP5585_FIFO_6			0x08
++#define ADP5585_FIFO_7			0x09
++#define ADP5585_FIFO_8			0x0A
++#define ADP5585_FIFO_9			0x0B
++#define ADP5585_FIFO_10			0x0C
++#define ADP5585_FIFO_11			0x0D
++#define ADP5585_FIFO_12			0x0E
++#define ADP5585_FIFO_13			0x0F
++#define ADP5585_FIFO_14			0x10
++#define ADP5585_FIFO_15			0x11
++#define ADP5585_FIFO_16			0x12
++#define ADP5585_GPI_INT_STAT_A		0x13
++#define ADP5585_GPI_INT_STAT_B		0x14
++#define ADP5585_GPI_STATUS_A		0x15
++#define ADP5585_GPI_STATUS_B		0x16
++#define ADP5585_RPULL_CONFIG_A		0x17
++#define ADP5585_RPULL_CONFIG_B		0x18
++#define ADP5585_RPULL_CONFIG_C		0x19
++#define ADP5585_RPULL_CONFIG_D		0x1A
++#define ADP5585_GPI_INT_LEVEL_A		0x1B
++#define ADP5585_GPI_INT_LEVEL_B		0x1C
++#define ADP5585_GPI_EVENT_EN_A		0x1D
++#define ADP5585_GPI_EVENT_EN_B		0x1E
++#define ADP5585_GPI_INTERRUPT_EN_A	0x1F
++#define ADP5585_GPI_INTERRUPT_EN_B	0x20
++#define ADP5585_DEBOUNCE_DIS_A		0x21
++#define ADP5585_DEBOUNCE_DIS_B		0x22
++#define ADP5585_GPO_DATA_OUT_A		0x23
++#define ADP5585_GPO_DATA_OUT_B		0x24
++#define ADP5585_GPO_OUT_MODE_A		0x25
++#define ADP5585_GPO_OUT_MODE_B		0x26
++#define ADP5585_GPIO_DIRECTION_A	0x27
++#define ADP5585_GPIO_DIRECTION_B	0x28
++#define ADP5585_RESET1_EVENT_A		0x29
++#define ADP5585_RESET1_EVENT_B		0x2A
++#define ADP5585_RESET1_EVENT_C		0x2B
++#define ADP5585_RESET2_EVENT_A		0x2C
++#define ADP5585_RESET2_EVENT_B		0x2D
++#define ADP5585_RESET_CFG		0x2E
++#define ADP5585_PWM_OFFT_LOW		0x2F
++#define ADP5585_PWM_OFFT_HIGH		0x30
++#define ADP5585_PWM_ONT_LOW		0x31
++#define ADP5585_PWM_ONT_HIGH		0x32
++#define ADP5585_PWM_CFG			0x33
++#define ADP5585_LOGIC_CFG		0x34
++#define ADP5585_LOGIC_FF_CFG		0x35
++#define ADP5585_LOGIC_INT_EVENT_EN	0x36
++#define ADP5585_POLL_PTIME_CFG		0x37
++#define ADP5585_PIN_CONFIG_A		0x38
++#define ADP5585_PIN_CONFIG_B		0x39
++#define ADP5585_PIN_CONFIG_C		0x3A
++#define ADP5585_GENERAL_CFG		0x3B
++#define ADP5585_INT_EN			0x3C
++
++/* ID Register */
++#define ADP5585_DEVICE_ID_MASK	0xF
++#define ADP5585_MAN_ID_MASK	0xF
++#define ADP5585_MAN_ID_SHIFT	4
++#define ADP5585_MAN_ID		0x02
++
++#define ADP5585_PWM_CFG_EN		0x1
++#define ADP5585_PWM_CFG_MODE		0x2
++#define ADP5585_PIN_CONFIG_R3_PWM	0x8
++#define ADP5585_PIN_CONFIG_R3_MASK	0xC
++#define ADP5585_GENERAL_CFG_OSC_EN	0x80
++
++#define ADP5585_REG_MASK		0xFF
++
++#define ADP5585_BANK(offs)		((offs) > 4)
++#define ADP5585_BIT(offs)		(offs > 4 ? \
++					1u << (offs - 5) : 1u << (offs))
++
++struct adp5585_dev {
++	struct device *dev;
++	struct i2c_client *i2c_client;
++
++	int (*read_reg)(struct adp5585_dev *adp5585, u8 reg, u8 *val);
++	int (*write_reg)(struct adp5585_dev *adp5585, u8 reg, u8 val);
++};
++
++#endif
+diff --git a/include/linux/mfd/fp9931.h b/include/linux/mfd/fp9931.h
+new file mode 100644
+index 000000000..36907e583
+--- /dev/null
++++ b/include/linux/mfd/fp9931.h
+@@ -0,0 +1,74 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright 2021 NXP
++ */
++
++#ifndef __FP9931_H_
++#define __FP9931_H_
++
++/* Reigster Addresses */
++
++#define FP9931_TMST_VALUE		0x00
++#define FP9931_VCOM_SETTING		0x01
++#define FP9931_VPOS_VNEG_SETTING	0x02
++#define FP9931_PWRON_DELAY		0x03
++#define FP9931_CONTROL_REG1		0x0B
++#define FP9931_CONTROL_REG2		0x0C
++
++#define VPOS_VNEG_SETTING		GENMASK(5, 0)
++#define PWRON_DELAY_tDLY1		GENMASK(1, 0)
++#define PWRON_DELAY_tDLY2		GENMASK(3, 2)
++#define PWRON_DELAY_tDLY3		GENMASK(5, 4)
++#define PWRON_DELAY_tDLY4		GENMASK(7, 6)
++#define CONTROL_REG1_V3P3_EN		BIT(1)
++#define CONTROL_REG1_SS_TIME		GENMASK(7, 6)
++#define CONTROL_REG2_VN_CL		GENMASK(1, 0)
++#define CONTROL_REG2_VP_CL		GENMASK(3, 2)
++#define CONTROL_REG2_FIX_RD_PTR		BIT(7)
++
++enum {
++	FP9931_DISPLAY,
++	FP9931_VPOS,
++	FP9931_VNEG,
++	FP9931_VGH,
++	FP9931_VGL,
++	FP9931_VCOM,
++	FP9931_V3P3,
++};
++
++struct fp9931 {
++	struct device *dev;
++	struct fp9931_platform_data *pdata;
++
++	struct i2c_client *client;
++
++	/* power up delay time: 0ms, 1ms, 2ms, 4ms */
++	unsigned int vgl_pwrup;
++	unsigned int vneg_pwrup;
++	unsigned int vgh_pwrup;
++	unsigned int vpos_pwrup;
++
++	/* soft start time for all regulator
++	 * voltages power on: 3ms ~ 6ms
++	 */
++	unsigned int ss_time;
++
++	int gpio_pmic_wakeup;
++	int gpio_pmic_pwrgood;
++};
++
++struct fp9931_platform_data {
++	/* PMIC */
++	struct fp9931_regulator_data *regulators;
++	int num_regulators;
++};
++
++struct fp9931_regulator_data {
++	int id;
++	struct regulator_init_data *initdata;
++	struct device_node *reg_node;
++};
++
++int fp9931_reg_read(struct i2c_client *client, int reg_num, u8 *reg_val);
++int fp9931_reg_write(struct i2c_client *client, int reg_num, u8 reg_val);
++#endif
+diff --git a/include/linux/regulator/pca9450.h b/include/linux/regulator/pca9450.h
+index 71902f41c..256c360a0 100644
+--- a/include/linux/regulator/pca9450.h
++++ b/include/linux/regulator/pca9450.h
+@@ -9,6 +9,7 @@
+ enum pca9450_chip_type {
+ 	PCA9450_TYPE_PCA9450A = 0,
+ 	PCA9450_TYPE_PCA9450BC,
++	PCA9450_TYPE_PCA9451A,
+ 	PCA9450_TYPE_AMOUNT,
+ };
+ 
+-- 
+2.25.1
+

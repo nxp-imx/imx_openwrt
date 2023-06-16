@@ -1,0 +1,3846 @@
+From 31df2ccdf6cf9b4792a5b1f3495a34ae1bf3bce0 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Tue, 30 May 2023 16:55:20 +0800
+Subject: [PATCH 20/20] fix the compiling issue
+
+---
+ drivers/mailbox/imx-mailbox.c                 |  450 ++++++-
+ drivers/mmc/host/mtk-sd.c                     |    6 +-
+ include/dt-bindings/clock/imx8-clock.h        |  203 +--
+ include/dt-bindings/clock/imx8mn-clock.h      |   12 +-
+ include/dt-bindings/clock/imx8mp-clock.h      |  199 ++-
+ include/dt-bindings/clock/imx8mq-clock.h      |    3 +-
+ include/dt-bindings/clock/imx8ulp-clock.h     |  262 ++++
+ include/dt-bindings/clock/imx93-clock.h       |  204 +++
+ include/dt-bindings/clock/s32v234-clock.h     |   65 +
+ include/dt-bindings/firmware/imx/rsrc.h       |  310 +++--
+ include/dt-bindings/pinctrl/pads-imx8qxp.h    |   25 +
+ include/dt-bindings/pinctrl/s32v234-pinctrl.h | 1173 +++++++++++++++++
+ include/dt-bindings/power/imx8ulp-power.h     |   26 +
+ include/dt-bindings/power/imx93-power.h       |   18 +
+ include/dt-bindings/reset/imx8mm-dispmix.h    |   49 +
+ include/dt-bindings/reset/imx8mn-dispmix.h    |   47 +
+ include/dt-bindings/reset/imx8mp-reset.h      |   48 +-
+ include/dt-bindings/reset/imx8mq-reset.h      |    4 +-
+ include/dt-bindings/reset/imx8ulp-pcc-reset.h |   59 +
+ include/dt-bindings/reset/imx8ulp-sim-reset.h |   16 +
+ include/dt-bindings/soc/imx8_hsio.h           |   31 +
+ include/linux/mailbox_client.h                |    1 +
+ 22 files changed, 2825 insertions(+), 386 deletions(-)
+ create mode 100644 include/dt-bindings/clock/imx8ulp-clock.h
+ create mode 100644 include/dt-bindings/clock/imx93-clock.h
+ create mode 100644 include/dt-bindings/clock/s32v234-clock.h
+ create mode 100644 include/dt-bindings/pinctrl/s32v234-pinctrl.h
+ create mode 100644 include/dt-bindings/power/imx8ulp-power.h
+ create mode 100644 include/dt-bindings/power/imx93-power.h
+ create mode 100644 include/dt-bindings/reset/imx8mm-dispmix.h
+ create mode 100644 include/dt-bindings/reset/imx8mn-dispmix.h
+ create mode 100644 include/dt-bindings/reset/imx8ulp-pcc-reset.h
+ create mode 100644 include/dt-bindings/reset/imx8ulp-sim-reset.h
+ create mode 100644 include/dt-bindings/soc/imx8_hsio.h
+
+diff --git a/drivers/mailbox/imx-mailbox.c b/drivers/mailbox/imx-mailbox.c
+index 850d4004c..d4a31d97e 100644
+--- a/drivers/mailbox/imx-mailbox.c
++++ b/drivers/mailbox/imx-mailbox.c
+@@ -1,13 +1,16 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+  * Copyright (c) 2018 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
++ * Copyright 2022 NXP, Peng Fan <peng.fan@nxp.com>
+  */
+ 
+ #include <linux/clk.h>
+ #include <linux/firmware/imx/ipc.h>
++#include <linux/firmware/imx/s4.h>
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
++#include <linux/jiffies.h>
+ #include <linux/kernel.h>
+ #include <linux/mailbox_controller.h>
+ #include <linux/module.h>
+@@ -19,13 +22,19 @@
+ #define IMX_MU_CHANS		16
+ /* TX0/RX0/RXDB[0-3] */
+ #define IMX_MU_SCU_CHANS	6
++/* TX0/RX0 */
++#define IMX_MU_S4_CHANS		2
+ #define IMX_MU_CHAN_NAME_SIZE	20
+ 
++#define IMX_MU_SECO_TX_TOUT (msecs_to_jiffies(3000))
++#define IMX_MU_SECO_RX_TOUT (msecs_to_jiffies(3000))
++
++/* Please not change TX & RX */
+ enum imx_mu_chan_type {
+-	IMX_MU_TYPE_TX,		/* Tx */
+-	IMX_MU_TYPE_RX,		/* Rx */
+-	IMX_MU_TYPE_TXDB,	/* Tx doorbell */
+-	IMX_MU_TYPE_RXDB,	/* Rx doorbell */
++	IMX_MU_TYPE_TX		= 0, /* Tx */
++	IMX_MU_TYPE_RX		= 1, /* Rx */
++	IMX_MU_TYPE_TXDB	= 2, /* Tx doorbell */
++	IMX_MU_TYPE_RXDB	= 3, /* Rx doorbell */
+ };
+ 
+ enum imx_mu_xcr {
+@@ -45,7 +54,12 @@ enum imx_mu_xsr {
+ 
+ struct imx_sc_rpc_msg_max {
+ 	struct imx_sc_rpc_msg hdr;
+-	u32 data[7];
++	u32 data[30];
++};
++
++struct imx_s4_rpc_msg_max {
++	struct imx_s4_rpc_msg hdr;
++	u32 data[254];
+ };
+ 
+ struct imx_mu_con_priv {
+@@ -59,6 +73,7 @@ struct imx_mu_con_priv {
+ struct imx_mu_priv {
+ 	struct device		*dev;
+ 	void __iomem		*base;
++	void			*msg;
+ 	spinlock_t		xcr_lock; /* control register lock */
+ 
+ 	struct mbox_controller	mbox;
+@@ -67,7 +82,7 @@ struct imx_mu_priv {
+ 	struct imx_mu_con_priv  con_priv[IMX_MU_CHANS];
+ 	const struct imx_mu_dcfg	*dcfg;
+ 	struct clk		*clk;
+-	int			irq;
++	int			irq[IMX_MU_CHANS];
+ 	bool			suspend;
+ 
+ 	u32 xcr[4];
+@@ -78,31 +93,35 @@ struct imx_mu_priv {
+ enum imx_mu_type {
+ 	IMX_MU_V1,
+ 	IMX_MU_V2,
++	IMX_MU_V2_S4 = BIT(15),
++	IMX_MU_V2_IRQ = BIT(16),
+ };
+ 
+ struct imx_mu_dcfg {
+ 	int (*tx)(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp, void *data);
+ 	int (*rx)(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp);
++	int (*rxdb)(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp);
+ 	void (*init)(struct imx_mu_priv *priv);
+ 	enum imx_mu_type type;
+ 	u32	xTR;		/* Transmit Register0 */
+ 	u32	xRR;		/* Receive Register0 */
+ 	u32	xSR[4];		/* Status Registers */
+ 	u32	xCR[4];		/* Control Registers */
++	u32	xBUF;		/* MU Buffer Register */
+ };
+ 
+-#define IMX_MU_xSR_GIPn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(28 + (3 - (x))))
+-#define IMX_MU_xSR_RFn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(24 + (3 - (x))))
+-#define IMX_MU_xSR_TEn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(20 + (3 - (x))))
++#define IMX_MU_xSR_GIPn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(28 + (3 - (x))))
++#define IMX_MU_xSR_RFn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(24 + (3 - (x))))
++#define IMX_MU_xSR_TEn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(20 + (3 - (x))))
+ 
+ /* General Purpose Interrupt Enable */
+-#define IMX_MU_xCR_GIEn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(28 + (3 - (x))))
++#define IMX_MU_xCR_GIEn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(28 + (3 - (x))))
+ /* Receive Interrupt Enable */
+-#define IMX_MU_xCR_RIEn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(24 + (3 - (x))))
++#define IMX_MU_xCR_RIEn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(24 + (3 - (x))))
+ /* Transmit Interrupt Enable */
+-#define IMX_MU_xCR_TIEn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(20 + (3 - (x))))
++#define IMX_MU_xCR_TIEn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(20 + (3 - (x))))
+ /* General Purpose Interrupt Request */
+-#define IMX_MU_xCR_GIRn(type, x) (type == IMX_MU_V2 ? BIT(x) : BIT(16 + (3 - (x))))
++#define IMX_MU_xCR_GIRn(type, x) (type & IMX_MU_V2 ? BIT(x) : BIT(16 + (3 - (x))))
+ 
+ 
+ static struct imx_mu_priv *to_imx_mu_priv(struct mbox_controller *mbox)
+@@ -110,6 +129,16 @@ static struct imx_mu_priv *to_imx_mu_priv(struct mbox_controller *mbox)
+ 	return container_of(mbox, struct imx_mu_priv, mbox);
+ }
+ 
++uint8_t *get_mu_buf(struct mbox_chan *chan)
++{
++	uint8_t *addr;
++	struct imx_mu_priv *priv = to_imx_mu_priv(chan->mbox);
++
++	addr = priv->base + priv->dcfg->xBUF;
++	return addr;
++}
++EXPORT_SYMBOL(get_mu_buf);
++
+ static void imx_mu_write(struct imx_mu_priv *priv, u32 val, u32 offs)
+ {
+ 	iowrite32(val, priv->base + offs);
+@@ -120,6 +149,55 @@ static u32 imx_mu_read(struct imx_mu_priv *priv, u32 offs)
+ 	return ioread32(priv->base + offs);
+ }
+ 
++static int imx_mu_tx_waiting_write(struct imx_mu_priv *priv, u32 val, u32 idx)
++{
++	u64 timeout_time = get_jiffies_64() + IMX_MU_SECO_TX_TOUT;
++	u32 status;
++	u32 can_write;
++
++	dev_dbg(priv->dev, "Trying to write %.8x to idx %d\n", val, idx);
++
++	do {
++		status = imx_mu_read(priv, priv->dcfg->xSR[IMX_MU_TSR]);
++		can_write = status & IMX_MU_xSR_TEn(priv->dcfg->type, idx % 4);
++	} while (!can_write && time_is_after_jiffies64(timeout_time));
++
++	if (!can_write) {
++		dev_err(priv->dev, "timeout trying to write %.8x at %d(%.8x)\n",
++			val, idx, status);
++		return -ETIME;
++	}
++
++	imx_mu_write(priv, val, priv->dcfg->xTR + (idx % 4) * 4);
++
++	return 0;
++}
++
++static int imx_mu_rx_waiting_read(struct imx_mu_priv *priv, u32 *val, u32 idx)
++{
++	u64 timeout_time = get_jiffies_64() + IMX_MU_SECO_RX_TOUT;
++	u32 status;
++	u32 can_read;
++
++	dev_dbg(priv->dev, "Trying to read from idx %d\n", idx);
++
++	do {
++		status = imx_mu_read(priv, priv->dcfg->xSR[IMX_MU_RSR]);
++		can_read = status & IMX_MU_xSR_RFn(priv->dcfg->type, idx % 4);
++	} while (!can_read && time_is_after_jiffies64(timeout_time));
++
++	if (!can_read) {
++		dev_err(priv->dev, "timeout trying to read idx %d (%.8x)\n",
++			idx, status);
++		return -ETIME;
++	}
++
++	*val = imx_mu_read(priv, priv->dcfg->xRR + (idx % 4) * 4);
++	dev_dbg(priv->dev, "Read %.8x\n", *val);
++
++	return 0;
++}
++
+ static u32 imx_mu_xcr_rmw(struct imx_mu_priv *priv, enum imx_mu_xcr type, u32 set, u32 clr)
+ {
+ 	unsigned long flags;
+@@ -169,14 +247,32 @@ static int imx_mu_generic_rx(struct imx_mu_priv *priv,
+ 	return 0;
+ }
+ 
+-static int imx_mu_scu_tx(struct imx_mu_priv *priv,
+-			 struct imx_mu_con_priv *cp,
+-			 void *data)
++static int imx_mu_generic_rxdb(struct imx_mu_priv *priv,
++			       struct imx_mu_con_priv *cp)
++{
++	imx_mu_write(priv, IMX_MU_xSR_GIPn(priv->dcfg->type, cp->idx),
++		     priv->dcfg->xSR[IMX_MU_GSR]);
++	mbox_chan_received_data(cp->chan, NULL);
++
++	return 0;
++}
++
++static int imx_mu_specific_tx(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp, void *data)
+ {
+-	struct imx_sc_rpc_msg_max *msg = data;
+ 	u32 *arg = data;
+ 	int i, ret;
+ 	u32 xsr;
++	u32 size, max_size, num_tr;
++
++	if (priv->dcfg->type & IMX_MU_V2_S4) {
++		size = ((struct imx_s4_rpc_msg_max *)data)->hdr.size;
++		max_size = sizeof(struct imx_s4_rpc_msg_max);
++		num_tr = 8;
++	} else {
++		size = ((struct imx_sc_rpc_msg_max *)data)->hdr.size;
++		max_size = sizeof(struct imx_sc_rpc_msg_max);
++		num_tr = 4;
++	}
+ 
+ 	switch (cp->type) {
+ 	case IMX_MU_TYPE_TX:
+@@ -185,27 +281,27 @@ static int imx_mu_scu_tx(struct imx_mu_priv *priv,
+ 		 * sizeof yields bytes.
+ 		 */
+ 
+-		if (msg->hdr.size > sizeof(*msg) / 4) {
++		if (size > max_size / 4) {
+ 			/*
+ 			 * The real message size can be different to
+-			 * struct imx_sc_rpc_msg_max size
++			 * struct imx_sc_rpc_msg_max/imx_s4_rpc_msg_max size
+ 			 */
+-			dev_err(priv->dev, "Maximal message size (%zu bytes) exceeded on TX; got: %i bytes\n", sizeof(*msg), msg->hdr.size << 2);
++			dev_err(priv->dev, "Maximal message size (%u bytes) exceeded on TX; got: %i bytes\n", max_size, size << 2);
+ 			return -EINVAL;
+ 		}
+ 
+-		for (i = 0; i < 4 && i < msg->hdr.size; i++)
+-			imx_mu_write(priv, *arg++, priv->dcfg->xTR + (i % 4) * 4);
+-		for (; i < msg->hdr.size; i++) {
++		for (i = 0; i < num_tr && i < size; i++)
++			imx_mu_write(priv, *arg++, priv->dcfg->xTR + (i % num_tr) * 4);
++		for (; i < size; i++) {
+ 			ret = readl_poll_timeout(priv->base + priv->dcfg->xSR[IMX_MU_TSR],
+ 						 xsr,
+-						 xsr & IMX_MU_xSR_TEn(priv->dcfg->type, i % 4),
+-						 0, 100);
++						 xsr & IMX_MU_xSR_TEn(priv->dcfg->type, i % num_tr),
++						 0, 5 * USEC_PER_SEC);
+ 			if (ret) {
+ 				dev_err(priv->dev, "Send data index: %d timeout\n", i);
+ 				return ret;
+ 			}
+-			imx_mu_write(priv, *arg++, priv->dcfg->xTR + (i % 4) * 4);
++			imx_mu_write(priv, *arg++, priv->dcfg->xTR + (i % num_tr) * 4);
+ 		}
+ 
+ 		imx_mu_xcr_rmw(priv, IMX_MU_TCR, IMX_MU_xCR_TIEn(priv->dcfg->type, cp->idx), 0);
+@@ -218,38 +314,166 @@ static int imx_mu_scu_tx(struct imx_mu_priv *priv,
+ 	return 0;
+ }
+ 
+-static int imx_mu_scu_rx(struct imx_mu_priv *priv,
+-			 struct imx_mu_con_priv *cp)
++static int imx_mu_specific_rx(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp)
+ {
+-	struct imx_sc_rpc_msg_max msg;
+-	u32 *data = (u32 *)&msg;
++	u32 *data;
+ 	int i, ret;
+ 	u32 xsr;
++	u32 size, max_size;
++
++	data = (u32 *)priv->msg;
+ 
+ 	imx_mu_xcr_rmw(priv, IMX_MU_RCR, 0, IMX_MU_xCR_RIEn(priv->dcfg->type, 0));
+ 	*data++ = imx_mu_read(priv, priv->dcfg->xRR);
+ 
+-	if (msg.hdr.size > sizeof(msg) / 4) {
+-		dev_err(priv->dev, "Maximal message size (%zu bytes) exceeded on RX; got: %i bytes\n", sizeof(msg), msg.hdr.size << 2);
++	if (priv->dcfg->type & IMX_MU_V2_S4) {
++		size = ((struct imx_s4_rpc_msg_max *)priv->msg)->hdr.size;
++		max_size = sizeof(struct imx_s4_rpc_msg_max);
++	} else {
++		size = ((struct imx_sc_rpc_msg_max *)priv->msg)->hdr.size;
++		max_size = sizeof(struct imx_sc_rpc_msg_max);
++	}
++
++	if (size > max_size / 4) {
++		dev_err(priv->dev, "Maximal message size (%u bytes) exceeded on RX; got: %i bytes\n", max_size, size << 2);
+ 		return -EINVAL;
+ 	}
+ 
+-	for (i = 1; i < msg.hdr.size; i++) {
++	for (i = 1; i < size; i++) {
+ 		ret = readl_poll_timeout(priv->base + priv->dcfg->xSR[IMX_MU_RSR], xsr,
+-					 xsr & IMX_MU_xSR_RFn(priv->dcfg->type, i % 4), 0, 100);
++					 xsr & IMX_MU_xSR_RFn(priv->dcfg->type, i % 4), 0, 5 * USEC_PER_SEC);
+ 		if (ret) {
+-			dev_err(priv->dev, "timeout read idx %d\n", i);
++			dev_err(priv->dev, "Send data index: %d timeout, \n", i);
+ 			return ret;
+ 		}
+ 		*data++ = imx_mu_read(priv, priv->dcfg->xRR + (i % 4) * 4);
+ 	}
+ 
+ 	imx_mu_xcr_rmw(priv, IMX_MU_RCR, IMX_MU_xCR_RIEn(priv->dcfg->type, 0), 0);
+-	mbox_chan_received_data(cp->chan, (void *)&msg);
++	mbox_chan_received_data(cp->chan, (void *)priv->msg);
+ 
+ 	return 0;
+ }
+ 
++static int imx_mu_seco_tx(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp,
++			  void *data)
++{
++	struct imx_sc_rpc_msg_max *msg = data;
++	u32 *arg = data;
++	u32 byte_size;
++	int err;
++	int i;
++
++	dev_dbg(priv->dev, "Sending message\n");
++
++	switch (cp->type) {
++	case IMX_MU_TYPE_TXDB:
++		byte_size = msg->hdr.size * sizeof(u32);
++		if (byte_size > sizeof(*msg)) {
++			/*
++			 * The real message size can be different to
++			 * struct imx_sc_rpc_msg_max size
++			 */
++			dev_err(priv->dev,
++				"Exceed max msg size (%zu) on TX, got: %i\n",
++				sizeof(*msg), byte_size);
++			return -EINVAL;
++		}
++
++		print_hex_dump_debug("from client ", DUMP_PREFIX_OFFSET, 4, 4,
++				     data, byte_size, false);
++
++		/* Send first word */
++		dev_dbg(priv->dev, "Sending header\n");
++		imx_mu_write(priv, *arg++, priv->dcfg->xTR);
++
++		/* Send signaling */
++		dev_dbg(priv->dev, "Sending signaling\n");
++		imx_mu_xcr_rmw(priv, IMX_MU_GCR,
++			       IMX_MU_xCR_GIRn(priv->dcfg->type, cp->idx), 0);
++
++		/* Send words to fill the mailbox */
++		for (i = 1; i < 4 && i < msg->hdr.size; i++) {
++			dev_dbg(priv->dev, "Sending word %d\n", i);
++			imx_mu_write(priv, *arg++,
++				     priv->dcfg->xTR + (i % 4) * 4);
++		}
++
++		/* Send rest of message waiting for remote read */
++		for (; i < msg->hdr.size; i++) {
++			dev_dbg(priv->dev, "Sending word %d\n", i);
++			err = imx_mu_tx_waiting_write(priv, *arg++, i);
++			if (err) {
++				dev_err(priv->dev, "Timeout tx %d\n", i);
++				return err;
++			}
++		}
++
++		/* Simulate hack for mbox framework */
++		tasklet_schedule(&cp->txdb_tasklet);
++
++		break;
++	default:
++		dev_warn_ratelimited(priv->dev,
++				     "Send data on wrong channel type: %d\n",
++				     cp->type);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int imx_mu_seco_rxdb(struct imx_mu_priv *priv, struct imx_mu_con_priv *cp)
++{
++	struct imx_sc_rpc_msg_max msg;
++	u32 *data = (u32 *)&msg;
++	u32 byte_size;
++	int err = 0;
++	int i;
++
++	dev_dbg(priv->dev, "Receiving message\n");
++
++	/* Read header */
++	dev_dbg(priv->dev, "Receiving header\n");
++	*data++ = imx_mu_read(priv, priv->dcfg->xRR);
++	byte_size = msg.hdr.size * sizeof(u32);
++	if (byte_size > sizeof(msg)) {
++		dev_err(priv->dev, "Exceed max msg size (%zu) on RX, got: %i\n",
++			sizeof(msg), byte_size);
++		err = -EINVAL;
++		goto error;
++	}
++
++	/* Read message waiting they are written */
++	for (i = 1; i < msg.hdr.size; i++) {
++		dev_dbg(priv->dev, "Receiving word %d\n", i);
++		err = imx_mu_rx_waiting_read(priv, data++, i);
++		if (err) {
++			dev_err(priv->dev, "Timeout rx %d\n", i);
++			goto error;
++		}
++	}
++
++	/* Clear GIP */
++	imx_mu_write(priv, IMX_MU_xSR_GIPn(priv->dcfg->type, cp->idx),
++		     priv->dcfg->xSR[IMX_MU_GSR]);
++
++	print_hex_dump_debug("to client ", DUMP_PREFIX_OFFSET, 4, 4,
++			     &msg, byte_size, false);
++
++	/* send data to client */
++	dev_dbg(priv->dev, "Sending message to client\n");
++	mbox_chan_received_data(cp->chan, (void *)&msg);
++
++	goto exit;
++
++error:
++	mbox_chan_received_data(cp->chan, ERR_PTR(err));
++
++exit:
++	return err;
++}
++
+ static void imx_mu_txdb_tasklet(unsigned long data)
+ {
+ 	struct imx_mu_con_priv *cp = (struct imx_mu_con_priv *)data;
+@@ -301,16 +525,14 @@ static irqreturn_t imx_mu_isr(int irq, void *p)
+ 		priv->dcfg->rx(priv, cp);
+ 	} else if ((val == IMX_MU_xSR_GIPn(priv->dcfg->type, cp->idx)) &&
+ 		   (cp->type == IMX_MU_TYPE_RXDB)) {
+-		imx_mu_write(priv, IMX_MU_xSR_GIPn(priv->dcfg->type, cp->idx),
+-			     priv->dcfg->xSR[IMX_MU_GSR]);
+-		mbox_chan_received_data(chan, NULL);
++		priv->dcfg->rxdb(priv, cp);
+ 	} else {
+ 		dev_warn_ratelimited(priv->dev, "Not handled interrupt\n");
+ 		return IRQ_NONE;
+ 	}
+ 
+ 	if (priv->suspend)
+-		pm_system_wakeup();
++		pm_system_irq_wakeup(priv->irq[0]);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -327,7 +549,7 @@ static int imx_mu_startup(struct mbox_chan *chan)
+ {
+ 	struct imx_mu_priv *priv = to_imx_mu_priv(chan->mbox);
+ 	struct imx_mu_con_priv *cp = chan->con_priv;
+-	unsigned long irq_flag = IRQF_SHARED;
++	unsigned long irq_flag = 0;
+ 	int ret;
+ 
+ 	pm_runtime_get_sync(priv->dev);
+@@ -342,11 +564,12 @@ static int imx_mu_startup(struct mbox_chan *chan)
+ 	if (!priv->dev->pm_domain)
+ 		irq_flag |= IRQF_NO_SUSPEND;
+ 
+-	ret = request_irq(priv->irq, imx_mu_isr, irq_flag,
+-			  cp->irq_desc, chan);
++	if (!(priv->dcfg->type & IMX_MU_V2_IRQ))
++		irq_flag |= IRQF_SHARED;
++
++	ret = request_irq(priv->irq[cp->type], imx_mu_isr, irq_flag, cp->irq_desc, chan);
+ 	if (ret) {
+-		dev_err(priv->dev,
+-			"Unable to acquire IRQ %d\n", priv->irq);
++		dev_err(priv->dev, "Unable to acquire IRQ %d\n", priv->irq[cp->type]);
+ 		return ret;
+ 	}
+ 
+@@ -389,7 +612,7 @@ static void imx_mu_shutdown(struct mbox_chan *chan)
+ 		break;
+ 	}
+ 
+-	free_irq(priv->irq, chan);
++	free_irq(priv->irq[cp->type], chan);
+ 	pm_runtime_put_sync(priv->dev);
+ }
+ 
+@@ -399,8 +622,8 @@ static const struct mbox_chan_ops imx_mu_ops = {
+ 	.shutdown = imx_mu_shutdown,
+ };
+ 
+-static struct mbox_chan *imx_mu_scu_xlate(struct mbox_controller *mbox,
+-					  const struct of_phandle_args *sp)
++static struct mbox_chan *imx_mu_specific_xlate(struct mbox_controller *mbox,
++					       const struct of_phandle_args *sp)
+ {
+ 	u32 type, idx, chan;
+ 
+@@ -457,6 +680,28 @@ static struct mbox_chan * imx_mu_xlate(struct mbox_controller *mbox,
+ 	return &mbox->chans[chan];
+ }
+ 
++static struct mbox_chan *imx_mu_seco_xlate(struct mbox_controller *mbox,
++					   const struct of_phandle_args *sp)
++{
++	u32 type;
++
++	if (sp->args_count < 1) {
++		dev_err(mbox->dev, "Invalid argument count %d\n",
++			sp->args_count);
++		return ERR_PTR(-EINVAL);
++	}
++
++	type = sp->args[0]; /* channel type */
++
++	/* Only supports TXDB and RXDB */
++	if (type == IMX_MU_TYPE_TX || type == IMX_MU_TYPE_RX) {
++		dev_err(mbox->dev, "Invalid type: %d\n", type);
++		return ERR_PTR(-EINVAL);
++	}
++
++	return imx_mu_xlate(mbox, sp);
++}
++
+ static void imx_mu_init_generic(struct imx_mu_priv *priv)
+ {
+ 	unsigned int i;
+@@ -483,11 +728,12 @@ static void imx_mu_init_generic(struct imx_mu_priv *priv)
+ 		imx_mu_write(priv, 0, priv->dcfg->xCR[i]);
+ }
+ 
+-static void imx_mu_init_scu(struct imx_mu_priv *priv)
++static void imx_mu_init_specific(struct imx_mu_priv *priv)
+ {
+ 	unsigned int i;
++	int num_chans = priv->dcfg->type & IMX_MU_V2_S4 ? IMX_MU_S4_CHANS : IMX_MU_SCU_CHANS;
+ 
+-	for (i = 0; i < IMX_MU_SCU_CHANS; i++) {
++	for (i = 0; i < num_chans; i++) {
+ 		struct imx_mu_con_priv *cp = &priv->con_priv[i];
+ 
+ 		cp->idx = i < 2 ? 0 : i - 2;
+@@ -498,21 +744,28 @@ static void imx_mu_init_scu(struct imx_mu_priv *priv)
+ 			 "imx_mu_chan[%i-%i]", cp->type, cp->idx);
+ 	}
+ 
+-	priv->mbox.num_chans = IMX_MU_SCU_CHANS;
+-	priv->mbox.of_xlate = imx_mu_scu_xlate;
++	priv->mbox.num_chans = num_chans;
++	priv->mbox.of_xlate = imx_mu_specific_xlate;
+ 
+ 	/* Set default MU configuration */
+ 	for (i = 0; i < IMX_MU_xCR_MAX; i++)
+ 		imx_mu_write(priv, 0, priv->dcfg->xCR[i]);
+ }
+ 
++static void imx_mu_init_seco(struct imx_mu_priv *priv)
++{
++	imx_mu_init_generic(priv);
++	priv->mbox.of_xlate = imx_mu_seco_xlate;
++}
++
+ static int imx_mu_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct device_node *np = dev->of_node;
+ 	struct imx_mu_priv *priv;
+ 	const struct imx_mu_dcfg *dcfg;
+-	int ret;
++	int i, ret;
++	u32 size;
+ 
+ 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+@@ -524,14 +777,34 @@ static int imx_mu_probe(struct platform_device *pdev)
+ 	if (IS_ERR(priv->base))
+ 		return PTR_ERR(priv->base);
+ 
+-	priv->irq = platform_get_irq(pdev, 0);
+-	if (priv->irq < 0)
+-		return priv->irq;
+-
+ 	dcfg = of_device_get_match_data(dev);
+ 	if (!dcfg)
+ 		return -EINVAL;
+ 	priv->dcfg = dcfg;
++	if (priv->dcfg->type & IMX_MU_V2_IRQ) {
++		priv->irq[IMX_MU_TYPE_TX] = platform_get_irq_byname(pdev, "tx");
++		if (priv->irq[IMX_MU_TYPE_TX] < 0)
++			return priv->irq[IMX_MU_TYPE_TX];
++		priv->irq[IMX_MU_TYPE_RX] = platform_get_irq_byname(pdev, "rx");
++		if (priv->irq[IMX_MU_TYPE_RX] < 0)
++			return priv->irq[IMX_MU_TYPE_RX];
++	} else {
++		ret = platform_get_irq(pdev, 0);
++		if (ret < 0)
++			return ret;
++
++		for (i = 0; i < IMX_MU_CHANS; i++)
++			priv->irq[i] = ret;
++	}
++
++	if (priv->dcfg->type & IMX_MU_V2_S4)
++		size = sizeof(struct imx_s4_rpc_msg_max);
++	else
++		size = sizeof(struct imx_sc_rpc_msg_max);
++
++	priv->msg = devm_kzalloc(dev, size, GFP_KERNEL);
++	if (IS_ERR(priv->msg))
++		return PTR_ERR(priv->msg);
+ 
+ 	priv->clk = devm_clk_get(dev, NULL);
+ 	if (IS_ERR(priv->clk)) {
+@@ -600,6 +873,7 @@ static int imx_mu_remove(struct platform_device *pdev)
+ static const struct imx_mu_dcfg imx_mu_cfg_imx6sx = {
+ 	.tx	= imx_mu_generic_tx,
+ 	.rx	= imx_mu_generic_rx,
++	.rxdb	= imx_mu_generic_rxdb,
+ 	.init	= imx_mu_init_generic,
+ 	.xTR	= 0x0,
+ 	.xRR	= 0x10,
+@@ -610,6 +884,7 @@ static const struct imx_mu_dcfg imx_mu_cfg_imx6sx = {
+ static const struct imx_mu_dcfg imx_mu_cfg_imx7ulp = {
+ 	.tx	= imx_mu_generic_tx,
+ 	.rx	= imx_mu_generic_rx,
++	.rxdb	= imx_mu_generic_rxdb,
+ 	.init	= imx_mu_init_generic,
+ 	.xTR	= 0x20,
+ 	.xRR	= 0x40,
+@@ -620,7 +895,9 @@ static const struct imx_mu_dcfg imx_mu_cfg_imx7ulp = {
+ static const struct imx_mu_dcfg imx_mu_cfg_imx8ulp = {
+ 	.tx	= imx_mu_generic_tx,
+ 	.rx	= imx_mu_generic_rx,
++	.rxdb	= imx_mu_generic_rxdb,
+ 	.init	= imx_mu_init_generic,
++	.rxdb	= imx_mu_generic_rxdb,
+ 	.type	= IMX_MU_V2,
+ 	.xTR	= 0x200,
+ 	.xRR	= 0x280,
+@@ -628,21 +905,59 @@ static const struct imx_mu_dcfg imx_mu_cfg_imx8ulp = {
+ 	.xCR	= {0x110, 0x114, 0x120, 0x128},
+ };
+ 
++static const struct imx_mu_dcfg imx_mu_cfg_imx8ulp_s4 = {
++	.tx	= imx_mu_specific_tx,
++	.rx	= imx_mu_specific_rx,
++	.init	= imx_mu_init_specific,
++	.type	= IMX_MU_V2 | IMX_MU_V2_S4,
++	.xTR	= 0x200,
++	.xRR	= 0x280,
++	.xSR	= {0xC, 0x118, 0x124, 0x12C},
++	.xCR	= {0x110, 0x114, 0x120, 0x128},
++};
++
++static const struct imx_mu_dcfg imx_mu_cfg_imx93_s4 = {
++	.tx	= imx_mu_specific_tx,
++	.rx	= imx_mu_specific_rx,
++	.init	= imx_mu_init_specific,
++	.type	= IMX_MU_V2 | IMX_MU_V2_S4 | IMX_MU_V2_IRQ,
++	.xTR	= 0x200,
++	.xRR	= 0x280,
++	.xSR	= {0xC, 0x118, 0x124, 0x12C},
++	.xCR	= {0x110, 0x114, 0x120, 0x128},
++};
++
+ static const struct imx_mu_dcfg imx_mu_cfg_imx8_scu = {
+-	.tx	= imx_mu_scu_tx,
+-	.rx	= imx_mu_scu_rx,
+-	.init	= imx_mu_init_scu,
++	.tx	= imx_mu_specific_tx,
++	.rx	= imx_mu_specific_rx,
++	.init	= imx_mu_init_specific,
++	.rxdb	= imx_mu_generic_rxdb,
+ 	.xTR	= 0x0,
+ 	.xRR	= 0x10,
+ 	.xSR	= {0x20, 0x20, 0x20, 0x20},
+ 	.xCR	= {0x24, 0x24, 0x24, 0x24},
+ };
+ 
++static const struct imx_mu_dcfg imx_mu_cfg_imx8_seco = {
++	.tx	= imx_mu_seco_tx,
++	.rx	= imx_mu_generic_rx,
++	.rxdb	= imx_mu_seco_rxdb,
++	.init	= imx_mu_init_seco,
++	.xTR	= 0x0,
++	.xRR	= 0x10,
++	.xSR	= {0x20, 0x20, 0x20, 0x20},
++	.xCR	= {0x24, 0x24, 0x24, 0x24},
++	.xBUF	= 0x8000,
++};
++
+ static const struct of_device_id imx_mu_dt_ids[] = {
+ 	{ .compatible = "fsl,imx7ulp-mu", .data = &imx_mu_cfg_imx7ulp },
+ 	{ .compatible = "fsl,imx6sx-mu", .data = &imx_mu_cfg_imx6sx },
+ 	{ .compatible = "fsl,imx8ulp-mu", .data = &imx_mu_cfg_imx8ulp },
++	{ .compatible = "fsl,imx8ulp-mu-s4", .data = &imx_mu_cfg_imx8ulp_s4 },
++	{ .compatible = "fsl,imx93-mu-s4", .data = &imx_mu_cfg_imx93_s4 },
+ 	{ .compatible = "fsl,imx8-mu-scu", .data = &imx_mu_cfg_imx8_scu },
++	{ .compatible = "fsl,imx8-mu-seco", .data = &imx_mu_cfg_imx8_seco },
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, imx_mu_dt_ids);
+@@ -722,7 +1037,20 @@ static struct platform_driver imx_mu_driver = {
+ 		.pm = &imx_mu_pm_ops,
+ 	},
+ };
+-module_platform_driver(imx_mu_driver);
++static int __init imx_mu_init(void)
++{
++	int ret;
++
++	ret = platform_driver_register(&imx_mu_driver);
++	if (ret)
++		pr_err("Unable to initialize mu driver\n");
++	else
++		pr_info("imx mu driver is registered.\n");
++
++	return ret;
++}
++
++arch_initcall(imx_mu_init);
+ 
+ MODULE_AUTHOR("Oleksij Rempel <o.rempel@pengutronix.de>");
+ MODULE_DESCRIPTION("Message Unit driver for i.MX");
+diff --git a/drivers/mmc/host/mtk-sd.c b/drivers/mmc/host/mtk-sd.c
+index 9871c19d2..99d8881a7 100644
+--- a/drivers/mmc/host/mtk-sd.c
++++ b/drivers/mmc/host/mtk-sd.c
+@@ -2455,11 +2455,13 @@ static int msdc_of_clock_parse(struct platform_device *pdev,
+ 	if (IS_ERR(host->src_clk_cg))
+ 		host->src_clk_cg = NULL;
+ 
+-	/* If present, always enable for this clock gate */
+-	host->sys_clk_cg = devm_clk_get_optional_enabled(&pdev->dev, "sys_cg");
++	host->sys_clk_cg = devm_clk_get_optional(&pdev->dev, "sys_cg");
+ 	if (IS_ERR(host->sys_clk_cg))
+ 		host->sys_clk_cg = NULL;
+ 
++	/* If present, always enable for this clock gate */
++	clk_prepare_enable(host->sys_clk_cg);
++
+ 	host->bulk_clks[0].id = "pclk_cg";
+ 	host->bulk_clks[1].id = "axi_cg";
+ 	host->bulk_clks[2].id = "ahb_cg";
+diff --git a/include/dt-bindings/clock/imx8-clock.h b/include/dt-bindings/clock/imx8-clock.h
+index 2e60ce4d2..2a1122928 100644
+--- a/include/dt-bindings/clock/imx8-clock.h
++++ b/include/dt-bindings/clock/imx8-clock.h
+@@ -7,161 +7,58 @@
+ #ifndef __DT_BINDINGS_CLOCK_IMX_H
+ #define __DT_BINDINGS_CLOCK_IMX_H
+ 
+-/* LPCG clocks */
++#define IMX_ADMA_ACM_AUD_CLK0_SEL			0
++#define IMX_ADMA_ACM_AUD_CLK0_CLK			1
++#define IMX_ADMA_ACM_AUD_CLK1_SEL			2
++#define IMX_ADMA_ACM_AUD_CLK1_CLK			3
++#define IMX_ADMA_ACM_MCLKOUT0_SEL			4
++#define IMX_ADMA_ACM_MCLKOUT1_SEL			5
++#define IMX_ADMA_ACM_ESAI0_MCLK_SEL			6
++#define IMX_ADMA_ACM_GPT0_MUX_CLK_SEL			7
++#define IMX_ADMA_ACM_GPT1_MUX_CLK_SEL			8
++#define IMX_ADMA_ACM_GPT2_MUX_CLK_SEL			9
++#define IMX_ADMA_ACM_GPT3_MUX_CLK_SEL			10
++#define IMX_ADMA_ACM_GPT4_MUX_CLK_SEL			11
++#define IMX_ADMA_ACM_GPT5_MUX_CLK_SEL			12
++#define IMX_ADMA_ACM_SAI0_MCLK_SEL			13
++#define IMX_ADMA_ACM_SAI1_MCLK_SEL			14
++#define IMX_ADMA_ACM_SAI2_MCLK_SEL			15
++#define IMX_ADMA_ACM_SAI3_MCLK_SEL			16
++#define IMX_ADMA_ACM_SAI4_MCLK_SEL			17
++#define IMX_ADMA_ACM_SAI5_MCLK_SEL			18
++#define IMX_ADMA_ACM_SPDIF0_TX_CLK_SEL			19
++#define IMX_ADMA_ACM_MQS_TX_CLK_SEL			20
++#define IMX_ADMA_ACM_ASRC0_MUX_CLK_SEL			21
++#define IMX_ADMA_ACM_ASRC1_MUX_CLK_SEL			22
+ 
+-/* LSIO SS LPCG */
+-#define IMX_LSIO_LPCG_PWM0_IPG_CLK			0
+-#define IMX_LSIO_LPCG_PWM0_IPG_S_CLK			1
+-#define IMX_LSIO_LPCG_PWM0_IPG_HF_CLK			2
+-#define IMX_LSIO_LPCG_PWM0_IPG_SLV_CLK			3
+-#define IMX_LSIO_LPCG_PWM0_IPG_MSTR_CLK			4
+-#define IMX_LSIO_LPCG_PWM1_IPG_CLK			5
+-#define IMX_LSIO_LPCG_PWM1_IPG_S_CLK			6
+-#define IMX_LSIO_LPCG_PWM1_IPG_HF_CLK			7
+-#define IMX_LSIO_LPCG_PWM1_IPG_SLV_CLK			8
+-#define IMX_LSIO_LPCG_PWM1_IPG_MSTR_CLK			9
+-#define IMX_LSIO_LPCG_PWM2_IPG_CLK			10
+-#define IMX_LSIO_LPCG_PWM2_IPG_S_CLK			11
+-#define IMX_LSIO_LPCG_PWM2_IPG_HF_CLK			12
+-#define IMX_LSIO_LPCG_PWM2_IPG_SLV_CLK			13
+-#define IMX_LSIO_LPCG_PWM2_IPG_MSTR_CLK			14
+-#define IMX_LSIO_LPCG_PWM3_IPG_CLK			15
+-#define IMX_LSIO_LPCG_PWM3_IPG_S_CLK			16
+-#define IMX_LSIO_LPCG_PWM3_IPG_HF_CLK			17
+-#define IMX_LSIO_LPCG_PWM3_IPG_SLV_CLK			18
+-#define IMX_LSIO_LPCG_PWM3_IPG_MSTR_CLK			19
+-#define IMX_LSIO_LPCG_PWM4_IPG_CLK			20
+-#define IMX_LSIO_LPCG_PWM4_IPG_S_CLK			21
+-#define IMX_LSIO_LPCG_PWM4_IPG_HF_CLK			22
+-#define IMX_LSIO_LPCG_PWM4_IPG_SLV_CLK			23
+-#define IMX_LSIO_LPCG_PWM4_IPG_MSTR_CLK			24
+-#define IMX_LSIO_LPCG_PWM5_IPG_CLK			25
+-#define IMX_LSIO_LPCG_PWM5_IPG_S_CLK			26
+-#define IMX_LSIO_LPCG_PWM5_IPG_HF_CLK			27
+-#define IMX_LSIO_LPCG_PWM5_IPG_SLV_CLK			28
+-#define IMX_LSIO_LPCG_PWM5_IPG_MSTR_CLK			29
+-#define IMX_LSIO_LPCG_PWM6_IPG_CLK			30
+-#define IMX_LSIO_LPCG_PWM6_IPG_S_CLK			31
+-#define IMX_LSIO_LPCG_PWM6_IPG_HF_CLK			32
+-#define IMX_LSIO_LPCG_PWM6_IPG_SLV_CLK			33
+-#define IMX_LSIO_LPCG_PWM6_IPG_MSTR_CLK			34
+-#define IMX_LSIO_LPCG_PWM7_IPG_CLK			35
+-#define IMX_LSIO_LPCG_PWM7_IPG_S_CLK			36
+-#define IMX_LSIO_LPCG_PWM7_IPG_HF_CLK			37
+-#define IMX_LSIO_LPCG_PWM7_IPG_SLV_CLK			38
+-#define IMX_LSIO_LPCG_PWM7_IPG_MSTR_CLK			39
+-#define IMX_LSIO_LPCG_GPT0_IPG_CLK			40
+-#define IMX_LSIO_LPCG_GPT0_IPG_S_CLK			41
+-#define IMX_LSIO_LPCG_GPT0_IPG_HF_CLK			42
+-#define IMX_LSIO_LPCG_GPT0_IPG_SLV_CLK			43
+-#define IMX_LSIO_LPCG_GPT0_IPG_MSTR_CLK			44
+-#define IMX_LSIO_LPCG_GPT1_IPG_CLK			45
+-#define IMX_LSIO_LPCG_GPT1_IPG_S_CLK			46
+-#define IMX_LSIO_LPCG_GPT1_IPG_HF_CLK			47
+-#define IMX_LSIO_LPCG_GPT1_IPG_SLV_CLK			48
+-#define IMX_LSIO_LPCG_GPT1_IPG_MSTR_CLK			49
+-#define IMX_LSIO_LPCG_GPT2_IPG_CLK			50
+-#define IMX_LSIO_LPCG_GPT2_IPG_S_CLK			51
+-#define IMX_LSIO_LPCG_GPT2_IPG_HF_CLK			52
+-#define IMX_LSIO_LPCG_GPT2_IPG_SLV_CLK			53
+-#define IMX_LSIO_LPCG_GPT2_IPG_MSTR_CLK			54
+-#define IMX_LSIO_LPCG_GPT3_IPG_CLK			55
+-#define IMX_LSIO_LPCG_GPT3_IPG_S_CLK			56
+-#define IMX_LSIO_LPCG_GPT3_IPG_HF_CLK			57
+-#define IMX_LSIO_LPCG_GPT3_IPG_SLV_CLK			58
+-#define IMX_LSIO_LPCG_GPT3_IPG_MSTR_CLK			59
+-#define IMX_LSIO_LPCG_GPT4_IPG_CLK			60
+-#define IMX_LSIO_LPCG_GPT4_IPG_S_CLK			61
+-#define IMX_LSIO_LPCG_GPT4_IPG_HF_CLK			62
+-#define IMX_LSIO_LPCG_GPT4_IPG_SLV_CLK			63
+-#define IMX_LSIO_LPCG_GPT4_IPG_MSTR_CLK			64
+-#define IMX_LSIO_LPCG_FSPI0_HCLK			65
+-#define IMX_LSIO_LPCG_FSPI0_IPG_CLK			66
+-#define IMX_LSIO_LPCG_FSPI0_IPG_S_CLK			67
+-#define IMX_LSIO_LPCG_FSPI0_IPG_SFCK			68
+-#define IMX_LSIO_LPCG_FSPI1_HCLK			69
+-#define IMX_LSIO_LPCG_FSPI1_IPG_CLK			70
+-#define IMX_LSIO_LPCG_FSPI1_IPG_S_CLK			71
+-#define IMX_LSIO_LPCG_FSPI1_IPG_SFCK			72
++#define IMX_ADMA_EXT_AUD_MCLK0				23
++#define IMX_ADMA_EXT_AUD_MCLK1				24
++#define IMX_ADMA_ESAI0_RX_CLK				25
++#define IMX_ADMA_ESAI0_RX_HF_CLK			26
++#define IMX_ADMA_ESAI0_TX_CLK				27
++#define IMX_ADMA_ESAI0_TX_HF_CLK			28
++#define IMX_ADMA_SPDIF0_RX				29
++#define IMX_ADMA_SAI0_RX_BCLK				30
++#define IMX_ADMA_SAI0_TX_BCLK				31
++#define IMX_ADMA_SAI1_RX_BCLK				32
++#define IMX_ADMA_SAI1_TX_BCLK				33
++#define IMX_ADMA_SAI2_RX_BCLK				34
++#define IMX_ADMA_SAI3_RX_BCLK				35
++#define IMX_ADMA_SAI4_RX_BCLK				36
++#define IMX_ADMA_SAI5_TX_BCLK				37
++#define IMX_ADMA_SAI6_RX_BCLK				38
++#define IMX_ADMA_HDMI_RX_MCLK				39
++#define IMX_ADMA_SPDIF1_RX				41
++#define IMX_ADMA_ESAI1_RX_CLK				42
++#define IMX_ADMA_ESAI1_RX_HF_CLK			43
++#define IMX_ADMA_ESAI1_TX_CLK				44
++#define IMX_ADMA_ESAI1_TX_HF_CLK			45
+ 
+-#define IMX_LSIO_LPCG_CLK_END				73
++#define IMX_ADMA_ACM_ESAI1_MCLK_SEL			46
++#define IMX_ADMA_ACM_SAI6_MCLK_SEL			47
++#define IMX_ADMA_ACM_SAI7_MCLK_SEL			48
++#define IMX_ADMA_ACM_SPDIF1_TX_CLK_SEL			49
+ 
+-/* Connectivity SS LPCG */
+-#define IMX_CONN_LPCG_SDHC0_IPG_CLK			0
+-#define IMX_CONN_LPCG_SDHC0_PER_CLK			1
+-#define IMX_CONN_LPCG_SDHC0_HCLK			2
+-#define IMX_CONN_LPCG_SDHC1_IPG_CLK			3
+-#define IMX_CONN_LPCG_SDHC1_PER_CLK			4
+-#define IMX_CONN_LPCG_SDHC1_HCLK			5
+-#define IMX_CONN_LPCG_SDHC2_IPG_CLK			6
+-#define IMX_CONN_LPCG_SDHC2_PER_CLK			7
+-#define IMX_CONN_LPCG_SDHC2_HCLK			8
+-#define IMX_CONN_LPCG_GPMI_APB_CLK			9
+-#define IMX_CONN_LPCG_GPMI_BCH_APB_CLK			10
+-#define IMX_CONN_LPCG_GPMI_BCH_IO_CLK			11
+-#define IMX_CONN_LPCG_GPMI_BCH_CLK			12
+-#define IMX_CONN_LPCG_APBHDMA_CLK			13
+-#define IMX_CONN_LPCG_ENET0_ROOT_CLK			14
+-#define IMX_CONN_LPCG_ENET0_TX_CLK			15
+-#define IMX_CONN_LPCG_ENET0_AHB_CLK			16
+-#define IMX_CONN_LPCG_ENET0_IPG_S_CLK			17
+-#define IMX_CONN_LPCG_ENET0_IPG_CLK			18
+-
+-#define IMX_CONN_LPCG_ENET1_ROOT_CLK			19
+-#define IMX_CONN_LPCG_ENET1_TX_CLK			20
+-#define IMX_CONN_LPCG_ENET1_AHB_CLK			21
+-#define IMX_CONN_LPCG_ENET1_IPG_S_CLK			22
+-#define IMX_CONN_LPCG_ENET1_IPG_CLK			23
+-
+-#define IMX_CONN_LPCG_CLK_END				24
+-
+-/* ADMA SS LPCG */
+-#define IMX_ADMA_LPCG_UART0_IPG_CLK			0
+-#define IMX_ADMA_LPCG_UART0_BAUD_CLK			1
+-#define IMX_ADMA_LPCG_UART1_IPG_CLK			2
+-#define IMX_ADMA_LPCG_UART1_BAUD_CLK			3
+-#define IMX_ADMA_LPCG_UART2_IPG_CLK			4
+-#define IMX_ADMA_LPCG_UART2_BAUD_CLK			5
+-#define IMX_ADMA_LPCG_UART3_IPG_CLK			6
+-#define IMX_ADMA_LPCG_UART3_BAUD_CLK			7
+-#define IMX_ADMA_LPCG_SPI0_IPG_CLK			8
+-#define IMX_ADMA_LPCG_SPI1_IPG_CLK			9
+-#define IMX_ADMA_LPCG_SPI2_IPG_CLK			10
+-#define IMX_ADMA_LPCG_SPI3_IPG_CLK			11
+-#define IMX_ADMA_LPCG_SPI0_CLK				12
+-#define IMX_ADMA_LPCG_SPI1_CLK				13
+-#define IMX_ADMA_LPCG_SPI2_CLK				14
+-#define IMX_ADMA_LPCG_SPI3_CLK				15
+-#define IMX_ADMA_LPCG_CAN0_IPG_CLK			16
+-#define IMX_ADMA_LPCG_CAN0_IPG_PE_CLK			17
+-#define IMX_ADMA_LPCG_CAN0_IPG_CHI_CLK			18
+-#define IMX_ADMA_LPCG_CAN1_IPG_CLK			19
+-#define IMX_ADMA_LPCG_CAN1_IPG_PE_CLK			20
+-#define IMX_ADMA_LPCG_CAN1_IPG_CHI_CLK			21
+-#define IMX_ADMA_LPCG_CAN2_IPG_CLK			22
+-#define IMX_ADMA_LPCG_CAN2_IPG_PE_CLK			23
+-#define IMX_ADMA_LPCG_CAN2_IPG_CHI_CLK			24
+-#define IMX_ADMA_LPCG_I2C0_CLK				25
+-#define IMX_ADMA_LPCG_I2C1_CLK				26
+-#define IMX_ADMA_LPCG_I2C2_CLK				27
+-#define IMX_ADMA_LPCG_I2C3_CLK				28
+-#define IMX_ADMA_LPCG_I2C0_IPG_CLK			29
+-#define IMX_ADMA_LPCG_I2C1_IPG_CLK			30
+-#define IMX_ADMA_LPCG_I2C2_IPG_CLK			31
+-#define IMX_ADMA_LPCG_I2C3_IPG_CLK			32
+-#define IMX_ADMA_LPCG_FTM0_CLK				33
+-#define IMX_ADMA_LPCG_FTM1_CLK				34
+-#define IMX_ADMA_LPCG_FTM0_IPG_CLK			35
+-#define IMX_ADMA_LPCG_FTM1_IPG_CLK			36
+-#define IMX_ADMA_LPCG_PWM_HI_CLK			37
+-#define IMX_ADMA_LPCG_PWM_IPG_CLK			38
+-#define IMX_ADMA_LPCG_LCD_PIX_CLK			39
+-#define IMX_ADMA_LPCG_LCD_APB_CLK			40
+-#define IMX_ADMA_LPCG_DSP_ADB_CLK			41
+-#define IMX_ADMA_LPCG_DSP_IPG_CLK			42
+-#define IMX_ADMA_LPCG_DSP_CORE_CLK			43
+-#define IMX_ADMA_LPCG_OCRAM_IPG_CLK			44
+-
+-#define IMX_ADMA_LPCG_CLK_END				45
++#define IMX_ADMA_ACM_CLK_END				50
+ 
+ #endif /* __DT_BINDINGS_CLOCK_IMX_H */
+diff --git a/include/dt-bindings/clock/imx8mn-clock.h b/include/dt-bindings/clock/imx8mn-clock.h
+index 1aa462e5c..01e8bab1d 100644
+--- a/include/dt-bindings/clock/imx8mn-clock.h
++++ b/include/dt-bindings/clock/imx8mn-clock.h
+@@ -19,8 +19,7 @@
+ #define IMX8MN_VIDEO_PLL1_REF_SEL		10
+ #define IMX8MN_DRAM_PLL_REF_SEL			11
+ #define IMX8MN_GPU_PLL_REF_SEL			12
+-#define IMX8MN_M7_ALT_PLL_REF_SEL		13
+-#define IMX8MN_VPU_PLL_REF_SEL			IMX8MN_M7_ALT_PLL_REF_SEL
++#define IMX8MN_VPU_PLL_REF_SEL			13
+ #define IMX8MN_ARM_PLL_REF_SEL			14
+ #define IMX8MN_SYS_PLL1_REF_SEL			15
+ #define IMX8MN_SYS_PLL2_REF_SEL			16
+@@ -30,8 +29,7 @@
+ #define IMX8MN_VIDEO_PLL1			20
+ #define IMX8MN_DRAM_PLL				21
+ #define IMX8MN_GPU_PLL				22
+-#define IMX8MN_M7_ALT_PLL			23
+-#define IMX8MN_VPU_PLL				IMX8MN_M7_ALT_PLL
++#define IMX8MN_VPU_PLL				23
+ #define IMX8MN_ARM_PLL				24
+ #define IMX8MN_SYS_PLL1				25
+ #define IMX8MN_SYS_PLL2				26
+@@ -41,8 +39,7 @@
+ #define IMX8MN_VIDEO_PLL1_BYPASS		30
+ #define IMX8MN_DRAM_PLL_BYPASS			31
+ #define IMX8MN_GPU_PLL_BYPASS			32
+-#define IMX8MN_M7_ALT_PLL_BYPASS		33
+-#define IMX8MN_VPU_PLL_BYPASS			IMX8MN_M7_ALT_PLL_BYPASS
++#define IMX8MN_VPU_PLL_BYPASS			33
+ #define IMX8MN_ARM_PLL_BYPASS			34
+ #define IMX8MN_SYS_PLL1_BYPASS			35
+ #define IMX8MN_SYS_PLL2_BYPASS			36
+@@ -52,8 +49,7 @@
+ #define IMX8MN_VIDEO_PLL1_OUT			40
+ #define IMX8MN_DRAM_PLL_OUT			41
+ #define IMX8MN_GPU_PLL_OUT			42
+-#define IMX8MN_M7_ALT_PLL_OUT			43
+-#define IMX8MN_VPU_PLL_OUT			IMX8MN_M7_ALT_PLL_OUT
++#define IMX8MN_VPU_PLL_OUT			43
+ #define IMX8MN_ARM_PLL_OUT			44
+ #define IMX8MN_SYS_PLL1_OUT			45
+ #define IMX8MN_SYS_PLL2_OUT			46
+diff --git a/include/dt-bindings/clock/imx8mp-clock.h b/include/dt-bindings/clock/imx8mp-clock.h
+index 43927a1b9..252820008 100644
+--- a/include/dt-bindings/clock/imx8mp-clock.h
++++ b/include/dt-bindings/clock/imx8mp-clock.h
+@@ -117,7 +117,6 @@
+ #define IMX8MP_CLK_AUDIO_AHB			108
+ #define IMX8MP_CLK_MIPI_DSI_ESC_RX		109
+ #define IMX8MP_CLK_IPG_ROOT			110
+-#define IMX8MP_CLK_IPG_AUDIO_ROOT		111
+ #define IMX8MP_CLK_DRAM_ALT			112
+ #define IMX8MP_CLK_DRAM_APB			113
+ #define IMX8MP_CLK_VPU_G1			114
+@@ -319,68 +318,144 @@
+ #define IMX8MP_CLK_HSIO_AXI			311
+ #define IMX8MP_CLK_MEDIA_ISP			312
+ 
+-#define IMX8MP_CLK_END				313
++#define IMX8MP_CLK_MEDIA_DISP2_PIX		313
++#define IMX8MP_CLK_MEDIA_LDB_ROOT		314
++#define IMX8MP_CLK_AUDIO_AHB_ROOT		315
++#define IMX8MP_CLK_AUDIO_AXI_ROOT		316
++#define IMX8MP_CLK_SAI1_ROOT			317
++#define IMX8MP_CLK_SAI2_ROOT			318
++#define IMX8MP_CLK_SAI3_ROOT			319
++#define IMX8MP_CLK_SAI5_ROOT			320
++#define IMX8MP_CLK_SAI6_ROOT			321
++#define IMX8MP_CLK_SAI7_ROOT			322
++#define IMX8MP_CLK_PDM_ROOT			323
+ 
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_IPG		0
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_MCLK1		1
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_MCLK2		2
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_MCLK3		3
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_IPG		4
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_MCLK1		5
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_MCLK2		6
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_MCLK3		7
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_IPG		8
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_MCLK1		9
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_MCLK2		10
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_MCLK3		11
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_IPG		12
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_MCLK1		13
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_MCLK2		14
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_MCLK3		15
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_IPG		16
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_MCLK1		17
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_MCLK2		18
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_MCLK3		19
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_IPG		20
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_MCLK1		21
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_MCLK2		22
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_MCLK3		23
+-#define IMX8MP_CLK_AUDIOMIX_ASRC_IPG		24
+-#define IMX8MP_CLK_AUDIOMIX_PDM_IPG		25
+-#define IMX8MP_CLK_AUDIOMIX_SDMA2_ROOT		26
+-#define IMX8MP_CLK_AUDIOMIX_SDMA3_ROOT		27
+-#define IMX8MP_CLK_AUDIOMIX_SPBA2_ROOT		28
+-#define IMX8MP_CLK_AUDIOMIX_DSP_ROOT		29
+-#define IMX8MP_CLK_AUDIOMIX_DSPDBG_ROOT		30
+-#define IMX8MP_CLK_AUDIOMIX_EARC_IPG		31
+-#define IMX8MP_CLK_AUDIOMIX_OCRAMA_IPG		32
+-#define IMX8MP_CLK_AUDIOMIX_AUD2HTX_IPG		33
+-#define IMX8MP_CLK_AUDIOMIX_EDMA_ROOT		34
+-#define IMX8MP_CLK_AUDIOMIX_AUDPLL_ROOT		35
+-#define IMX8MP_CLK_AUDIOMIX_MU2_ROOT		36
+-#define IMX8MP_CLK_AUDIOMIX_MU3_ROOT		37
+-#define IMX8MP_CLK_AUDIOMIX_EARC_PHY		38
+-#define IMX8MP_CLK_AUDIOMIX_PDM_ROOT		39
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_MCLK1_SEL	40
+-#define IMX8MP_CLK_AUDIOMIX_SAI1_MCLK2_SEL	41
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_MCLK1_SEL	42
+-#define IMX8MP_CLK_AUDIOMIX_SAI2_MCLK2_SEL	43
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_MCLK1_SEL	44
+-#define IMX8MP_CLK_AUDIOMIX_SAI3_MCLK2_SEL	45
+-#define IMX8MP_CLK_AUDIOMIX_SAI4_MCLK1_SEL	46
+-#define IMX8MP_CLK_AUDIOMIX_SAI4_MCLK2_SEL	47
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_MCLK1_SEL	48
+-#define IMX8MP_CLK_AUDIOMIX_SAI5_MCLK2_SEL	49
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_MCLK1_SEL	50
+-#define IMX8MP_CLK_AUDIOMIX_SAI6_MCLK2_SEL	51
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_MCLK1_SEL	52
+-#define IMX8MP_CLK_AUDIOMIX_SAI7_MCLK2_SEL	53
+-#define IMX8MP_CLK_AUDIOMIX_PDM_SEL		54
+-#define IMX8MP_CLK_AUDIOMIX_SAI_PLL_REF_SEL	55
+-#define IMX8MP_CLK_AUDIOMIX_SAI_PLL		56
+-#define IMX8MP_CLK_AUDIOMIX_SAI_PLL_BYPASS	57
+-#define IMX8MP_CLK_AUDIOMIX_SAI_PLL_OUT		58
++#define IMX8MP_CLK_END				331
+ 
+-#define IMX8MP_CLK_AUDIOMIX_END			59
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_IPG		0
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_MCLK1		1
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_MCLK2		2
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_MCLK3		3
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_IPG		4
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_MCLK1		5
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_MCLK2		6
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_MCLK3		7
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_IPG		8
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_MCLK1		9
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_MCLK2		10
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_MCLK3		11
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_IPG		12
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_MCLK1		13
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_MCLK2		14
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_MCLK3		15
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_IPG		16
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_MCLK1		17
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_MCLK2		18
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_MCLK3		19
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_IPG		20
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_MCLK1		21
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_MCLK2		22
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_MCLK3		23
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_ASRC_IPG		24
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_PDM_IPG		25
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SDMA3_ROOT		27
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SPBA2_ROOT		28
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_DSP_ROOT		29
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_DSPDBG_ROOT		30
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_EARC_IPG		31
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_OCRAMA_IPG		32
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_AUD2HTX_IPG		33
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_EDMA_ROOT		34
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_AUDPLL_ROOT		35
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_MU2_ROOT		36
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_MU3_ROOT		37
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_EARC_PHY		38
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_PDM_ROOT		39
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_MCLK1_SEL	40
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI1_MCLK2_SEL	41
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_MCLK1_SEL	42
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI2_MCLK2_SEL	43
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_MCLK1_SEL	44
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI3_MCLK2_SEL	45
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI4_MCLK1_SEL	46
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI4_MCLK2_SEL	47
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_MCLK1_SEL	48
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI5_MCLK2_SEL	49
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_MCLK1_SEL	50
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI6_MCLK2_SEL	51
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_MCLK1_SEL	52
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI7_MCLK2_SEL	53
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_PDM_SEL		54
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI_PLL_REF_SEL	55
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI_PLL		56
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI_PLL_BYPASS	57
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_SAI_PLL_OUT		58
++
++#define IMX8MP_CLK_AUDIO_BLK_CTRL_END			59
++
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_APB_CLK		0
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_B_CLK		1
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_REF266M_CLK	2
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_XTAL24M_CLK	3
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_XTAL32K_CLK	4
++#define IMX8MP_CLK_HDMI_BLK_CTRL_GLOBAL_TX_PIX_CLK	5
++#define IMX8MP_CLK_HDMI_BLK_CTRL_IRQS_STEER_CLK		6
++#define IMX8MP_CLK_HDMI_BLK_CTRL_NOC_HDMI_CLK		7
++#define IMX8MP_CLK_HDMI_BLK_CTRL_NOC_HDCP_CLK		8
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_APB_CLK		9
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_B_CLK		10
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_PDI_CLK		11
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_PIX_CLK		12
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_SPU_CLK		13
++#define IMX8MP_CLK_HDMI_BLK_CTRL_FDCC_REF_CLK		14
++#define IMX8MP_CLK_HDMI_BLK_CTRL_HRV_MWR_APB_CLK	15
++#define IMX8MP_CLK_HDMI_BLK_CTRL_HRV_MWR_B_CLK		16
++#define IMX8MP_CLK_HDMI_BLK_CTRL_HRV_MWR_CEA_CLK	17
++#define IMX8MP_CLK_HDMI_BLK_CTRL_VSFD_CEA_CLK		18
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_HPI_CLK		19
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_APB_CLK		20
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_CEC_CLK		21
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_ESM_CLK		22
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_GPA_CLK		23
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_PIXEL_CLK		24
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_SFR_CLK		25
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_SKP_CLK		26
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_PREP_CLK		27
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_PHY_APB_CLK		28
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_PHY_INT_CLK		29
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_SEC_MEM_CLK		30
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_TRNG_SKP_CLK	31
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_VID_LINK_PIX_CLK	32
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_TRNG_APB_CLK	33
++#define IMX8MP_CLK_HDMI_BLK_CTRL_HTXPHY_CLK_SEL		34
++#define IMX8MP_CLK_HDMI_BLK_CTRL_LCDIF_CLK_SEL		35
++#define IMX8MP_CLK_HDMI_BLK_CTRL_TX_PIPE_CLK_SEL	36
++
++#define IMX8MP_CLK_HDMI_BLK_CTRL_END			37
++
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_DSI_PCLK		0
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_DSI_CLKREF	1
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_CSI_PCLK		2
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_CSI_ACLK		3
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF_PIXEL		4
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF_APB		5
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_ISI_PROC		6
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_ISI_APB		7
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_BUS_BLK		8
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_CSI2_PCLK	9
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_CSI2_ACLK	10
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF2_PIXEL		11
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF2_APB		12
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_ISP_COR		16
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_ISP_AXI		17
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_ISP_AHB		18
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_DWE_COR		19
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_DWE_AXI		20
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_DWE_AHB		21
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_MIPI_DSI2		22
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF_AXI		23
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_LCDIF2_AXI		24
++
++#define IMX8MP_CLK_MEDIA_BLK_CTRL_END			25
+ 
+ #endif
+diff --git a/include/dt-bindings/clock/imx8mq-clock.h b/include/dt-bindings/clock/imx8mq-clock.h
+index afa74d7ba..97df21266 100644
+--- a/include/dt-bindings/clock/imx8mq-clock.h
++++ b/include/dt-bindings/clock/imx8mq-clock.h
+@@ -426,6 +426,7 @@
+ #define IMX8MQ_CLK_MON_SEL			301
+ #define IMX8MQ_CLK_MON_CLK2_OUT			302
+ 
+-#define IMX8MQ_CLK_END				303
++#define IMX8MQ_CLK_PHY_27MHZ			303
+ 
++#define IMX8MQ_CLK_END				304
+ #endif /* __DT_BINDINGS_CLOCK_IMX8MQ_H */
+diff --git a/include/dt-bindings/clock/imx8ulp-clock.h b/include/dt-bindings/clock/imx8ulp-clock.h
+new file mode 100644
+index 000000000..cb449c991
+--- /dev/null
++++ b/include/dt-bindings/clock/imx8ulp-clock.h
+@@ -0,0 +1,262 @@
++/* SPDX-License-Identifier: GPL-2.0+ OR MIT */
++/*
++ * Copyright 2021 NXP
++ */
++
++#ifndef __DT_BINDINGS_CLOCK_IMX8ULP_H
++#define __DT_BINDINGS_CLOCK_IMX8ULP_H
++
++#define IMX8ULP_CLK_DUMMY			0
++#define IMX8ULP_CLK_ROSC			1
++#define IMX8ULP_CLK_FROSC			2
++#define IMX8ULP_CLK_LPOSC			3
++#define IMX8ULP_CLK_SOSC			4
++
++/* CGC1 */
++#define IMX8ULP_CLK_SPLL2			5
++#define IMX8ULP_CLK_SPLL3			6
++#define IMX8ULP_CLK_A35_SEL			7
++#define IMX8ULP_CLK_A35_DIV			8
++#define IMX8ULP_CLK_SPLL2_PRE_SEL		9
++#define IMX8ULP_CLK_SPLL3_PRE_SEL		10
++#define IMX8ULP_CLK_SPLL3_PFD0			11
++#define IMX8ULP_CLK_SPLL3_PFD1			12
++#define IMX8ULP_CLK_SPLL3_PFD2			13
++#define IMX8ULP_CLK_SPLL3_PFD3			14
++#define IMX8ULP_CLK_SPLL3_PFD0_DIV1		15
++#define IMX8ULP_CLK_SPLL3_PFD0_DIV2		16
++#define IMX8ULP_CLK_SPLL3_PFD1_DIV1		17
++#define IMX8ULP_CLK_SPLL3_PFD1_DIV2		18
++#define IMX8ULP_CLK_SPLL3_PFD2_DIV1		19
++#define IMX8ULP_CLK_SPLL3_PFD2_DIV2		20
++#define IMX8ULP_CLK_SPLL3_PFD3_DIV1		21
++#define IMX8ULP_CLK_SPLL3_PFD3_DIV2		22
++#define IMX8ULP_CLK_NIC_SEL			23
++#define IMX8ULP_CLK_NIC_AD_DIVPLAT		24
++#define IMX8ULP_CLK_NIC_PER_DIVPLAT		25
++#define IMX8ULP_CLK_XBAR_SEL			26
++#define IMX8ULP_CLK_XBAR_AD_DIVPLAT		27
++#define IMX8ULP_CLK_XBAR_DIVBUS			28
++#define IMX8ULP_CLK_XBAR_AD_SLOW		29
++#define IMX8ULP_CLK_SOSC_DIV1			30
++#define IMX8ULP_CLK_SOSC_DIV2			31
++#define IMX8ULP_CLK_SOSC_DIV3			32
++#define IMX8ULP_CLK_FROSC_DIV1			33
++#define IMX8ULP_CLK_FROSC_DIV2			34
++#define IMX8ULP_CLK_FROSC_DIV3			35
++#define IMX8ULP_CLK_SPLL3_VCODIV		36
++#define IMX8ULP_CLK_SPLL3_PFD0_DIV1_GATE	37
++#define IMX8ULP_CLK_SPLL3_PFD0_DIV2_GATE	38
++#define IMX8ULP_CLK_SPLL3_PFD1_DIV1_GATE	39
++#define IMX8ULP_CLK_SPLL3_PFD1_DIV2_GATE	40
++#define IMX8ULP_CLK_SPLL3_PFD2_DIV1_GATE	41
++#define IMX8ULP_CLK_SPLL3_PFD2_DIV2_GATE	42
++#define IMX8ULP_CLK_SPLL3_PFD3_DIV1_GATE	43
++#define IMX8ULP_CLK_SPLL3_PFD3_DIV2_GATE	44
++#define IMX8ULP_CLK_SOSC_DIV1_GATE		45
++#define IMX8ULP_CLK_SOSC_DIV2_GATE		46
++#define IMX8ULP_CLK_SOSC_DIV3_GATE		47
++#define IMX8ULP_CLK_FROSC_DIV1_GATE		48
++#define IMX8ULP_CLK_FROSC_DIV2_GATE		49
++#define IMX8ULP_CLK_FROSC_DIV3_GATE		50
++#define IMX8ULP_CLK_SAI4_SEL			51
++#define IMX8ULP_CLK_SAI5_SEL			52
++#define IMX8ULP_CLK_AUD_CLK1			53
++#define IMX8ULP_CLK_ARM				54
++#define IMX8ULP_CLK_ENET_TS_SEL			55
++
++#define IMX8ULP_CLK_CGC1_END			56
++
++/* CGC2 */
++#define IMX8ULP_CLK_PLL4_PRE_SEL	0
++#define IMX8ULP_CLK_PLL4		1
++#define IMX8ULP_CLK_PLL4_VCODIV		2
++#define IMX8ULP_CLK_DDR_SEL		3
++#define IMX8ULP_CLK_DDR_DIV		4
++#define IMX8ULP_CLK_LPAV_AXI_SEL	5
++#define IMX8ULP_CLK_LPAV_AXI_DIV	6
++#define IMX8ULP_CLK_LPAV_AHB_DIV	7
++#define IMX8ULP_CLK_LPAV_BUS_DIV	8
++#define IMX8ULP_CLK_PLL4_PFD0		9
++#define IMX8ULP_CLK_PLL4_PFD1		10
++#define IMX8ULP_CLK_PLL4_PFD2		11
++#define IMX8ULP_CLK_PLL4_PFD3		12
++#define IMX8ULP_CLK_PLL4_PFD0_DIV1_GATE	13
++#define IMX8ULP_CLK_PLL4_PFD0_DIV2_GATE	14
++#define IMX8ULP_CLK_PLL4_PFD1_DIV1_GATE	15
++#define IMX8ULP_CLK_PLL4_PFD1_DIV2_GATE	16
++#define IMX8ULP_CLK_PLL4_PFD2_DIV1_GATE	17
++#define IMX8ULP_CLK_PLL4_PFD2_DIV2_GATE	18
++#define IMX8ULP_CLK_PLL4_PFD3_DIV1_GATE	19
++#define IMX8ULP_CLK_PLL4_PFD3_DIV2_GATE	20
++#define IMX8ULP_CLK_PLL4_PFD0_DIV1	21
++#define IMX8ULP_CLK_PLL4_PFD0_DIV2	22
++#define IMX8ULP_CLK_PLL4_PFD1_DIV1	23
++#define IMX8ULP_CLK_PLL4_PFD1_DIV2	24
++#define IMX8ULP_CLK_PLL4_PFD2_DIV1	25
++#define IMX8ULP_CLK_PLL4_PFD2_DIV2	26
++#define IMX8ULP_CLK_PLL4_PFD3_DIV1	27
++#define IMX8ULP_CLK_PLL4_PFD3_DIV2	28
++#define IMX8ULP_CLK_CGC2_SOSC_DIV1_GATE	29
++#define IMX8ULP_CLK_CGC2_SOSC_DIV2_GATE	30
++#define IMX8ULP_CLK_CGC2_SOSC_DIV3_GATE	31
++#define IMX8ULP_CLK_CGC2_SOSC_DIV1	32
++#define IMX8ULP_CLK_CGC2_SOSC_DIV2	33
++#define IMX8ULP_CLK_CGC2_SOSC_DIV3	34
++#define IMX8ULP_CLK_CGC2_FROSC_DIV1_GATE	35
++#define IMX8ULP_CLK_CGC2_FROSC_DIV2_GATE	36
++#define IMX8ULP_CLK_CGC2_FROSC_DIV3_GATE	37
++#define IMX8ULP_CLK_CGC2_FROSC_DIV1	38
++#define IMX8ULP_CLK_CGC2_FROSC_DIV2	39
++#define IMX8ULP_CLK_CGC2_FROSC_DIV3	40
++#define IMX8ULP_CLK_AUD_CLK2		41
++#define IMX8ULP_CLK_SAI6_SEL		42
++#define IMX8ULP_CLK_SAI7_SEL		43
++#define IMX8ULP_CLK_SPDIF_SEL		44
++#define IMX8ULP_CLK_HIFI_SEL		45
++#define IMX8ULP_CLK_HIFI_DIVCORE	46
++#define IMX8ULP_CLK_HIFI_DIVPLAT	47
++#define IMX8ULP_CLK_DSI_PHY_REF		48
++
++#define IMX8ULP_CLK_CGC2_END		49
++
++/* PCC3 */
++#define IMX8ULP_CLK_WDOG3		0
++#define IMX8ULP_CLK_WDOG4		1
++#define IMX8ULP_CLK_LPIT1		2
++#define IMX8ULP_CLK_TPM4		3
++#define IMX8ULP_CLK_TPM5		4
++#define IMX8ULP_CLK_FLEXIO1		5
++#define IMX8ULP_CLK_I3C2		6
++#define IMX8ULP_CLK_LPI2C4		7
++#define IMX8ULP_CLK_LPI2C5		8
++#define IMX8ULP_CLK_LPUART4		9
++#define IMX8ULP_CLK_LPUART5		10
++#define IMX8ULP_CLK_LPSPI4		11
++#define IMX8ULP_CLK_LPSPI5		12
++#define IMX8ULP_CLK_DMA1_MP		13
++#define IMX8ULP_CLK_DMA1_CH0		14
++#define IMX8ULP_CLK_DMA1_CH1		15
++#define IMX8ULP_CLK_DMA1_CH2		16
++#define IMX8ULP_CLK_DMA1_CH3		17
++#define IMX8ULP_CLK_DMA1_CH4		18
++#define IMX8ULP_CLK_DMA1_CH5		19
++#define IMX8ULP_CLK_DMA1_CH6		20
++#define IMX8ULP_CLK_DMA1_CH7		21
++#define IMX8ULP_CLK_DMA1_CH8		22
++#define IMX8ULP_CLK_DMA1_CH9		23
++#define IMX8ULP_CLK_DMA1_CH10		24
++#define IMX8ULP_CLK_DMA1_CH11		25
++#define IMX8ULP_CLK_DMA1_CH12		26
++#define IMX8ULP_CLK_DMA1_CH13		27
++#define IMX8ULP_CLK_DMA1_CH14		28
++#define IMX8ULP_CLK_DMA1_CH15		29
++#define IMX8ULP_CLK_DMA1_CH16		30
++#define IMX8ULP_CLK_DMA1_CH17		31
++#define IMX8ULP_CLK_DMA1_CH18		32
++#define IMX8ULP_CLK_DMA1_CH19		33
++#define IMX8ULP_CLK_DMA1_CH20		34
++#define IMX8ULP_CLK_DMA1_CH21		35
++#define IMX8ULP_CLK_DMA1_CH22		36
++#define IMX8ULP_CLK_DMA1_CH23		37
++#define IMX8ULP_CLK_DMA1_CH24		38
++#define IMX8ULP_CLK_DMA1_CH25		39
++#define IMX8ULP_CLK_DMA1_CH26		40
++#define IMX8ULP_CLK_DMA1_CH27		41
++#define IMX8ULP_CLK_DMA1_CH28		42
++#define IMX8ULP_CLK_DMA1_CH29		43
++#define IMX8ULP_CLK_DMA1_CH30		44
++#define IMX8ULP_CLK_DMA1_CH31		45
++#define IMX8ULP_CLK_MU3_A		46
++#define IMX8ULP_CLK_MU0_B		47
++
++#define IMX8ULP_CLK_PCC3_END		48
++
++/* PCC4 */
++#define IMX8ULP_CLK_FLEXSPI2		0
++#define IMX8ULP_CLK_TPM6		1
++#define IMX8ULP_CLK_TPM7		2
++#define IMX8ULP_CLK_LPI2C6		3
++#define IMX8ULP_CLK_LPI2C7		4
++#define IMX8ULP_CLK_LPUART6		5
++#define IMX8ULP_CLK_LPUART7		6
++#define IMX8ULP_CLK_SAI4		7
++#define IMX8ULP_CLK_SAI5		8
++#define IMX8ULP_CLK_PCTLE		9
++#define IMX8ULP_CLK_PCTLF		10
++#define IMX8ULP_CLK_USDHC0		11
++#define IMX8ULP_CLK_USDHC1		12
++#define IMX8ULP_CLK_USDHC2		13
++#define IMX8ULP_CLK_USB0		14
++#define IMX8ULP_CLK_USB0_PHY		15
++#define IMX8ULP_CLK_USB1		16
++#define IMX8ULP_CLK_USB1_PHY		17
++#define IMX8ULP_CLK_USB_XBAR		18
++#define IMX8ULP_CLK_ENET		19
++#define IMX8ULP_CLK_SFA1		20
++#define IMX8ULP_CLK_RGPIOE		21
++#define IMX8ULP_CLK_RGPIOF		22
++
++#define IMX8ULP_CLK_PCC4_END		23
++
++/* PCC5 */
++#define IMX8ULP_CLK_TPM8		0
++#define IMX8ULP_CLK_SAI6		1
++#define IMX8ULP_CLK_SAI7		2
++#define IMX8ULP_CLK_SPDIF		3
++#define IMX8ULP_CLK_ISI			4
++#define IMX8ULP_CLK_CSI_REGS 		5
++#define IMX8ULP_CLK_PCTLD		6
++#define IMX8ULP_CLK_CSI			7
++#define IMX8ULP_CLK_DSI			8
++#define IMX8ULP_CLK_WDOG5		9
++#define IMX8ULP_CLK_EPDC		10
++#define IMX8ULP_CLK_PXP			11
++#define IMX8ULP_CLK_SFA2		12
++#define IMX8ULP_CLK_GPU2D		13
++#define IMX8ULP_CLK_GPU3D		14
++#define IMX8ULP_CLK_DC_NANO		15
++#define IMX8ULP_CLK_CSI_CLK_UI 		16
++#define IMX8ULP_CLK_CSI_CLK_ESC		17
++#define IMX8ULP_CLK_RGPIOD		18
++#define IMX8ULP_CLK_DMA2_MP		19
++#define IMX8ULP_CLK_DMA2_CH0		20
++#define IMX8ULP_CLK_DMA2_CH1		21
++#define IMX8ULP_CLK_DMA2_CH2		22
++#define IMX8ULP_CLK_DMA2_CH3		23
++#define IMX8ULP_CLK_DMA2_CH4		24
++#define IMX8ULP_CLK_DMA2_CH5		25
++#define IMX8ULP_CLK_DMA2_CH6		26
++#define IMX8ULP_CLK_DMA2_CH7		27
++#define IMX8ULP_CLK_DMA2_CH8		28
++#define IMX8ULP_CLK_DMA2_CH9		29
++#define IMX8ULP_CLK_DMA2_CH10		30
++#define IMX8ULP_CLK_DMA2_CH11		31
++#define IMX8ULP_CLK_DMA2_CH12		32
++#define IMX8ULP_CLK_DMA2_CH13		33
++#define IMX8ULP_CLK_DMA2_CH14		34
++#define IMX8ULP_CLK_DMA2_CH15		35
++#define IMX8ULP_CLK_DMA2_CH16		36
++#define IMX8ULP_CLK_DMA2_CH17		37
++#define IMX8ULP_CLK_DMA2_CH18		38
++#define IMX8ULP_CLK_DMA2_CH19		39
++#define IMX8ULP_CLK_DMA2_CH20		40
++#define IMX8ULP_CLK_DMA2_CH21		41
++#define IMX8ULP_CLK_DMA2_CH22		42
++#define IMX8ULP_CLK_DMA2_CH23		43
++#define IMX8ULP_CLK_DMA2_CH24		44
++#define IMX8ULP_CLK_DMA2_CH25		45
++#define IMX8ULP_CLK_DMA2_CH26		46
++#define IMX8ULP_CLK_DMA2_CH27		47
++#define IMX8ULP_CLK_DMA2_CH28		48
++#define IMX8ULP_CLK_DMA2_CH29		49
++#define IMX8ULP_CLK_DMA2_CH30		50
++#define IMX8ULP_CLK_DMA2_CH31		51
++#define IMX8ULP_CLK_MU2_B		52
++#define IMX8ULP_CLK_MU3_B		53
++#define IMX8ULP_CLK_AVD_SIM		54
++#define IMX8ULP_CLK_DSI_TX_ESC		55
++
++#define IMX8ULP_CLK_PCC5_END		56
++
++#endif
+diff --git a/include/dt-bindings/clock/imx93-clock.h b/include/dt-bindings/clock/imx93-clock.h
+new file mode 100644
+index 000000000..8e02859d8
+--- /dev/null
++++ b/include/dt-bindings/clock/imx93-clock.h
+@@ -0,0 +1,204 @@
++/* SPDX-License-Identifier: GPL-2.0+ OR MIT */
++/*
++ * Copyright 2022 NXP
++ */
++
++#ifndef __DT_BINDINGS_CLOCK_IMX93_CLK_H
++#define __DT_BINDINGS_CLOCK_IMX93_CLK_H
++
++#define IMX93_CLK_DUMMY			0
++#define IMX93_CLK_24M			1
++#define IMX93_CLK_EXT1			2
++#define IMX93_CLK_SYS_PLL_PFD0		3
++#define IMX93_CLK_SYS_PLL_PFD0_DIV2	4
++#define IMX93_CLK_SYS_PLL_PFD1		5
++#define IMX93_CLK_SYS_PLL_PFD1_DIV2	6
++#define IMX93_CLK_SYS_PLL_PFD2		7
++#define IMX93_CLK_SYS_PLL_PFD2_DIV2	8
++#define IMX93_CLK_AUDIO_PLL		9
++#define IMX93_CLK_VIDEO_PLL		10
++#define IMX93_CLK_A55_PERIPH		11
++#define IMX93_CLK_A55_MTR_BUS		12
++#define IMX93_CLK_A55			13
++#define IMX93_CLK_M33			14
++#define IMX93_CLK_BUS_WAKEUP		15
++#define IMX93_CLK_BUS_AON		16
++#define IMX93_CLK_WAKEUP_AXI		17
++#define IMX93_CLK_SWO_TRACE		18
++#define IMX93_CLK_M33_SYSTICK		19
++#define IMX93_CLK_FLEXIO1		20
++#define IMX93_CLK_FLEXIO2		21
++#define IMX93_CLK_LPTMR1		24
++#define IMX93_CLK_LPTMR2		25
++#define IMX93_CLK_TPM2			27
++#define IMX93_CLK_TPM4			29
++#define IMX93_CLK_TPM5			30
++#define IMX93_CLK_TPM6			31
++#define IMX93_CLK_FLEXSPI1		32
++#define IMX93_CLK_CAN1			33
++#define IMX93_CLK_CAN2			34
++#define IMX93_CLK_LPUART1		35
++#define IMX93_CLK_LPUART2		36
++#define IMX93_CLK_LPUART3		37
++#define IMX93_CLK_LPUART4		38
++#define IMX93_CLK_LPUART5		39
++#define IMX93_CLK_LPUART6		40
++#define IMX93_CLK_LPUART7		41
++#define IMX93_CLK_LPUART8		42
++#define IMX93_CLK_LPI2C1		43
++#define IMX93_CLK_LPI2C2		44
++#define IMX93_CLK_LPI2C3		45
++#define IMX93_CLK_LPI2C4		46
++#define IMX93_CLK_LPI2C5		47
++#define IMX93_CLK_LPI2C6		48
++#define IMX93_CLK_LPI2C7		49
++#define IMX93_CLK_LPI2C8		50
++#define IMX93_CLK_LPSPI1		51
++#define IMX93_CLK_LPSPI2		52
++#define IMX93_CLK_LPSPI3		53
++#define IMX93_CLK_LPSPI4		54
++#define IMX93_CLK_LPSPI5		55
++#define IMX93_CLK_LPSPI6		56
++#define IMX93_CLK_LPSPI7		57
++#define IMX93_CLK_LPSPI8		58
++#define IMX93_CLK_I3C1			59
++#define IMX93_CLK_I3C2			60
++#define IMX93_CLK_USDHC1		61
++#define IMX93_CLK_USDHC2		62
++#define IMX93_CLK_USDHC3		63
++#define IMX93_CLK_SAI1			64
++#define IMX93_CLK_SAI2			65
++#define IMX93_CLK_SAI3			66
++#define IMX93_CLK_CCM_CKO1		67
++#define IMX93_CLK_CCM_CKO2		68
++#define IMX93_CLK_CCM_CKO3		69
++#define IMX93_CLK_CCM_CKO4		70
++#define IMX93_CLK_HSIO			71
++#define IMX93_CLK_HSIO_USB_TEST_60M	72
++#define IMX93_CLK_HSIO_ACSCAN_80M	73
++#define IMX93_CLK_HSIO_ACSCAN_480M	74
++#define IMX93_CLK_ML_APB		75
++#define IMX93_CLK_ML			76
++#define IMX93_CLK_MEDIA_AXI		77
++#define IMX93_CLK_MEDIA_APB		78
++#define IMX93_CLK_MEDIA_LDB		79
++#define IMX93_CLK_MEDIA_DISP_PIX	80
++#define IMX93_CLK_CAM_PIX		81
++#define IMX93_CLK_MIPI_TEST_BYTE	82
++#define IMX93_CLK_MIPI_PHY_CFG		83
++#define IMX93_CLK_ADC			84
++#define IMX93_CLK_PDM			85
++#define IMX93_CLK_TSTMR1		86
++#define IMX93_CLK_TSTMR2		87
++#define IMX93_CLK_MQS1			88
++#define IMX93_CLK_MQS2			89
++#define IMX93_CLK_AUDIO_XCVR		90
++#define IMX93_CLK_SPDIF			91
++#define IMX93_CLK_ENET			92
++#define IMX93_CLK_ENET_TIMER1		93
++#define IMX93_CLK_ENET_TIMER2		94
++#define IMX93_CLK_ENET_REF		95
++#define IMX93_CLK_ENET_REF_PHY		96
++#define IMX93_CLK_I3C1_SLOW		97
++#define IMX93_CLK_I3C2_SLOW		98
++#define IMX93_CLK_USB_PHY_BURUNIN	99
++#define IMX93_CLK_PAL_CAME_SCAN		100
++#define IMX93_CLK_A55_GATE		101
++#define IMX93_CLK_CM33_GATE		102
++#define IMX93_CLK_ADC1_GATE		103
++#define IMX93_CLK_WDOG1_GATE		104
++#define IMX93_CLK_WDOG2_GATE		105
++#define IMX93_CLK_WDOG3_GATE		106
++#define IMX93_CLK_WDOG4_GATE		107
++#define IMX93_CLK_WDOG5_GATE		108
++#define IMX93_CLK_SEMA1_GATE		109
++#define IMX93_CLK_SEMA2_GATE		110
++#define IMX93_CLK_MU_A_GATE		111
++#define IMX93_CLK_MU_B_GATE		112
++#define IMX93_CLK_EDMA1_GATE		113
++#define IMX93_CLK_EDMA2_GATE		114
++#define IMX93_CLK_FLEXSPI1_GATE		115
++#define IMX93_CLK_GPIO1_GATE		116
++#define IMX93_CLK_GPIO2_GATE		117
++#define IMX93_CLK_GPIO3_GATE		118
++#define IMX93_CLK_GPIO4_GATE		119
++#define IMX93_CLK_FLEXIO1_GATE		120
++#define IMX93_CLK_FLEXIO2_GATE		121
++#define IMX93_CLK_LPIT1_GATE		122
++#define IMX93_CLK_LPIT2_GATE		123
++#define IMX93_CLK_LPTMR1_GATE		124
++#define IMX93_CLK_LPTMR2_GATE		125
++#define IMX93_CLK_TPM1_GATE		126
++#define IMX93_CLK_TPM2_GATE		127
++#define IMX93_CLK_TPM3_GATE		128
++#define IMX93_CLK_TPM4_GATE		129
++#define IMX93_CLK_TPM5_GATE		130
++#define IMX93_CLK_TPM6_GATE		131
++#define IMX93_CLK_CAN1_GATE		132
++#define IMX93_CLK_CAN2_GATE		133
++#define IMX93_CLK_LPUART1_GATE		134
++#define IMX93_CLK_LPUART2_GATE		135
++#define IMX93_CLK_LPUART3_GATE		136
++#define IMX93_CLK_LPUART4_GATE		137
++#define IMX93_CLK_LPUART5_GATE		138
++#define IMX93_CLK_LPUART6_GATE		139
++#define IMX93_CLK_LPUART7_GATE		140
++#define IMX93_CLK_LPUART8_GATE		141
++#define IMX93_CLK_LPI2C1_GATE		142
++#define IMX93_CLK_LPI2C2_GATE		143
++#define IMX93_CLK_LPI2C3_GATE		144
++#define IMX93_CLK_LPI2C4_GATE		145
++#define IMX93_CLK_LPI2C5_GATE		146
++#define IMX93_CLK_LPI2C6_GATE		147
++#define IMX93_CLK_LPI2C7_GATE		148
++#define IMX93_CLK_LPI2C8_GATE		149
++#define IMX93_CLK_LPSPI1_GATE		150
++#define IMX93_CLK_LPSPI2_GATE		151
++#define IMX93_CLK_LPSPI3_GATE		152
++#define IMX93_CLK_LPSPI4_GATE		153
++#define IMX93_CLK_LPSPI5_GATE		154
++#define IMX93_CLK_LPSPI6_GATE		155
++#define IMX93_CLK_LPSPI7_GATE		156
++#define IMX93_CLK_LPSPI8_GATE		157
++#define IMX93_CLK_I3C1_GATE		158
++#define IMX93_CLK_I3C2_GATE		159
++#define IMX93_CLK_USDHC1_GATE		160
++#define IMX93_CLK_USDHC2_GATE		161
++#define IMX93_CLK_USDHC3_GATE		162
++#define IMX93_CLK_SAI1_GATE		163
++#define IMX93_CLK_SAI2_GATE		164
++#define IMX93_CLK_SAI3_GATE		165
++#define IMX93_CLK_MIPI_CSI_GATE		166
++#define IMX93_CLK_MIPI_DSI_GATE		167
++#define IMX93_CLK_LVDS_GATE		168
++#define IMX93_CLK_LCDIF_GATE		169
++#define IMX93_CLK_PXP_GATE		170
++#define IMX93_CLK_ISI_GATE		171
++#define IMX93_CLK_NIC_MEDIA_GATE	172
++#define IMX93_CLK_USB_CONTROLLER_GATE	173
++#define IMX93_CLK_USB_TEST_60M_GATE	174
++#define IMX93_CLK_HSIO_TROUT_24M_GATE	175
++#define IMX93_CLK_PDM_GATE		176
++#define IMX93_CLK_MQS1_GATE		177
++#define IMX93_CLK_MQS2_GATE		178
++#define IMX93_CLK_AUD_XCVR_GATE		179
++#define IMX93_CLK_SPDIF_GATE		180
++#define IMX93_CLK_HSIO_32K_GATE		181
++#define IMX93_CLK_ENET1_GATE		182
++#define IMX93_CLK_ENET_QOS_GATE		183
++#define IMX93_CLK_SYS_CNT_GATE		184
++#define IMX93_CLK_TSTMR1_GATE		185
++#define IMX93_CLK_TSTMR2_GATE		186
++#define IMX93_CLK_TMC_GATE		187
++#define IMX93_CLK_PMRO_GATE		188
++#define IMX93_CLK_32K			189
++#define IMX93_CLK_SAI1_IPG		190
++#define IMX93_CLK_SAI2_IPG		191
++#define IMX93_CLK_SAI3_IPG		192
++#define IMX93_CLK_MU1_A_GATE		193
++#define IMX93_CLK_MU1_B_GATE		194
++#define IMX93_CLK_MU2_A_GATE		195
++#define IMX93_CLK_MU2_B_GATE		196
++#define IMX93_CLK_END			197
++
++#endif
+diff --git a/include/dt-bindings/clock/s32v234-clock.h b/include/dt-bindings/clock/s32v234-clock.h
+new file mode 100644
+index 000000000..1ddfae5c1
+--- /dev/null
++++ b/include/dt-bindings/clock/s32v234-clock.h
+@@ -0,0 +1,65 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright (C) 2017 NXP
++ */
++
++#ifndef __DT_BINDINGS_CLOCK_S32V234_H
++#define __DT_BINDINGS_CLOCK_S32V234_H
++
++#define	S32V234_CLK_DUMMY			0
++#define	S32V234_CLK_FXOSC			1
++#define	S32V234_CLK_FIRC			2
++/* PERIPH PLL */
++#define	S32V234_CLK_PERIPHPLL_SRC_SEL		3
++#define	S32V234_CLK_PERIPHPLL_VCO		4
++#define	S32V234_CLK_PERIPHPLL_PHI0		5
++#define	S32V234_CLK_PERIPHPLL_PHI0_DIV3		6
++#define	S32V234_CLK_PERIPHPLL_PHI0_DIV5		7
++#define	S32V234_CLK_PERIPHPLL_PHI1		8
++/* LINFlexD Clock */
++#define	S32V234_CLK_LIN				9
++#define	S32V234_CLK_LIN_SEL			10
++#define	S32V234_CLK_LIN_IPG			11
++/* SDHC Clock */
++#define	S32V234_CLK_SDHC			12
++#define	S32V234_CLK_SDHC_SEL			13
++/* ENET PLL */
++#define	S32V234_CLK_ENETPLL_SRC_SEL		14
++#define	S32V234_CLK_ENETPLL_VCO			15
++#define	S32V234_CLK_ENETPLL_PHI0		16
++#define	S32V234_CLK_ENETPLL_PHI1		17
++#define	S32V234_CLK_ENETPLL_DFS0		18
++#define	S32V234_CLK_ENETPLL_DFS1		19
++#define	S32V234_CLK_ENETPLL_DFS2		20
++#define	S32V234_CLK_ENETPLL_DFS3		21
++/* System Clock */
++#define	S32V234_CLK_SYS_SEL			22
++#define	S32V234_CLK_SYS3			23
++#define	S32V234_CLK_SYS6			24
++#define	S32V234_CLK_SYS6_DIV2			25
++/* ENET Clock */
++#define	S32V234_CLK_ENET_TIME_DIV		26
++#define	S32V234_CLK_ENET_TIME_SEL		27
++#define	S32V234_CLK_ENET_DIV			28
++#define	S32V234_CLK_ENET_SEL			29
++
++#define	S32V234_CLK_ENET			30
++#define	S32V234_CLK_ENET_TIME			31
++
++/* ARM PLL */
++#define	S32V234_CLK_ARMPLL_SRC_SEL		32
++#define	S32V234_CLK_ARMPLL_VCO			33
++#define	S32V234_CLK_ARMPLL_PHI0			34
++#define	S32V234_CLK_ARMPLL_PHI1			35
++#define	S32V234_CLK_ARMPLL_DFS0			35
++#define	S32V234_CLK_ARMPLL_DFS1			36
++#define	S32V234_CLK_ARMPLL_DFS2			37
++
++/* CAN Clock */
++#define S32V234_CLK_CAN				38
++#define S32V234_CLK_CAN_SEL			39
++
++#define	S32V234_CLK_END				40
++
++#endif /* __DT_BINDINGS_CLOCK_S32V234_H */
+diff --git a/include/dt-bindings/firmware/imx/rsrc.h b/include/dt-bindings/firmware/imx/rsrc.h
+index 438850565..0f7692a9b 100644
+--- a/include/dt-bindings/firmware/imx/rsrc.h
++++ b/include/dt-bindings/firmware/imx/rsrc.h
+@@ -13,34 +13,38 @@
+  * never be changed or removed (only added to at the end of the list).
+  */
+ 
+-#define IMX_SC_R_A53			0
+-#define IMX_SC_R_A53_0			1
+-#define IMX_SC_R_A53_1			2
+-#define IMX_SC_R_A53_2			3
+-#define IMX_SC_R_A53_3			4
+-#define IMX_SC_R_A72			5
+-#define IMX_SC_R_A72_0			6
+-#define IMX_SC_R_A72_1			7
+-#define IMX_SC_R_A72_2			8
+-#define IMX_SC_R_A72_3			9
++#define IMX_SC_R_AP_0			0
++#define IMX_SC_R_AP_0_0			1
++#define IMX_SC_R_AP_0_1			2
++#define IMX_SC_R_AP_0_2			3
++#define IMX_SC_R_AP_0_3			4
++#define IMX_SC_R_AP_1			5
++#define IMX_SC_R_AP_1_0			6
++#define IMX_SC_R_AP_1_1			7
++#define IMX_SC_R_AP_1_2			8
++#define IMX_SC_R_AP_1_3			9
+ #define IMX_SC_R_CCI			10
+ #define IMX_SC_R_DB			11
+ #define IMX_SC_R_DRC_0			12
+ #define IMX_SC_R_DRC_1			13
+ #define IMX_SC_R_GIC_SMMU		14
+-#define IMX_SC_R_IRQSTR_M4_0		15
+-#define IMX_SC_R_IRQSTR_M4_1		16
+-#define IMX_SC_R_SMMU			17
+-#define IMX_SC_R_GIC			18
++#define IMX_SC_R_IRQSTR_MCU_0		15
++#define IMX_SC_R_IRQSTR_MCU_1		16
++#define IMX_SC_R_SMMU_0			17
++#define IMX_SC_R_GIC_0			18
+ #define IMX_SC_R_DC_0_BLIT0		19
+ #define IMX_SC_R_DC_0_BLIT1		20
+ #define IMX_SC_R_DC_0_BLIT2		21
+ #define IMX_SC_R_DC_0_BLIT_OUT		22
+-#define IMX_SC_R_PERF			23
++#define IMX_SC_R_PERF_0			23
++#define IMX_SC_R_USB_1_PHY		24
+ #define IMX_SC_R_DC_0_WARP		25
++#define IMX_SC_R_V2X_MU_0		26
++#define IMX_SC_R_V2X_MU_1		27
+ #define IMX_SC_R_DC_0_VIDEO0		28
+ #define IMX_SC_R_DC_0_VIDEO1		29
+ #define IMX_SC_R_DC_0_FRAC0		30
++#define IMX_SC_R_V2X_MU_2		31
+ #define IMX_SC_R_DC_0			32
+ #define IMX_SC_R_GPU_2_PID0		33
+ #define IMX_SC_R_DC_0_PLL_0		34
+@@ -49,11 +53,17 @@
+ #define IMX_SC_R_DC_1_BLIT1		37
+ #define IMX_SC_R_DC_1_BLIT2		38
+ #define IMX_SC_R_DC_1_BLIT_OUT		39
++#define IMX_SC_R_V2X_MU_3		40
++#define IMX_SC_R_V2X_MU_4		41
+ #define IMX_SC_R_DC_1_WARP		42
++#define IMX_SC_R_STM			43
++#define IMX_SC_R_SECVIO			44
+ #define IMX_SC_R_DC_1_VIDEO0		45
+ #define IMX_SC_R_DC_1_VIDEO1		46
+ #define IMX_SC_R_DC_1_FRAC0		47
++#define IMX_SC_R_V2X			48
+ #define IMX_SC_R_DC_1			49
++#define IMX_SC_R_UNUSED14		50
+ #define IMX_SC_R_DC_1_PLL_0		51
+ #define IMX_SC_R_DC_1_PLL_1		52
+ #define IMX_SC_R_SPI_0			53
+@@ -144,10 +154,10 @@
+ #define IMX_SC_R_DMA_1_CH29		137
+ #define IMX_SC_R_DMA_1_CH30		138
+ #define IMX_SC_R_DMA_1_CH31		139
+-#define IMX_SC_R_UNUSED1		140
+-#define IMX_SC_R_UNUSED2		141
+-#define IMX_SC_R_UNUSED3		142
+-#define IMX_SC_R_UNUSED4		143
++#define IMX_SC_R_V2X_PID0		140
++#define IMX_SC_R_V2X_PID1		141
++#define IMX_SC_R_V2X_PID2		142
++#define IMX_SC_R_V2X_PID3		143
+ #define IMX_SC_R_GPU_0_PID0		144
+ #define IMX_SC_R_GPU_0_PID1		145
+ #define IMX_SC_R_GPU_0_PID2		146
+@@ -176,7 +186,7 @@
+ #define IMX_SC_R_PCIE_B			169
+ #define IMX_SC_R_SATA_0			170
+ #define IMX_SC_R_SERDES_1		171
+-#define IMX_SC_R_HSIO_GPIO		172
++#define IMX_SC_R_HSIO_GPIO_0		172
+ #define IMX_SC_R_MATCH_15		173
+ #define IMX_SC_R_MATCH_16		174
+ #define IMX_SC_R_MATCH_17		175
+@@ -243,21 +253,20 @@
+ #define IMX_SC_R_ROM_0			236
+ #define IMX_SC_R_FSPI_0			237
+ #define IMX_SC_R_FSPI_1			238
+-#define IMX_SC_R_IEE			239
+-#define IMX_SC_R_IEE_R0			240
+-#define IMX_SC_R_IEE_R1			241
+-#define IMX_SC_R_IEE_R2			242
+-#define IMX_SC_R_IEE_R3			243
+-#define IMX_SC_R_IEE_R4			244
+-#define IMX_SC_R_IEE_R5			245
+-#define IMX_SC_R_IEE_R6			246
+-#define IMX_SC_R_IEE_R7			247
++#define IMX_SC_R_IEE_0			239
++#define IMX_SC_R_IEE_0_R0		240
++#define IMX_SC_R_IEE_0_R1		241
++#define IMX_SC_R_IEE_0_R2		242
++#define IMX_SC_R_IEE_0_R3		243
++#define IMX_SC_R_IEE_0_R4		244
++#define IMX_SC_R_IEE_0_R5		245
++#define IMX_SC_R_IEE_0_R6		246
++#define IMX_SC_R_IEE_0_R7		247
+ #define IMX_SC_R_SDHC_0			248
+ #define IMX_SC_R_SDHC_1			249
+ #define IMX_SC_R_SDHC_2			250
+ #define IMX_SC_R_ENET_0			251
+ #define IMX_SC_R_ENET_1			252
+-#define IMX_SC_R_MLB_0			253
+ #define IMX_SC_R_DMA_2_CH0		254
+ #define IMX_SC_R_DMA_2_CH1		255
+ #define IMX_SC_R_DMA_2_CH2		256
+@@ -282,46 +291,50 @@
+ #define IMX_SC_R_LVDS_2_PWM_0		275
+ #define IMX_SC_R_LVDS_2_I2C_0		276
+ #define IMX_SC_R_LVDS_2_I2C_1		277
+-#define IMX_SC_R_M4_0_PID0		278
+-#define IMX_SC_R_M4_0_PID1		279
+-#define IMX_SC_R_M4_0_PID2		280
+-#define IMX_SC_R_M4_0_PID3		281
+-#define IMX_SC_R_M4_0_PID4		282
+-#define IMX_SC_R_M4_0_RGPIO		283
+-#define IMX_SC_R_M4_0_SEMA42		284
+-#define IMX_SC_R_M4_0_TPM		285
+-#define IMX_SC_R_M4_0_PIT		286
+-#define IMX_SC_R_M4_0_UART		287
+-#define IMX_SC_R_M4_0_I2C		288
+-#define IMX_SC_R_M4_0_INTMUX		289
+-#define IMX_SC_R_M4_0_MU_0B		292
+-#define IMX_SC_R_M4_0_MU_0A0		293
+-#define IMX_SC_R_M4_0_MU_0A1		294
+-#define IMX_SC_R_M4_0_MU_0A2		295
+-#define IMX_SC_R_M4_0_MU_0A3		296
+-#define IMX_SC_R_M4_0_MU_1A		297
+-#define IMX_SC_R_M4_1_PID0		298
+-#define IMX_SC_R_M4_1_PID1		299
+-#define IMX_SC_R_M4_1_PID2		300
+-#define IMX_SC_R_M4_1_PID3		301
+-#define IMX_SC_R_M4_1_PID4		302
+-#define IMX_SC_R_M4_1_RGPIO		303
+-#define IMX_SC_R_M4_1_SEMA42		304
+-#define IMX_SC_R_M4_1_TPM		305
+-#define IMX_SC_R_M4_1_PIT		306
+-#define IMX_SC_R_M4_1_UART		307
+-#define IMX_SC_R_M4_1_I2C		308
+-#define IMX_SC_R_M4_1_INTMUX		309
+-#define IMX_SC_R_M4_1_MU_0B		312
+-#define IMX_SC_R_M4_1_MU_0A0		313
+-#define IMX_SC_R_M4_1_MU_0A1		314
+-#define IMX_SC_R_M4_1_MU_0A2		315
+-#define IMX_SC_R_M4_1_MU_0A3		316
+-#define IMX_SC_R_M4_1_MU_1A		317
++#define IMX_SC_R_MCU_0_PID0		278
++#define IMX_SC_R_MCU_0_PID1		279
++#define IMX_SC_R_MCU_0_PID2		280
++#define IMX_SC_R_MCU_0_PID3		281
++#define IMX_SC_R_MCU_0_PID4		282
++#define IMX_SC_R_MCU_0_RGPIO		283
++#define IMX_SC_R_MCU_0_SEMA42		284
++#define IMX_SC_R_MCU_0_TPM		285
++#define IMX_SC_R_MCU_0_PIT		286
++#define IMX_SC_R_MCU_0_UART		287
++#define IMX_SC_R_MCU_0_I2C		288
++#define IMX_SC_R_MCU_0_INTMUX		289
++#define IMX_SC_R_ENET_0_A0		290
++#define IMX_SC_R_ENET_0_A1		291
++#define IMX_SC_R_MCU_0_MU_0B		292
++#define IMX_SC_R_MCU_0_MU_0A0		293
++#define IMX_SC_R_MCU_0_MU_0A1		294
++#define IMX_SC_R_MCU_0_MU_0A2		295
++#define IMX_SC_R_MCU_0_MU_0A3		296
++#define IMX_SC_R_MCU_0_MU_1A		297
++#define IMX_SC_R_MCU_1_PID0		298
++#define IMX_SC_R_MCU_1_PID1		299
++#define IMX_SC_R_MCU_1_PID2		300
++#define IMX_SC_R_MCU_1_PID3		301
++#define IMX_SC_R_MCU_1_PID4		302
++#define IMX_SC_R_MCU_1_RGPIO		303
++#define IMX_SC_R_MCU_1_SEMA42		304
++#define IMX_SC_R_MCU_1_TPM		305
++#define IMX_SC_R_MCU_1_PIT		306
++#define IMX_SC_R_MCU_1_UART		307
++#define IMX_SC_R_MCU_1_I2C		308
++#define IMX_SC_R_MCU_1_INTMUX		309
++#define IMX_SC_R_UNUSED17		310
++#define IMX_SC_R_UNUSED18		311
++#define IMX_SC_R_MCU_1_MU_0B		312
++#define IMX_SC_R_MCU_1_MU_0A0		313
++#define IMX_SC_R_MCU_1_MU_0A1		314
++#define IMX_SC_R_MCU_1_MU_0A2		315
++#define IMX_SC_R_MCU_1_MU_0A3		316
++#define IMX_SC_R_MCU_1_MU_1A		317
+ #define IMX_SC_R_SAI_0			318
+ #define IMX_SC_R_SAI_1			319
+ #define IMX_SC_R_SAI_2			320
+-#define IMX_SC_R_IRQSTR_SCU2		321
++#define IMX_SC_R_IRQSTR_AP_0		321
+ #define IMX_SC_R_IRQSTR_DSP		322
+ #define IMX_SC_R_ELCDIF_PLL		323
+ #define IMX_SC_R_OCRAM			324
+@@ -366,33 +379,33 @@
+ #define IMX_SC_R_VPU_PID5		363
+ #define IMX_SC_R_VPU_PID6		364
+ #define IMX_SC_R_VPU_PID7		365
+-#define IMX_SC_R_VPU_UART		366
+-#define IMX_SC_R_VPUCORE		367
+-#define IMX_SC_R_VPUCORE_0		368
+-#define IMX_SC_R_VPUCORE_1		369
+-#define IMX_SC_R_VPUCORE_2		370
+-#define IMX_SC_R_VPUCORE_3		371
++#define IMX_SC_R_ENET_0_A2		366
++#define IMX_SC_R_ENET_1_A0		367
++#define IMX_SC_R_ENET_1_A1		368
++#define IMX_SC_R_ENET_1_A2		369
++#define IMX_SC_R_ENET_1_A3		370
++#define IMX_SC_R_ENET_1_A4		371
+ #define IMX_SC_R_DMA_4_CH0		372
+ #define IMX_SC_R_DMA_4_CH1		373
+ #define IMX_SC_R_DMA_4_CH2		374
+ #define IMX_SC_R_DMA_4_CH3		375
+ #define IMX_SC_R_DMA_4_CH4		376
+-#define IMX_SC_R_ISI_CH0		377
+-#define IMX_SC_R_ISI_CH1		378
+-#define IMX_SC_R_ISI_CH2		379
+-#define IMX_SC_R_ISI_CH3		380
+-#define IMX_SC_R_ISI_CH4		381
+-#define IMX_SC_R_ISI_CH5		382
+-#define IMX_SC_R_ISI_CH6		383
+-#define IMX_SC_R_ISI_CH7		384
+-#define IMX_SC_R_MJPEG_DEC_S0		385
+-#define IMX_SC_R_MJPEG_DEC_S1		386
+-#define IMX_SC_R_MJPEG_DEC_S2		387
+-#define IMX_SC_R_MJPEG_DEC_S3		388
+-#define IMX_SC_R_MJPEG_ENC_S0		389
+-#define IMX_SC_R_MJPEG_ENC_S1		390
+-#define IMX_SC_R_MJPEG_ENC_S2		391
+-#define IMX_SC_R_MJPEG_ENC_S3		392
++#define IMX_SC_R_ISI_0_CH0		377
++#define IMX_SC_R_ISI_0_CH1		378
++#define IMX_SC_R_ISI_0_CH2		379
++#define IMX_SC_R_ISI_0_CH3		380
++#define IMX_SC_R_ISI_0_CH4		381
++#define IMX_SC_R_ISI_0_CH5		382
++#define IMX_SC_R_ISI_0_CH6		383
++#define IMX_SC_R_ISI_0_CH7		384
++#define IMX_SC_R_MJPEG_0_DEC_S0		385
++#define IMX_SC_R_MJPEG_0_DEC_S1		386
++#define IMX_SC_R_MJPEG_0_DEC_S2		387
++#define IMX_SC_R_MJPEG_0_DEC_S3		388
++#define IMX_SC_R_MJPEG_0_ENC_S0		389
++#define IMX_SC_R_MJPEG_0_ENC_S1		390
++#define IMX_SC_R_MJPEG_0_ENC_S2		391
++#define IMX_SC_R_MJPEG_0_ENC_S3		392
+ #define IMX_SC_R_MIPI_0			393
+ #define IMX_SC_R_MIPI_0_PWM_0		394
+ #define IMX_SC_R_MIPI_0_I2C_0		395
+@@ -507,11 +520,11 @@
+ #define IMX_SC_R_SECO_MU_3		504
+ #define IMX_SC_R_SECO_MU_4		505
+ #define IMX_SC_R_HDMI_RX_PWM_0		506
+-#define IMX_SC_R_A35			507
+-#define IMX_SC_R_A35_0			508
+-#define IMX_SC_R_A35_1			509
+-#define IMX_SC_R_A35_2			510
+-#define IMX_SC_R_A35_3			511
++#define IMX_SC_R_AP_2			507
++#define IMX_SC_R_AP_2_0			508
++#define IMX_SC_R_AP_2_1			509
++#define IMX_SC_R_AP_2_2			510
++#define IMX_SC_R_AP_2_3			511
+ #define IMX_SC_R_DSP			512
+ #define IMX_SC_R_DSP_RAM		513
+ #define IMX_SC_R_CAAM_JR1_OUT		514
+@@ -532,8 +545,8 @@
+ #define IMX_SC_R_BOARD_R5		529
+ #define IMX_SC_R_BOARD_R6		530
+ #define IMX_SC_R_BOARD_R7		531
+-#define IMX_SC_R_MJPEG_DEC_MP		532
+-#define IMX_SC_R_MJPEG_ENC_MP		533
++#define IMX_SC_R_MJPEG_0_DEC_MP		532
++#define IMX_SC_R_MJPEG_0_ENC_MP		533
+ #define IMX_SC_R_VPU_TS_0		534
+ #define IMX_SC_R_VPU_MU_0		535
+ #define IMX_SC_R_VPU_MU_1		536
+@@ -565,6 +578,105 @@
+ #define IMX_SC_PM_CLK_PLL		4	/* PLL */
+ #define IMX_SC_PM_CLK_BYPASS		4	/* Bypass clock */
+ 
++/*
++ * Compatibility defines for sc_rsrc_t
++ */
++#define IMX_SC_R_A35			IMX_SC_R_AP_2
++#define IMX_SC_R_A35_0			IMX_SC_R_AP_2_0
++#define IMX_SC_R_A35_1			IMX_SC_R_AP_2_1
++#define IMX_SC_R_A35_2			IMX_SC_R_AP_2_2
++#define IMX_SC_R_A35_3			IMX_SC_R_AP_2_3
++#define IMX_SC_R_A53			IMX_SC_R_AP_0
++#define IMX_SC_R_A53_0			IMX_SC_R_AP_0_0
++#define IMX_SC_R_A53_1			IMX_SC_R_AP_0_1
++#define IMX_SC_R_A53_2			IMX_SC_R_AP_0_2
++#define IMX_SC_R_A53_3			IMX_SC_R_AP_0_3
++#define IMX_SC_R_A72			IMX_SC_R_AP_1
++#define IMX_SC_R_A72_0			IMX_SC_R_AP_1_0
++#define IMX_SC_R_A72_1			IMX_SC_R_AP_1_1
++#define IMX_SC_R_A72_2			IMX_SC_R_AP_1_2
++#define IMX_SC_R_A72_3			IMX_SC_R_AP_1_3
++#define IMX_SC_R_GIC			IMX_SC_R_GIC_0
++#define IMX_SC_R_HSIO_GPIO		IMX_SC_R_HSIO_GPIO_0
++#define IMX_SC_R_IEE			IMX_SC_R_IEE_0
++#define IMX_SC_R_IEE_R0			IMX_SC_R_IEE_0_R0
++#define IMX_SC_R_IEE_R1			IMX_SC_R_IEE_0_R1
++#define IMX_SC_R_IEE_R2			IMX_SC_R_IEE_0_R2
++#define IMX_SC_R_IEE_R3			IMX_SC_R_IEE_0_R3
++#define IMX_SC_R_IEE_R4			IMX_SC_R_IEE_0_R4
++#define IMX_SC_R_IEE_R5			IMX_SC_R_IEE_0_R5
++#define IMX_SC_R_IEE_R6			IMX_SC_R_IEE_0_R6
++#define IMX_SC_R_IEE_R7			IMX_SC_R_IEE_0_R7
++#define IMX_SC_R_IRQSTR_M4_0		IMX_SC_R_IRQSTR_MCU_0
++#define IMX_SC_R_IRQSTR_M4_1		IMX_SC_R_IRQSTR_MCU_1
++#define IMX_SC_R_IRQSTR_SCU2		IMX_SC_R_IRQSTR_AP_0
++#define IMX_SC_R_ISI_CH0		IMX_SC_R_ISI_0_CH0
++#define IMX_SC_R_ISI_CH1		IMX_SC_R_ISI_0_CH1
++#define IMX_SC_R_ISI_CH2		IMX_SC_R_ISI_0_CH2
++#define IMX_SC_R_ISI_CH3		IMX_SC_R_ISI_0_CH3
++#define IMX_SC_R_ISI_CH4		IMX_SC_R_ISI_0_CH4
++#define IMX_SC_R_ISI_CH5		IMX_SC_R_ISI_0_CH5
++#define IMX_SC_R_ISI_CH6		IMX_SC_R_ISI_0_CH6
++#define IMX_SC_R_ISI_CH7		IMX_SC_R_ISI_0_CH7
++#define IMX_SC_R_M4_0_I2C		IMX_SC_R_MCU_0_I2C
++#define IMX_SC_R_M4_0_INTMUX		IMX_SC_R_MCU_0_INTMUX
++#define IMX_SC_R_M4_0_MU_0A0		IMX_SC_R_MCU_0_MU_0A0
++#define IMX_SC_R_M4_0_MU_0A1		IMX_SC_R_MCU_0_MU_0A1
++#define IMX_SC_R_M4_0_MU_0A2		IMX_SC_R_MCU_0_MU_0A2
++#define IMX_SC_R_M4_0_MU_0A3		IMX_SC_R_MCU_0_MU_0A3
++#define IMX_SC_R_M4_0_MU_0B		IMX_SC_R_MCU_0_MU_0B
++#define IMX_SC_R_M4_0_MU_1A		IMX_SC_R_MCU_0_MU_1A
++#define IMX_SC_R_M4_0_PID0		IMX_SC_R_MCU_0_PID0
++#define IMX_SC_R_M4_0_PID1		IMX_SC_R_MCU_0_PID1
++#define IMX_SC_R_M4_0_PID2		IMX_SC_R_MCU_0_PID2
++#define IMX_SC_R_M4_0_PID3		IMX_SC_R_MCU_0_PID3
++#define IMX_SC_R_M4_0_PID4		IMX_SC_R_MCU_0_PID4
++#define IMX_SC_R_M4_0_PIT		IMX_SC_R_MCU_0_PIT
++#define IMX_SC_R_M4_0_RGPIO		IMX_SC_R_MCU_0_RGPIO
++#define IMX_SC_R_M4_0_SEMA42		IMX_SC_R_MCU_0_SEMA42
++#define IMX_SC_R_M4_0_TPM		IMX_SC_R_MCU_0_TPM
++#define IMX_SC_R_M4_0_UART		IMX_SC_R_MCU_0_UART
++#define IMX_SC_R_M4_1_I2C		IMX_SC_R_MCU_1_I2C
++#define IMX_SC_R_M4_1_INTMUX		IMX_SC_R_MCU_1_INTMUX
++#define IMX_SC_R_M4_1_MU_0A0		IMX_SC_R_MCU_1_MU_0A0
++#define IMX_SC_R_M4_1_MU_0A1		IMX_SC_R_MCU_1_MU_0A1
++#define IMX_SC_R_M4_1_MU_0A2		IMX_SC_R_MCU_1_MU_0A2
++#define IMX_SC_R_M4_1_MU_0A3		IMX_SC_R_MCU_1_MU_0A3
++#define IMX_SC_R_M4_1_MU_0B		IMX_SC_R_MCU_1_MU_0B
++#define IMX_SC_R_M4_1_MU_1A		IMX_SC_R_MCU_1_MU_1A
++#define IMX_SC_R_M4_1_PID0		IMX_SC_R_MCU_1_PID0
++#define IMX_SC_R_M4_1_PID1		IMX_SC_R_MCU_1_PID1
++#define IMX_SC_R_M4_1_PID2		IMX_SC_R_MCU_1_PID2
++#define IMX_SC_R_M4_1_PID3		IMX_SC_R_MCU_1_PID3
++#define IMX_SC_R_M4_1_PID4		IMX_SC_R_MCU_1_PID4
++#define IMX_SC_R_M4_1_PIT		IMX_SC_R_MCU_1_PIT
++#define IMX_SC_R_M4_1_RGPIO		IMX_SC_R_MCU_1_RGPIO
++#define IMX_SC_R_M4_1_SEMA42		IMX_SC_R_MCU_1_SEMA42
++#define IMX_SC_R_M4_1_TPM		IMX_SC_R_MCU_1_TPM
++#define IMX_SC_R_M4_1_UART		IMX_SC_R_MCU_1_UART
++#define IMX_SC_R_MJPEG_DEC_MP		IMX_SC_R_MJPEG_0_DEC_MP
++#define IMX_SC_R_MJPEG_DEC_S0		IMX_SC_R_MJPEG_0_DEC_S0
++#define IMX_SC_R_MJPEG_DEC_S1		IMX_SC_R_MJPEG_0_DEC_S1
++#define IMX_SC_R_MJPEG_DEC_S2		IMX_SC_R_MJPEG_0_DEC_S2
++#define IMX_SC_R_MJPEG_DEC_S3		IMX_SC_R_MJPEG_0_DEC_S3
++#define IMX_SC_R_MJPEG_ENC_MP		IMX_SC_R_MJPEG_0_ENC_MP
++#define IMX_SC_R_MJPEG_ENC_S0		IMX_SC_R_MJPEG_0_ENC_S0
++#define IMX_SC_R_MJPEG_ENC_S1		IMX_SC_R_MJPEG_0_ENC_S1
++#define IMX_SC_R_MJPEG_ENC_S2		IMX_SC_R_MJPEG_0_ENC_S2
++#define IMX_SC_R_MJPEG_ENC_S3		IMX_SC_R_MJPEG_0_ENC_S3
++#define IMX_SC_R_PERF			IMX_SC_R_PERF_0
++#define IMX_SC_R_SMMU			IMX_SC_R_SMMU_0
++#define IMX_SC_R_VPU_UART		IMX_SC_R_ENET_0_A2
++#define IMX_SC_R_VPUCORE		IMX_SC_R_ENET_1_A0
++#define IMX_SC_R_VPUCORE_0		IMX_SC_R_ENET_1_A1
++#define IMX_SC_R_VPUCORE_1		IMX_SC_R_ENET_1_A2
++#define IMX_SC_R_VPUCORE_2		IMX_SC_R_ENET_1_A3
++#define IMX_SC_R_VPUCORE_3		IMX_SC_R_ENET_1_A4
++#define IMX_SC_R_UNUSED1		IMX_SC_R_V2X_PID0
++#define IMX_SC_R_UNUSED2		IMX_SC_R_V2X_PID1
++#define IMX_SC_R_UNUSED3		IMX_SC_R_V2X_PID2
++#define IMX_SC_R_UNUSED4		IMX_SC_R_V2X_PID3
++
+ /*
+  * Defines for SC CONTROL
+  */
+@@ -630,6 +742,10 @@
+ #define IMX_SC_C_INTF_SEL			59
+ #define IMX_SC_C_RXC_DLY			60
+ #define IMX_SC_C_TIMER_SEL			61
+-#define IMX_SC_C_LAST				62
++#define IMX_SC_C_MISC0				62
++#define IMX_SC_C_MISC1				63
++#define IMX_SC_C_MISC2				64
++#define IMX_SC_C_MISC3				65
++#define IMX_SC_C_LAST				66
+ 
+ #endif /* __DT_BINDINGS_RSCRC_IMX_H */
+diff --git a/include/dt-bindings/pinctrl/pads-imx8qxp.h b/include/dt-bindings/pinctrl/pads-imx8qxp.h
+index fbfee7ecf..e4abcd6f7 100644
+--- a/include/dt-bindings/pinctrl/pads-imx8qxp.h
++++ b/include/dt-bindings/pinctrl/pads-imx8qxp.h
+@@ -747,5 +747,30 @@
+ #define IMX8QXP_QSPI0B_SS1_B_LSIO_QSPI1A_SS1_B                     IMX8QXP_QSPI0B_SS1_B                  1
+ #define IMX8QXP_QSPI0B_SS1_B_LSIO_KPP0_ROW3                        IMX8QXP_QSPI0B_SS1_B                  2
+ #define IMX8QXP_QSPI0B_SS1_B_LSIO_GPIO3_IO24                       IMX8QXP_QSPI0B_SS1_B                  4
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHB_PAD                  IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHB 0
++
++/*!
++ * @name Fake Pad Mux Definitions
++ * format: name padid 0
++ */
++/*@{*/
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_PCIESEP_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_PCIESEP         0
++#define IMX8QXP_COMP_CTL_GPIO_3V3_USB3IO_PAD               IMX8QXP_COMP_CTL_GPIO_3V3_USB3IO              0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_SD1FIX0_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_SD1FIX0         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_SD1FIX1_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_SD1FIX1         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_VSELSEP_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_VSELSEP         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_VSEL3_PAD            IMX8QXP_COMP_CTL_GPIO_1V8_3V3_VSEL3           0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_ENET_ENETB0_PAD      IMX8QXP_COMP_CTL_GPIO_1V8_3V3_ENET_ENETB0     0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_ENET_ENETB1_PAD      IMX8QXP_COMP_CTL_GPIO_1V8_3V3_ENET_ENETB1     0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIOCT_PAD           IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIOCT          0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHB_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHB         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHK_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHK         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHT_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHT         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIOLH_PAD           IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIOLH          0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_MIPIDSIGPIO_PAD      IMX8QXP_COMP_CTL_GPIO_1V8_3V3_MIPIDSIGPIO     0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHD_PAD          IMX8QXP_COMP_CTL_GPIO_1V8_3V3_GPIORHD         0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_QSPI0A_PAD           IMX8QXP_COMP_CTL_GPIO_1V8_3V3_QSPI0A          0
++#define IMX8QXP_COMP_CTL_GPIO_1V8_3V3_QSPI0B_PAD           IMX8QXP_COMP_CTL_GPIO_1V8_3V3_QSPI0B          0
++/*@}*/
+ 
+ #endif /* _IMX8QXP_PADS_H */
+diff --git a/include/dt-bindings/pinctrl/s32v234-pinctrl.h b/include/dt-bindings/pinctrl/s32v234-pinctrl.h
+new file mode 100644
+index 000000000..8736d556a
+--- /dev/null
++++ b/include/dt-bindings/pinctrl/s32v234-pinctrl.h
+@@ -0,0 +1,1173 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright 2015-2016 by Freescale Semiconductor
++ * Copyright 2016-2017, 2019 NXP
++ */
++
++#ifndef __DT_BINDINGS_S32V234_PINCTRL_H__
++#define __DT_BINDINGS_S32V234_PINCTRL_H__
++
++/*
++ * Use to set PAD control
++ */
++#define PAD_CTL_DCYLE_TRIM_OFS      (22)
++#define PAD_CTL_DCYLE_TRIM_NONE     (0 << PAD_CTL_DCYLE_TRIM_OFS)
++#define PAD_CTL_DCYLE_TRIM_LEFT     (1 << PAD_CTL_DCYLE_TRIM_OFS)
++#define PAD_CTL_DCYLE_TRIM_RIGHT    (2 << PAD_CTL_DCYLE_TRIM_OFS)
++
++#define PAD_CTL_OBE         (1 << 21)
++#define PAD_CTL_ODE         (1 << 20)
++#define PAD_CTL_IBE         (1 << 19)
++#define PAD_CTL_HYS         (1 << 18)
++#define PAD_CTL_INV         (1 << 17)
++#define PAD_CTL_PKE         (1 << 16)
++
++#define PAD_CTL_SRE_OFS             (14)
++#define PAD_CTL_SRE_LOW_50HZ        (0 << PAD_CTL_SRE_OFS)
++#define PAD_CTL_SRE_LOW_100MHZ      (1 << PAD_CTL_SRE_OFS)
++/* The manual reports the same value for SRE = 01 and SRE = 10 */
++#define PAD_CTL_SRE_HIGH_100MHZ     (2 << PAD_CTL_SRE_OFS)
++#define PAD_CTL_SRE_HIGH_200MHZ     (3 << PAD_CTL_SRE_OFS)
++
++#define PAD_CTL_PUE             (1 << 13)
++
++#define PAD_CTL_PUS_OFS         (11)
++#define PAD_CTL_PUS_100K_DOWN   (0 << PAD_CTL_PUS_OFS)
++#define PAD_CTL_PUS_50K_UP      (1 << PAD_CTL_PUS_OFS)
++#define PAD_CTL_PUS_100K_UP     (2 << PAD_CTL_PUS_OFS)
++#define PAD_CTL_PUS_33K_UP      (3 << PAD_CTL_PUS_OFS)
++#define PAD_CTL_PUS_MASK        (3 << PAD_CTL_PUS_OFS)
++
++#define PAD_CTL_DSE_OFS         (8)
++#define PAD_CTL_DSE_OUT_DISABLE (0 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_240         (1 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_120         (2 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_80          (3 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_60          (4 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_48          (5 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_40          (6 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_34          (7 << PAD_CTL_DSE_OFS)
++#define PAD_CTL_DSE_MASK        (7 << PAD_CTL_DSE_OFS)
++
++#define PAD_CTL_CRPOINT_TRIM    (3 << 6)
++
++#define PAD_CTL_SMC             (1 << 5)
++
++#define PAD_CTL_MUX_MODE_ALT0   (0)
++#define PAD_CTL_MUX_MODE_ALT1   (1)
++#define PAD_CTL_MUX_MODE_ALT2   (2)
++#define PAD_CTL_MUX_MODE_ALT3   (3)
++#define PAD_CTL_MUX_MODE_ALT4   (4)
++#define PAD_CTL_MUX_MODE_ALT5   (5)
++#define PAD_CTL_MUX_MODE_ALT6   (6)
++#define PAD_CTL_MUX_MODE_ALT7   (7)
++#define PAD_CTL_MUX_MODE_MASK   (0xF)
++
++/* UART configuration */
++#define PAD_CTL_UART_TX         (PAD_CTL_OBE | PAD_CTL_PUS_100K_UP |\
++				PAD_CTL_DSE_60 | PAD_CTL_SRE_LOW_100MHZ |\
++				PAD_CTL_MUX_MODE_ALT1)
++#define PAD_CTL_UART_RX_MSCR    (PAD_CTL_PUE | PAD_CTL_IBE |\
++				PAD_CTL_DCYLE_TRIM_RIGHT)
++#define PAD_CTL_UART_RX_IMCR    (PAD_CTL_MUX_MODE_ALT2)
++
++/* CAN0 configuration */
++#define PAD_CTL_CAN_FD0_TX      (PAD_CTL_OBE | PAD_CTL_PUS_50K_UP |\
++				PAD_CTL_PUE | PAD_CTL_DSE_34 |\
++				PAD_CTL_MUX_MODE_ALT1)
++#define PAD_CTL_CAN_FD0_RX_MSCR (PAD_CTL_PUE | PAD_CTL_IBE | PAD_CTL_PUS_50K_UP)
++#define PAD_CTL_CAN_FD0_RX_IMCR (PAD_CTL_MUX_MODE_ALT2)
++
++/* CAN1 configuration */
++#define PAD_CTL_CAN_FD1_TX      (PAD_CTL_OBE | PAD_CTL_PUS_50K_UP |\
++				PAD_CTL_PUE | PAD_CTL_DSE_34 |\
++				PAD_CTL_MUX_MODE_ALT1)
++#define PAD_CTL_CAN_FD1_RX_MSCR (PAD_CTL_PUE | PAD_CTL_IBE | PAD_CTL_PUS_50K_UP)
++#define PAD_CTL_CAN_FD1_RX_IMCR (PAD_CTL_MUX_MODE_ALT3)
++
++/* USDHC configuration  */
++#define PAD_CTL_USDHC_BASE      (PAD_CTL_SRE_HIGH_200MHZ | PAD_CTL_OBE | \
++				PAD_CTL_DSE_34 | PAD_CTL_PKE |  \
++				PAD_CTL_IBE | PAD_CTL_PUS_100K_UP | PAD_CTL_PUE)
++#define PAD_CTL_USDHC_CMD       (PAD_CTL_USDHC_BASE | PAD_CTL_MUX_MODE_ALT1)
++#define PAD_CTL_USDHC_CLK       (PAD_CTL_USDHC_BASE | PAD_CTL_MUX_MODE_ALT2)
++#define PAD_CTL_USDHC_DAT0_3    (PAD_CTL_USDHC_BASE | PAD_CTL_MUX_MODE_ALT2)
++#define PAD_CTL_USDHC_DAT4_7    (PAD_CTL_USDHC_BASE | PAD_CTL_MUX_MODE_ALT3)
++
++/* QSPI configuration */
++#define PAD_CTL_QSPI_BASE         (PAD_CTL_SRE_HIGH_200MHZ | PAD_CTL_OBE | \
++				  PAD_CTL_DSE_34 | PAD_CTL_IBE)
++#define PAD_CTL_QSPI_CLK_BASE     (PAD_CTL_SRE_HIGH_200MHZ | PAD_CTL_DSE_34 | \
++				  PAD_CTL_PUS_100K_UP | PAD_CTL_OBE)
++#define PAD_CTL_QSPI_CK2_MUX      PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_A_SCK_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_B_SCK_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_A_CS0_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_B_CS0_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_A_CS1_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_B_CS1_MUX    PAD_CTL_MUX_MODE_ALT1
++#define PAD_CTL_QSPI_A_DQS        (PAD_CTL_SRE_HIGH_200MHZ | PAD_CTL_IBE | \
++				  PAD_CTL_PUS_100K_DOWN | PAD_CTL_PUE | \
++				  PAD_CTL_PKE)
++#define PAD_CTL_QSPI_A_DATA0_3    (PAD_CTL_QSPI_BASE | PAD_CTL_MUX_MODE_ALT1)
++#define PAD_CTL_QSPI_A_DATA4_7    (PAD_CTL_QSPI_BASE | PAD_CTL_MUX_MODE_ALT2)
++#define PAD_CTL_QSPI_B_DATA0_3    (PAD_CTL_QSPI_BASE | PAD_CTL_MUX_MODE_ALT1)
++
++/* EIRQ configuration */
++#define PAD_CTL_EIRQ              PAD_CTL_MUX_MODE_ALT2
++
++/* I2C0 - Serial Data Input PA15 */
++#define PAD_CTL_I2C0_MSCR_SDA_PA15    (PAD_CTL_MUX_MODE_ALT1 | PAD_CTL_OBE | \
++				      PAD_CTL_IBE | PAD_CTL_ODE | \
++				      PAD_CTL_DSE_34)
++#define PAD_CTL_I2C0_IMCR_SDA_PA15    (PAD_CTL_MUX_MODE_ALT2)
++
++/* I2C0 - Serial Clock Input PB0 */
++#define PAD_CTL_I2C0_MSCR_SCLK_PB0    (PAD_CTL_MUX_MODE_ALT1 | PAD_CTL_OBE | \
++				      PAD_CTL_IBE | PAD_CTL_ODE | \
++				      PAD_CTL_DSE_34)
++#define PAD_CTL_I2C0_IMCR_SCLK_PB0    (PAD_CTL_MUX_MODE_ALT2)
++
++/* I2C0 - Serial Data Input PG3 */
++#define PAD_CTL_I2C0_MSCR_SDA_PG3     (PAD_CTL_MUX_MODE_ALT2 | PAD_CTL_OBE | \
++				      PAD_CTL_IBE | PAD_CTL_ODE | \
++				      PAD_CTL_DSE_34)
++#define PAD_CTL_I2C0_IMCR_SDA_PG3     (PAD_CTL_MUX_MODE_ALT3)
++
++/* I2C0 - Serial Clock Input PG4 */
++#define PAD_CTL_I2C0_MSCR_SCLK_PG4    (PAD_CTL_MUX_MODE_ALT2 | PAD_CTL_OBE | \
++				      PAD_CTL_IBE | PAD_CTL_ODE | \
++				      PAD_CTL_DSE_34)
++#define PAD_CTL_I2C0_IMCR_SCLK_PG4    (PAD_CTL_MUX_MODE_ALT3)
++
++/* I2C1 - Serial Data Input */
++#define  PAD_CTL_I2C1_MSCR_SDA  (PAD_CTL_MUX_MODE_ALT2 | PAD_CTL_OBE | \
++				PAD_CTL_IBE | PAD_CTL_ODE | PAD_CTL_DSE_34)
++#define PAD_CTL_I2C1_IMCR_SDA   (PAD_CTL_MUX_MODE_ALT3)
++
++/* I2C1 - Serial Clock Input */
++#define  PAD_CTL_I2C1_MSCR_SCLK (PAD_CTL_MUX_MODE_ALT2 | PAD_CTL_OBE | \
++				PAD_CTL_IBE | PAD_CTL_ODE | PAD_CTL_DSE_34)
++#define PAD_CTL_I2C1_IMCR_SCLK  (PAD_CTL_MUX_MODE_ALT3)
++
++/* I2C2 - Serial Data Input */
++#define  PAD_CTL_I2C2_MSCR_SDA  (PAD_CTL_MUX_MODE_ALT1 | PAD_CTL_OBE | \
++				PAD_CTL_IBE | PAD_CTL_ODE | PAD_CTL_DSE_34)
++#define PAD_CTL_I2C2_IMCR_SDA   (PAD_CTL_MUX_MODE_ALT2)
++
++/* I2C2 - Serial Clock Input */
++#define  PAD_CTL_I2C2_MSCR_SCLK (PAD_CTL_MUX_MODE_ALT1 | PAD_CTL_OBE | \
++				PAD_CTL_IBE | PAD_CTL_ODE | PAD_CTL_DSE_34)
++#define PAD_CTL_I2C2_IMCR_SCLK  (PAD_CTL_MUX_MODE_ALT2)
++
++/* ENET CFG1 = 0x203701 */
++#define PAD_CTL_ENET_CFG1       (PAD_CTL_DSE_34 | PAD_CTL_PUS_100K_UP | PAD_CTL_PUE | \
++                                PAD_CTL_OBE | PAD_CTL_MUX_MODE_ALT1)
++
++/* ENET CFG2 = 0x20c701 */
++#define PAD_CTL_ENET_CFG2       (PAD_CTL_DSE_34 | PAD_CTL_SRE_HIGH_200MHZ | \
++                                PAD_CTL_OBE | PAD_CTL_MUX_MODE_ALT1)
++
++/* ENET CFG3 = 0x28c701 */
++#define PAD_CTL_ENET_CFG3       (PAD_CTL_DSE_34 | PAD_CTL_SRE_HIGH_200MHZ | \
++                                PAD_CTL_OBE | PAD_CTL_IBE | PAD_CTL_MUX_MODE_ALT1)
++
++/* ENET CFG7 = 0x8c700 */
++#define PAD_CTL_ENET_CFG4       (PAD_CTL_DSE_34 | PAD_CTL_SRE_HIGH_200MHZ | PAD_CTL_IBE)
++
++/* DCU CFG = 0x20C101 */
++#define PAD_CTL_DCU_CFG         (PAD_CTL_DSE_80 | PAD_CTL_SRE_HIGH_200MHZ | \
++				PAD_CTL_OBE | PAD_CTL_IBE | \
++				PAD_CTL_MUX_MODE_ALT1)
++
++#define PAD_CTL_DCU_CLK_CFG_DSE_DISABLE (PAD_CTL_SRE_HIGH_200MHZ | \
++					PAD_CTL_OBE | PAD_CTL_IBE | \
++					PAD_CTL_MUX_MODE_ALT1)
++
++/* VIU IMCR = 0x00000002 */
++#define PAD_CTL_VIU_CFG         (PAD_CTL_MUX_MODE_ALT2)
++
++/* VIU MSCR = 0x00000002 */
++#define PAD_CTL_VIU_IBE         (PAD_CTL_IBE)
++
++/* SPI 0-3 */
++#define PAD_CTL_SPI_MSCR_CSx    (PAD_CTL_OBE | PAD_CTL_PUS_100K_UP | \
++				PAD_CTL_DSE_34 | PAD_CTL_PUE)
++
++#define PAD_CTL_SPI_MSCR_SCK    (PAD_CTL_OBE | PAD_CTL_DSE_34 | \
++				PAD_CTL_MUX_MODE_ALT1)
++
++#define PAD_CTL_SPI_MSCR_SOUT   (PAD_CTL_OBE | PAD_CTL_DSE_34 | \
++				PAD_CTL_MUX_MODE_ALT1)
++
++#define PAD_CTL_SPI_MSCR_SIN    (PAD_CTL_PUE | PAD_CTL_IBE | \
++				PAD_CTL_PUS_50K_UP)
++
++#define PAD_CTL_SPI_IMCR_SIN    (PAD_CTL_MUX_MODE_ALT2)
++
++/* MSCR register numbers associated to port or function */
++#define S32V234_MSCR_PA0        0
++#define S32V234_MSCR_PA1        1
++#define S32V234_MSCR_PA2        2
++#define S32V234_MSCR_PA3        3
++#define S32V234_MSCR_PA4        4
++#define S32V234_MSCR_PA5        5
++#define S32V234_MSCR_PA6        6
++#define S32V234_MSCR_PA7        7
++#define S32V234_MSCR_PA8        8
++#define S32V234_MSCR_PA9        9
++#define S32V234_MSCR_PA10       10
++#define S32V234_MSCR_PA11       11
++#define S32V234_MSCR_PA12       12
++#define S32V234_MSCR_PA13       13
++#define S32V234_MSCR_PA14       14
++#define S32V234_MSCR_PA15       15
++#define S32V234_MSCR_PB0        16
++#define S32V234_MSCR_PB1        17
++#define S32V234_MSCR_PB2        18
++#define S32V234_MSCR_PB3        19
++#define S32V234_MSCR_PB4        20
++#define S32V234_MSCR_PB5        21
++#define S32V234_MSCR_PB6        22
++#define S32V234_MSCR_PB7        23
++#define S32V234_MSCR_PB8        24
++#define S32V234_MSCR_PB9        25
++#define S32V234_MSCR_PB10       26
++#define S32V234_MSCR_PB11       27
++#define S32V234_MSCR_PB12       28
++#define S32V234_MSCR_PB13       29
++#define S32V234_MSCR_PB14       30
++#define S32V234_MSCR_PB15       31
++#define S32V234_MSCR_PC0        32
++#define S32V234_MSCR_PC1        33
++#define S32V234_MSCR_PC2        34
++#define S32V234_MSCR_PC3        35
++#define S32V234_MSCR_PC4        36
++#define S32V234_MSCR_PC5        37
++#define S32V234_MSCR_PC6        38
++#define S32V234_MSCR_PC7        39
++#define S32V234_MSCR_PC8        40
++#define S32V234_MSCR_PC9        41
++#define S32V234_MSCR_PC10       42
++#define S32V234_MSCR_PC11       43
++#define S32V234_MSCR_PC12       44
++#define S32V234_MSCR_PC13       45
++#define S32V234_MSCR_PC14       46
++#define S32V234_MSCR_PC15       47
++#define S32V234_MSCR_PD0        48
++#define S32V234_MSCR_PD1        49
++#define S32V234_MSCR_PD2        50
++#define S32V234_MSCR_PD3        51
++#define S32V234_MSCR_PD4        52
++#define S32V234_MSCR_PD5        53
++#define S32V234_MSCR_PD6        54
++#define S32V234_MSCR_PD7        55
++#define S32V234_MSCR_PD8        56
++#define S32V234_MSCR_PD9        57
++#define S32V234_MSCR_PD10       58
++#define S32V234_MSCR_PD11       59
++#define S32V234_MSCR_PD12       60
++#define S32V234_MSCR_PD13       61
++#define S32V234_MSCR_PD14       62
++#define S32V234_MSCR_PD15       63
++#define S32V234_MSCR_PE0        64
++#define S32V234_MSCR_PE1        65
++#define S32V234_MSCR_PE2        66
++#define S32V234_MSCR_PE3        67
++#define S32V234_MSCR_PE4        68
++#define S32V234_MSCR_PE5        69
++#define S32V234_MSCR_PE6        70
++#define S32V234_MSCR_PE7        71
++#define S32V234_MSCR_PE8        72
++#define S32V234_MSCR_PE9        73
++#define S32V234_MSCR_PE10       74
++#define S32V234_MSCR_PE11       75
++#define S32V234_MSCR_PE12       76
++#define S32V234_MSCR_PE13       77
++#define S32V234_MSCR_PE14       78
++#define S32V234_MSCR_PE15       79
++#define S32V234_MSCR_PF0        80
++#define S32V234_MSCR_PF1        81
++#define S32V234_MSCR_PF2        82
++#define S32V234_MSCR_PF3        83
++#define S32V234_MSCR_PF4        84
++#define S32V234_MSCR_PF5        85
++#define S32V234_MSCR_PF6        86
++#define S32V234_MSCR_PF7        87
++#define S32V234_MSCR_PF8        88
++#define S32V234_MSCR_PF9        89
++#define S32V234_MSCR_PF10       90
++#define S32V234_MSCR_PF11       91
++#define S32V234_MSCR_PF12       92
++#define S32V234_MSCR_PF13       93
++#define S32V234_MSCR_PF14       94
++#define S32V234_MSCR_PF15       95
++#define S32V234_MSCR_PG0        96
++#define S32V234_MSCR_PG1        97
++#define S32V234_MSCR_PG2        98
++#define S32V234_MSCR_PG3        99
++#define S32V234_MSCR_PG4        100
++#define S32V234_MSCR_PG5        101
++#define S32V234_MSCR_PG6        102
++#define S32V234_MSCR_PG7        103
++#define S32V234_MSCR_PG8        104
++#define S32V234_MSCR_PG9        105
++#define S32V234_MSCR_PG10       106
++#define S32V234_MSCR_PG11       107
++#define S32V234_MSCR_PG12       108
++#define S32V234_MSCR_PG13       109
++#define S32V234_MSCR_PG14       110
++#define S32V234_MSCR_PG15       111
++#define S32V234_MSCR_PH0        112
++#define S32V234_MSCR_PH1        113
++#define S32V234_MSCR_PH2        114
++#define S32V234_MSCR_PH3        115
++#define S32V234_MSCR_PH4        116
++#define S32V234_MSCR_PH5        117
++#define S32V234_MSCR_PH6        118
++#define S32V234_MSCR_PH7        119
++#define S32V234_MSCR_PH8        120
++#define S32V234_MSCR_PH9        121
++#define S32V234_MSCR_PH10       122
++#define S32V234_MSCR_PH11       123
++#define S32V234_MSCR_PH12       124
++#define S32V234_MSCR_PH13       125
++#define S32V234_MSCR_PH14       126
++#define S32V234_MSCR_PH15       127
++#define S32V234_MSCR_PJ0        128
++#define S32V234_MSCR_PJ1        129
++#define S32V234_MSCR_PJ2        130
++#define S32V234_MSCR_PJ3        131
++#define S32V234_MSCR_PJ4        132
++#define S32V234_MSCR_PJ5        133
++#define S32V234_MSCR_PJ6        134
++#define S32V234_MSCR_PJ7        135
++#define S32V234_MSCR_PJ8        136
++#define S32V234_MSCR_PJ9        137
++#define S32V234_MSCR_PJ10       138
++#define S32V234_MSCR_PJ11       139
++#define S32V234_MSCR_PJ12       140
++#define S32V234_MSCR_PJ13       141
++#define S32V234_MSCR_PJ14       142
++#define S32V234_MSCR_PJ15       143
++#define S32V234_MSCR_PK0        144
++#define S32V234_MSCR_PK1        145
++#define S32V234_MSCR_PK2        146
++#define S32V234_MSCR_PK3        147
++#define S32V234_MSCR_PK4        148
++#define S32V234_MSCR_PK5        149
++#define S32V234_MSCR_PK6        150
++#define S32V234_MSCR_PK7        151
++#define S32V234_MSCR_PK8        152
++#define S32V234_MSCR_PK9        153
++#define S32V234_MSCR_PK10       154
++#define S32V234_MSCR_PK11       155
++#define S32V234_MSCR_PK12       156
++#define S32V234_MSCR_PK13       157
++#define S32V234_MSCR_PK14       158
++#define S32V234_MSCR_PK15       159
++#define S32V234_MSCR_PL0        160
++#define S32V234_MSCR_PL1        161
++#define S32V234_MSCR_PL2        162
++#define S32V234_MSCR_PL3        163
++#define S32V234_MSCR_PL4        164
++#define S32V234_MSCR_PL5        165
++#define S32V234_MSCR_PL8        166
++
++#define S32V234_IMCR_FlexTimer0_CH0    512
++#define S32V234_IMCR_FlexTimer0_CH1    513
++#define S32V234_IMCR_FlexTimer0_CH2    514
++#define S32V234_IMCR_FlexTimer0_CH3    515
++#define S32V234_IMCR_FlexTimer0_CH4    516
++#define S32V234_IMCR_FlexTimer0_CH5    517
++#define S32V234_IMCR_FlexTimer0_EXTCLK 520
++#define S32V234_IMCR_FlexTimer1_CH0    521
++#define S32V234_IMCR_FlexTimer1_CH1    522
++#define S32V234_IMCR_FlexTimer1_CH2    523
++#define S32V234_IMCR_FlexTimer1_CH3    524
++#define S32V234_IMCR_FlexTimer1_CH4    525
++#define S32V234_IMCR_FlexTimer1_CH5    526
++#define S32V234_IMCR_FlexTimer1_EXTCLK 529
++#define S32V234_IMCR_LFAST_REF_CLK     550
++#define S32V234_IMCR_BOOT_BOOTMOD0     570
++#define S32V234_IMCR_BOOT_BOOTMOD1     571
++#define S32V234_IMCR_SIUL_EIRQ0        590
++#define S32V234_IMCR_SIUL_EIRQ1        591
++#define S32V234_IMCR_SIUL_EIRQ2        592
++#define S32V234_IMCR_SIUL_EIRQ3        593
++#define S32V234_IMCR_SIUL_EIRQ4        594
++#define S32V234_IMCR_SIUL_EIRQ5        595
++#define S32V234_IMCR_SIUL_EIRQ6        596
++#define S32V234_IMCR_SIUL_EIRQ7        597
++#define S32V234_IMCR_SIUL_EIRQ8        598
++#define S32V234_IMCR_SIUL_EIRQ9        599
++#define S32V234_IMCR_SIUL_EIRQ10       600
++#define S32V234_IMCR_SIUL_EIRQ11       601
++#define S32V234_IMCR_SIUL_EIRQ12       602
++#define S32V234_IMCR_SIUL_EIRQ13       603
++#define S32V234_IMCR_SIUL_EIRQ14       604
++#define S32V234_IMCR_SIUL_EIRQ15       605
++#define S32V234_IMCR_SIUL_EIRQ16       606
++#define S32V234_IMCR_SIUL_EIRQ17       607
++#define S32V234_IMCR_SIUL_EIRQ18       608
++#define S32V234_IMCR_SIUL_EIRQ19       609
++#define S32V234_IMCR_SIUL_EIRQ20       610
++#define S32V234_IMCR_SIUL_EIRQ21       611
++#define S32V234_IMCR_SIUL_EIRQ22       612
++#define S32V234_IMCR_SIUL_EIRQ23       613
++#define S32V234_IMCR_SIUL_EIRQ24       614
++#define S32V234_IMCR_SIUL_EIRQ25       615
++#define S32V234_IMCR_SIUL_EIRQ26       616
++#define S32V234_IMCR_SIUL_EIRQ27       617
++#define S32V234_IMCR_SIUL_EIRQ28       618
++#define S32V234_IMCR_SIUL_EIRQ29       619
++#define S32V234_IMCR_SIUL_EIRQ30       620
++#define S32V234_IMCR_SIUL_EIRQ31       621
++#define S32V234_IMCR_VIU0_HSYNC        622
++#define S32V234_IMCR_VIU0_VSYNC        623
++#define S32V234_IMCR_VIU0_PCLK         624
++#define S32V234_IMCR_VIU0_D4           629
++#define S32V234_IMCR_VIU0_D5           630
++#define S32V234_IMCR_VIU0_D6           631
++#define S32V234_IMCR_VIU0_D7           632
++#define S32V234_IMCR_VIU0_D8           633
++#define S32V234_IMCR_VIU0_D9           634
++#define S32V234_IMCR_VIU0_D10          635
++#define S32V234_IMCR_VIU0_D11          636
++#define S32V234_IMCR_VIU0_D12          637
++#define S32V234_IMCR_VIU0_D13          638
++#define S32V234_IMCR_VIU0_D14          639
++#define S32V234_IMCR_VIU0_D15          640
++#define S32V234_IMCR_VIU0_D16          641
++#define S32V234_IMCR_VIU0_D17          642
++#define S32V234_IMCR_VIU0_D18          643
++#define S32V234_IMCR_VIU0_D19          644
++#define S32V234_IMCR_VIU0_D20          645
++#define S32V234_IMCR_VIU0_D21          646
++#define S32V234_IMCR_VIU0_D22          647
++#define S32V234_IMCR_VIU0_D23          648
++#define S32V234_IMCR_VIU1_HSYNC        657
++#define S32V234_IMCR_VIU1_VSYNC        658
++#define S32V234_IMCR_VIU1_PCLK         659
++#define S32V234_IMCR_VIU1_D8           668
++#define S32V234_IMCR_VIU1_D9           669
++#define S32V234_IMCR_VIU1_D10          670
++#define S32V234_IMCR_VIU1_D11          671
++#define S32V234_IMCR_VIU1_D12          672
++#define S32V234_IMCR_VIU1_D13          673
++#define S32V234_IMCR_VIU1_D14          674
++#define S32V234_IMCR_VIU1_D15          675
++#define S32V234_IMCR_VIU1_D16          676
++#define S32V234_IMCR_VIU1_D17          677
++#define S32V234_IMCR_VIU1_D18          678
++#define S32V234_IMCR_VIU1_D19          679
++#define S32V234_IMCR_VIU1_D20          680
++#define S32V234_IMCR_VIU1_D21          681
++#define S32V234_IMCR_VIU1_D22          682
++#define S32V234_IMCR_VIU1_D23          683
++#define S32V234_IMCR_CAN_FD0_RXD       700
++#define S32V234_IMCR_CAN_FD1_RXD       701
++#define S32V234_IMCR_UART0_RXD         712
++#define S32V234_IMCR_UART1_RXD         714
++#define S32V234_IMCR_IIC0_CLK          780
++#define S32V234_IMCR_IIC0_DATA         781
++#define S32V234_IMCR_IIC1_CLK          782
++#define S32V234_IMCR_IIC1_DATA         783
++#define S32V234_IMCR_IIC2_CLK          784
++#define S32V234_IMCR_IIC2_DATA         785
++#define S32V234_IMCR_SPI0_SIN          800
++#define S32V234_IMCR_SPI0_SCK          801
++#define S32V234_IMCR_SPI0_CS0          802
++#define S32V234_IMCR_SPI1_SIN          803
++#define S32V234_IMCR_SPI1_SCK          804
++#define S32V234_IMCR_SPI1_CS0          805
++#define S32V234_IMCR_SPI2_SIN          806
++#define S32V234_IMCR_SPI2_SCK          807
++#define S32V234_IMCR_SPI2_CS0          808
++#define S32V234_IMCR_SPI3_SIN          809
++#define S32V234_IMCR_SPI3_SCK          810
++#define S32V234_IMCR_SPI3_CS0          811
++#define S32V234_IMCR_QSPI_A_DQS        819
++#define S32V234_IMCR_QSPI_A_DATA0      820
++#define S32V234_IMCR_QSPI_A_DATA1      821
++#define S32V234_IMCR_QSPI_A_DATA2      822
++#define S32V234_IMCR_QSPI_A_DATA3      823
++#define S32V234_IMCR_QSPI_A_DATA4      824
++#define S32V234_IMCR_QSPI_A_DATA5      825
++#define S32V234_IMCR_QSPI_A_DATA6      826
++#define S32V234_IMCR_QSPI_A_DATA7      827
++#define S32V234_IMCR_QSPI_B_DQS        828
++#define S32V234_IMCR_QSPI_B_DATA0      829
++#define S32V234_IMCR_QSPI_B_DATA1      830
++#define S32V234_IMCR_QSPI_B_DATA2      831
++#define S32V234_IMCR_QSPI_B_DATA3      832
++#define S32V234_IMCR_USDHC_WP          900
++#define S32V234_IMCR_USDHC_CMD         901
++#define S32V234_IMCR_USDHC_CLK         902
++#define S32V234_IMCR_USDHC_DAT0        903
++#define S32V234_IMCR_USDHC_DAT1        904
++#define S32V234_IMCR_USDHC_DAT2        905
++#define S32V234_IMCR_USDHC_DAT3        906
++#define S32V234_IMCR_USDHC_DAT4        907
++#define S32V234_IMCR_USDHC_DAT5        908
++#define S32V234_IMCR_USDHC_DAT6        909
++#define S32V234_IMCR_USDHC_DAT7        910
++#define S32V234_IMCR_Ethernet_RX_ER    970
++#define S32V234_IMCR_Ethernet_COL      971
++#define S32V234_IMCR_Ethernet_CRS      972
++#define S32V234_IMCR_Ethernet_RX_DV    973
++#define S32V234_IMCR_Ethernet_RX_D0    974
++#define S32V234_IMCR_Ethernet_RX_D1    975
++#define S32V234_IMCR_Ethernet_RX_D2    976
++#define S32V234_IMCR_Ethernet_RX_D3    977
++#define S32V234_IMCR_Ethernet_TX_CLK   978
++#define S32V234_IMCR_Ethernet_RX_CLK   979
++#define S32V234_IMCR_Ethernet_MDIO     981
++#define S32V234_IMCR_Ethernet_TIMER0   982
++#define S32V234_IMCR_Ethernet_TIMER1   983
++#define S32V234_IMCR_Ethernet_TIMER2   984
++#define S32V234_IMCR_FlexRay_CA_RX     1012
++#define S32V234_IMCR_FlexRay_CB_RX     1013
++#define S32V234_IMCR_SSE_IN0           1018
++#define S32V234_IMCR_SSE_IN1           1019
++#define S32V234_IMCR_SSE_IN2           1020
++#define S32V234_IMCR_SSE_IN3           1021
++
++/* Format of pins: MSCR_IDX PAD_CONFIGURATION If you know the IMCR_IDX
++ * instead of MSCR_IDX, add 512 to it as the Reference Manual states.
++ */
++
++/* UART configuration */
++#define S32V234_PAD_PA12__UART0_TXD     S32V234_MSCR_PA12 PAD_CTL_UART_TX
++#define S32V234_PAD_PA11__UART0_RXD_OUT S32V234_MSCR_PA11 PAD_CTL_UART_RX_MSCR
++#define S32V234_PAD_PA11__UART0_RXD_IN  S32V234_IMCR_UART0_RXD \
++					PAD_CTL_UART_RX_IMCR
++
++#define S32V234_PAD_PA14__UART1_TXD     S32V234_MSCR_PA14 PAD_CTL_UART_TX
++#define S32V234_PAD_PA13__UART1_RXD_OUT S32V234_MSCR_PA13 PAD_CTL_UART_RX_MSCR
++#define S32V234_PAD_PA13__UART1_RXD_IN  S32V234_IMCR_UART1_RXD \
++					PAD_CTL_UART_RX_IMCR
++
++/* CAN0 configuration */
++#define S32V234_PAD_PA2__CAN_FD0_TXD     S32V234_MSCR_PA2 PAD_CTL_CAN_FD0_TX
++#define S32V234_PAD_PA3__CAN_FD0_RXD_OUT S32V234_MSCR_PA3 \
++					 PAD_CTL_CAN_FD0_RX_MSCR
++#define S32V234_PAD_PA3__CAN_FD0_RXD_IN  S32V234_IMCR_CAN_FD0_RXD \
++					 PAD_CTL_CAN_FD0_RX_IMCR
++
++/* CAN1 configuration */
++#define S32V234_PAD_PA4__CAN_FD1_TXD     S32V234_MSCR_PA4 PAD_CTL_CAN_FD1_TX
++#define S32V234_PAD_PA5__CAN_FD1_RXD_OUT S32V234_MSCR_PA5 \
++					 PAD_CTL_CAN_FD1_RX_MSCR
++#define S32V234_PAD_PA5__CAN_FD1_RXD_IN  S32V234_IMCR_CAN_FD1_RXD \
++					 PAD_CTL_CAN_FD1_RX_IMCR
++
++/* uSDHC configuration */
++#define S32V234_PAD_PK6__USDHC_CLK_OUT   S32V234_MSCR_PK6 PAD_CTL_USDHC_CLK
++#define S32V234_PAD_PK6__USDHC_CLK_IN    S32V234_IMCR_USDHC_CLK \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK7__USDHC_CMD_OUT   S32V234_MSCR_PK7 PAD_CTL_USDHC_CMD
++#define S32V234_PAD_PK7__USDHC_CMD_IN    S32V234_IMCR_USDHC_CMD \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK8__USDHC_DAT0_OUT  S32V234_MSCR_PK8 PAD_CTL_USDHC_DAT0_3
++#define S32V234_PAD_PK8__USDHC_DAT0_IN   S32V234_IMCR_USDHC_DAT0 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK9__USDHC_DAT1_OUT  S32V234_MSCR_PK9 PAD_CTL_USDHC_DAT0_3
++#define S32V234_PAD_PK9__USDHC_DAT1_IN   S32V234_IMCR_USDHC_DAT1 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK10__USDHC_DAT2_OUT S32V234_MSCR_PK10 PAD_CTL_USDHC_DAT0_3
++#define S32V234_PAD_PK10__USDHC_DAT2_IN  S32V234_IMCR_USDHC_DAT2 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK11__USDHC_DAT3_OUT S32V234_MSCR_PK11 PAD_CTL_USDHC_DAT0_3
++#define S32V234_PAD_PK11__USDHC_DAT3_IN  S32V234_IMCR_USDHC_DAT3 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PK15__USDHC_DAT4_OUT S32V234_MSCR_PK15 PAD_CTL_USDHC_DAT4_7
++#define S32V234_PAD_PK15__USDHC_DAT4_IN  S32V234_IMCR_USDHC_DAT4 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PL0__USDHC_DAT5_OUT  S32V234_MSCR_PL0 PAD_CTL_USDHC_DAT4_7
++#define S32V234_PAD_PL0__USDHC_DAT5_IN   S32V234_IMCR_USDHC_DAT5 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PL1__USDHC_DAT6_OUT  S32V234_MSCR_PL1 PAD_CTL_USDHC_DAT4_7
++#define S32V234_PAD_PL1__USDHC_DAT6_IN   S32V234_IMCR_USDHC_DAT6 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++#define S32V234_PAD_PL2__USDHC_DAT7_OUT  S32V234_MSCR_PL2 PAD_CTL_USDHC_DAT4_7
++#define S32V234_PAD_PL2__USDHC_DAT7_IN   S32V234_IMCR_USDHC_DAT7 \
++					 PAD_CTL_MUX_MODE_ALT3
++
++/* QSPI configuration */
++#define S32V234_PAD_PK7__QSPI_A_DQS        S32V234_IMCR_QSPI_A_DQS \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK14__QSPI_B_DQS       S32V234_IMCR_QSPI_B_DQS \
++					   PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PK8__QSPI_A_DATA0_IN   S32V234_IMCR_QSPI_A_DATA0 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK8__QSPI_A_DATA0_OUT  S32V234_MSCR_PK8 \
++					   PAD_CTL_QSPI_A_DATA0_3
++
++#define S32V234_PAD_PK9__QSPI_A_DATA1_IN   S32V234_IMCR_QSPI_A_DATA1 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK9__QSPI_A_DATA1_OUT  S32V234_MSCR_PK9 \
++					   PAD_CTL_QSPI_A_DATA0_3
++
++#define S32V234_PAD_PK10__QSPI_A_DATA2_IN  S32V234_IMCR_QSPI_A_DATA2 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK10__QSPI_A_DATA2_OUT S32V234_MSCR_PK10 \
++					   PAD_CTL_QSPI_A_DATA0_3
++
++#define S32V234_PAD_PK11__QSPI_A_DATA3_IN  S32V234_IMCR_QSPI_A_DATA3 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK11__QSPI_A_DATA3_OUT S32V234_MSCR_PK11 \
++					   PAD_CTL_QSPI_A_DATA0_3
++
++#define S32V234_PAD_PK15__QSPI_A_DATA4_IN  S32V234_IMCR_QSPI_A_DATA4 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK15__QSPI_A_DATA4_OUT S32V234_MSCR_PK15 \
++					   PAD_CTL_QSPI_A_DATA4_7
++
++#define S32V234_PAD_PL0__QSPI_A_DATA5_IN   S32V234_IMCR_QSPI_A_DATA5 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL0__QSPI_A_DATA5_OUT  S32V234_MSCR_PL0 \
++					   PAD_CTL_QSPI_A_DATA4_7
++
++#define S32V234_PAD_PL1__QSPI_A_DATA6_IN   S32V234_IMCR_QSPI_A_DATA6 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL1__QSPI_A_DATA6_OUT  S32V234_MSCR_PL1 \
++					   PAD_CTL_QSPI_A_DATA4_7
++
++#define S32V234_PAD_PL2__QSPI_A_DATA7_IN   S32V234_IMCR_QSPI_A_DATA7 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL2__QSPI_A_DATA7_OUT  S32V234_MSCR_PL2 \
++					   PAD_CTL_QSPI_A_DATA4_7
++
++#define S32V234_PAD_PK15__QSPI_B_DATA0_IN  S32V234_IMCR_QSPI_B_DATA0 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PK15__QSPI_B_DATA0_OUT S32V234_MSCR_PK15 \
++					   PAD_CTL_QSPI_B_DATA0_3
++
++#define S32V234_PAD_PL0__QSPI_B_DATA1_IN   S32V234_IMCR_QSPI_B_DATA1 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL0__QSPI_B_DATA1_OUT  S32V234_MSCR_PL0 \
++					   PAD_CTL_QSPI_B_DATA0_3
++
++#define S32V234_PAD_PL1__QSPI_B_DATA2_IN   S32V234_IMCR_QSPI_B_DATA2 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL1__QSPI_B_DATA2_OUT  S32V234_MSCR_PL1 \
++					   PAD_CTL_QSPI_B_DATA0_3
++
++#define S32V234_PAD_PL2__QSPI_B_DATA3_IN   S32V234_IMCR_QSPI_B_DATA3 \
++					   PAD_CTL_MUX_MODE_ALT2
++#define S32V234_PAD_PL2__QSPI_B_DATA3_OUT  S32V234_MSCR_PL2 \
++					   PAD_CTL_QSPI_B_DATA0_3
++
++#define S32V234_PAD_PF12__QSPI_A_CS1       S32V234_MSCR_PF12 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_A_CS1_MUX)
++#define S32V234_PAD_PF13__QSPI_B_CS1       S32V234_MSCR_PF13 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_B_CS1_MUX)
++
++#define S32V234_PAD_PK5__QSPI_A_CS0        S32V234_MSCR_PK5 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_A_CS0_MUX)
++#define S32V234_PAD_PK6__QSPI_A_SCK        S32V234_MSCR_PK6 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_A_SCK_MUX)
++
++#define S32V234_PAD_PK12__QSPI_B_CS0       S32V234_MSCR_PK12 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_B_CS0_MUX)
++#define S32V234_PAD_PK13__QSPI_B_SCK       S32V234_MSCR_PK13 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_B_SCK_MUX)
++
++#define S32V234_PAD_PK13__QSPI_CK2         S32V234_MSCR_PK13 \
++					   (PAD_CTL_QSPI_CLK_BASE | \
++					   PAD_CTL_QSPI_CK2_MUX)
++
++/* I2C configuration */
++#define S32V234_PAD_PA15__I2C0_DATA_OUT S32V234_MSCR_PA15 \
++					PAD_CTL_I2C0_MSCR_SDA_PA15
++#define S32V234_PAD_PA15__I2C0_DATA_IN  S32V234_IMCR_IIC0_DATA \
++					PAD_CTL_I2C0_IMCR_SDA_PA15
++
++#define S32V234_PAD_PB0__I2C0_SCLK_OUT  S32V234_MSCR_PB0 \
++					PAD_CTL_I2C0_MSCR_SCLK_PB0
++#define S32V234_PAD_PB0__I2C0_SCLK_IN   S32V234_IMCR_IIC0_CLK \
++					PAD_CTL_I2C0_IMCR_SCLK_PB0
++
++#define S32V234_PAD_PG3__I2C0_DATA_OUT  S32V234_MSCR_PG3 \
++					PAD_CTL_I2C0_MSCR_SDA_PG3
++#define S32V234_PAD_PG3__I2C0_DATA_IN   S32V234_IMCR_IIC0_DATA \
++					PAD_CTL_I2C0_IMCR_SDA_PG3
++
++#define S32V234_PAD_PG4__I2C0_SCLK_OUT  S32V234_MSCR_PG4 \
++					PAD_CTL_I2C0_MSCR_SCLK_PG4
++#define S32V234_PAD_PG4__I2C0_SCLK_IN   S32V234_IMCR_IIC0_CLK \
++					PAD_CTL_I2C0_IMCR_SCLK_PG4
++
++#define S32V234_PAD_PG5__I2C1_DATA_OUT  S32V234_MSCR_PG5 \
++					PAD_CTL_I2C1_MSCR_SDA
++#define S32V234_PAD_PG5__I2C1_DATA_IN   S32V234_IMCR_IIC1_DATA \
++					PAD_CTL_I2C1_IMCR_SDA
++
++#define S32V234_PAD_PG6__I2C1_SCLK_OUT  S32V234_MSCR_PG6 \
++					PAD_CTL_I2C1_MSCR_SCLK
++#define S32V234_PAD_PG6__I2C1_SCLK_IN   S32V234_IMCR_IIC1_CLK \
++					PAD_CTL_I2C1_IMCR_SCLK
++
++#define S32V234_PAD_PB3__I2C2_DATA_OUT  S32V234_MSCR_PB3 \
++					PAD_CTL_I2C2_MSCR_SDA
++#define S32V234_PAD_PB3__I2C2_DATA_IN   S32V234_IMCR_IIC2_DATA \
++					PAD_CTL_I2C2_IMCR_SDA
++
++#define S32V234_PAD_PB4__I2C2_SCLK_OUT  S32V234_MSCR_PB4 \
++					PAD_CTL_I2C2_MSCR_SCLK
++#define S32V234_PAD_PB4__I2C2_SCLK_IN   S32V234_IMCR_IIC2_CLK \
++					PAD_CTL_I2C2_IMCR_SCLK
++
++/* ENET configuration */
++#define S32V234_PAD_PC13__MDC       S32V234_MSCR_PC13 PAD_CTL_ENET_CFG2
++
++#define S32V234_PAD_PC14__MDIO_OUT  S32V234_MSCR_PC14 PAD_CTL_ENET_CFG3
++#define S32v234_PAD_PC14__MDIO_IN   S32V234_IMCR_Ethernet_MDIO \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PC15__TXCLK_OUT S32V234_MSCR_PC15 PAD_CTL_ENET_CFG1
++#define S32V234_PAD_PC15__TXCLK_IN  S32V234_IMCR_Ethernet_TX_CLK \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD0__RXCLK_OUT  S32V234_MSCR_PD0 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD0__RXCLK_IN   S32V234_IMCR_Ethernet_RX_CLK \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD1__RX_D0_OUT  S32V234_MSCR_PD1 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD1__RX_D0_IN   S32V234_IMCR_Ethernet_RX_D0 \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD2__RX_D1_OUT  S32V234_MSCR_PD2 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD2__RX_D1_IN   S32V234_IMCR_Ethernet_RX_D1 \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD3__RX_D2_OUT  S32V234_MSCR_PD3 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD3__RX_D2_IN   S32V234_IMCR_Ethernet_RX_D2 \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD4__RX_D3_OUT  S32V234_MSCR_PD4 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD4__RX_D3_IN   S32V234_IMCR_Ethernet_RX_D3 \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD4__RX_DV_OUT  S32V234_MSCR_PD5 PAD_CTL_ENET_CFG4
++#define S32V234_PAD_PD4__RX_DV_IN   S32V234_IMCR_Ethernet_RX_DV \
++				    PAD_CTL_MUX_MODE_ALT2
++
++#define S32V234_PAD_PD7__TX_D0_OUT  S32V234_MSCR_PD7  PAD_CTL_ENET_CFG2
++#define S32V234_PAD_PD8__TX_D1_OUT  S32V234_MSCR_PD8  PAD_CTL_ENET_CFG2
++#define S32V234_PAD_PD9__TX_D2_OUT  S32V234_MSCR_PD9  PAD_CTL_ENET_CFG2
++#define S32V234_PAD_PD10__TX_D3_OUT S32V234_MSCR_PD10 PAD_CTL_ENET_CFG2
++#define S32V234_PAD_PD11__TX_EN_OUT S32V234_MSCR_PD11 PAD_CTL_ENET_CFG2
++
++/* 2D ACE DCU */
++#define S32V234_PAD_PH8__DCU_HSYNC_C1 S32V234_MSCR_PH8  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PH9__DCU_VSYNC_C2 S32V234_MSCR_PH9  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PH10__DCU_DE_C3   S32V234_MSCR_PH10 PAD_CTL_DCU_CFG
++
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_DISABLE S32V234_MSCR_PH12 \
++					PAD_CTL_DCU_CLK_CFG_DSE_DISABLE
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_240     S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_240)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_120     S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_120)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_80      S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_80)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_60      S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_60)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_48      S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_48)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_40      S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_40)
++#define S32V234_PAD_PH12__DCU_PCLK_D1_DSE_34      S32V234_MSCR_PH12 \
++					(PAD_CTL_DCU_CLK_CFG_DSE_DISABLE | \
++					PAD_CTL_DSE_34)
++
++#define S32V234_PAD_PH13__DCU_R0_D2  S32V234_MSCR_PH13 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PH14__DCU_R1_D3  S32V234_MSCR_PH14 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PH15__DCU_R2_D4  S32V234_MSCR_PH15 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ0__DCU_R3_D5   S32V234_MSCR_PJ0  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ1__DCU_R4_D6   S32V234_MSCR_PJ1  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ2__DCU_R5_D7   S32V234_MSCR_PJ2  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ3__DCU_R6_D8   S32V234_MSCR_PJ3  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ4__DCU_R7_D9   S32V234_MSCR_PJ4  PAD_CTL_DCU_CFG
++
++#define S32V234_PAD_PJ5__DCU_G0_D10  S32V234_MSCR_PJ5  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ6__DCU_G1_D11  S32V234_MSCR_PJ6  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ7__DCU_G2_D12  S32V234_MSCR_PJ7  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ8__DCU_G3_D13  S32V234_MSCR_PJ8  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ9__DCU_G4_D14  S32V234_MSCR_PJ9  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ10__DCU_G5_D15 S32V234_MSCR_PJ10 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ11__DCU_G6_D16 S32V234_MSCR_PJ11 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ12__DCU_G7_D17 S32V234_MSCR_PJ12 PAD_CTL_DCU_CFG
++
++#define S32V234_PAD_PJ13__DCU_B0_D18 S32V234_MSCR_PJ13 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ14__DCU_B1_D19 S32V234_MSCR_PJ14 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PJ15__DCU_B2_D20 S32V234_MSCR_PJ15 PAD_CTL_DCU_CFG
++#define S32V234_PAD_PK0__DCU_B3_D21  S32V234_MSCR_PK0  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PK1__DCU_B4_D22  S32V234_MSCR_PK1  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PK2__DCU_B5_D23  S32V234_MSCR_PK2  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PK3__DCU_B6_D24  S32V234_MSCR_PK3  PAD_CTL_DCU_CFG
++#define S32V234_PAD_PK4__DCU_B7_D25  S32V234_MSCR_PK4  PAD_CTL_DCU_CFG
++
++/* VIULite0 */
++#define S32V234_PAD_PD13__VIU0_EN    S32V234_MSCR_PD13       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PD13__VIU0_PCLK  S32V234_IMCR_VIU0_PCLK  PAD_CTL_VIU_CFG
++#define S32V234_PAD_PD14__VIU0_EN    S32V234_MSCR_PD14       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PD14__VIU0_HSYNC S32V234_IMCR_VIU0_HSYNC PAD_CTL_VIU_CFG
++#define S32V234_PAD_PD15__VIU0_EN    S32V234_MSCR_PD15       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PD15__VIU0_VSYNC S32V234_IMCR_VIU0_VSYNC PAD_CTL_VIU_CFG
++
++#define S32V234_PAD_PF3__VIU_EN      S32V234_MSCR_PF3        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF3__VIU0_D4     S32V234_IMCR_VIU0_D4    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF4__VIU_EN      S32V234_MSCR_PF4        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF4__VIU0_D5     S32V234_IMCR_VIU0_D5    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF5__VIU_EN      S32V234_MSCR_PF5        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF5__VIU0_D6     S32V234_IMCR_VIU0_D6    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF6__VIU_EN      S32V234_MSCR_PF6        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF6__VIU0_D7     S32V234_IMCR_VIU0_D7    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE0__VIU0_EN     S32V234_MSCR_PE0        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE0__VIU0_D8     S32V234_IMCR_VIU0_D8    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE1__VIU0_EN     S32V234_MSCR_PE1        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE1__VIU0_D9     S32V234_IMCR_VIU0_D9    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE2__VIU0_EN     S32V234_MSCR_PE2        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE2__VIU0_D10    S32V234_IMCR_VIU0_D10   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE3__VIU0_EN     S32V234_MSCR_PE3        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE3__VIU0_D11    S32V234_IMCR_VIU0_D11   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE4__VIU0_EN     S32V234_MSCR_PE4        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE4__VIU0_D12    S32V234_IMCR_VIU0_D12   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE5__VIU0_EN     S32V234_MSCR_PE5        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE5__VIU0_D13    S32V234_IMCR_VIU0_D13   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE6__VIU0_EN     S32V234_MSCR_PE6        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE6__VIU0_D14    S32V234_IMCR_VIU0_D14   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE7__VIU0_EN     S32V234_MSCR_PE7        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE7__VIU0_D15    S32V234_IMCR_VIU0_D15   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE8__VIU0_EN     S32V234_MSCR_PE8        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE8__VIU0_D16    S32V234_IMCR_VIU0_D16   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE9__VIU0_EN     S32V234_MSCR_PE9        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE9__VIU0_D17    S32V234_IMCR_VIU0_D17   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE10__VIU0_EN    S32V234_MSCR_PE10       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE10__VIU0_D18   S32V234_IMCR_VIU0_D18   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE11__VIU0_EN    S32V234_MSCR_PE11       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE11__VIU0_D19   S32V234_IMCR_VIU0_D19   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE12__VIU0_EN    S32V234_MSCR_PE12       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE12__VIU0_D20   S32V234_IMCR_VIU0_D20   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE13__VIU0_EN    S32V234_MSCR_PE13       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE13__VIU0_D21   S32V234_IMCR_VIU0_D21   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE14__VIU0_EN    S32V234_MSCR_PE14       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE14__VIU0_D22   S32V234_IMCR_VIU0_D22   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PE15__VIU0_EN    S32V234_MSCR_PE15       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PE15__VIU0_D23   S32V234_IMCR_VIU0_D23   PAD_CTL_VIU_CFG
++
++/* VIULite1 */
++#define S32V234_PAD_PF0__VIU1_EN    S32V234_MSCR_PF0        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF0__VIU1_PCLK  S32V234_IMCR_VIU1_PCLK  PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF1__VIU1_EN    S32V234_MSCR_PF1        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF1__VIU1_HSYNC S32V234_IMCR_VIU1_HSYNC PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF2__VIU1_EN    S32V234_MSCR_PF2        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF2__VIU1_VSYNC S32V234_IMCR_VIU1_VSYNC PAD_CTL_VIU_CFG
++
++#define S32V234_PAD_PF3__VIU_EN     S32V234_MSCR_PF3        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF3__VIU1_D8    S32V234_IMCR_VIU1_D8    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF4__VIU_EN     S32V234_MSCR_PF4        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF4__VIU1_D9    S32V234_IMCR_VIU1_D9    PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF5__VIU_EN     S32V234_MSCR_PF5        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF5__VIU1_D10   S32V234_IMCR_VIU1_D10   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF6__VIU_EN     S32V234_MSCR_PF6        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF6__VIU1_D11   S32V234_IMCR_VIU1_D11   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF7__VIU1_EN    S32V234_MSCR_PF7        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF7__VIU1_D12   S32V234_IMCR_VIU1_D12   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF8__VIU1_EN    S32V234_MSCR_PF8        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF8__VIU1_D13   S32V234_IMCR_VIU1_D13   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF9__VIU1_EN    S32V234_MSCR_PF9        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF9__VIU1_D14   S32V234_IMCR_VIU1_D14   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF10__VIU1_EN   S32V234_MSCR_PF10       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF10__VIU1_D15  S32V234_IMCR_VIU1_D15   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF11__VIU1_EN   S32V234_MSCR_PF11       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF11__VIU1_D16  S32V234_IMCR_VIU1_D16   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF12__VIU1_EN   S32V234_MSCR_PF12       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF12__VIU1_D17  S32V234_IMCR_VIU1_D17   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF13__VIU1_EN   S32V234_MSCR_PF13       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF13__VIU1_D18  S32V234_IMCR_VIU1_D18   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF14__VIU1_EN   S32V234_MSCR_PF14       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF14__VIU1_D19  S32V234_IMCR_VIU1_D19   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PF15__VIU1_EN   S32V234_MSCR_PF15       PAD_CTL_VIU_IBE
++#define S32V234_PAD_PF15__VIU1_D20  S32V234_IMCR_VIU1_D20   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PG0__VIU1_EN    S32V234_MSCR_PG0        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PG0__VIU1_D21   S32V234_IMCR_VIU1_D21   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PG1__VIU1_EN    S32V234_MSCR_PG1        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PG1__VIU1_D22   S32V234_IMCR_VIU1_D22   PAD_CTL_VIU_CFG
++#define S32V234_PAD_PG2__VIU1_EN    S32V234_MSCR_PG2        PAD_CTL_VIU_IBE
++#define S32V234_PAD_PG2__VIU1_D23   S32V234_IMCR_VIU1_D23   PAD_CTL_VIU_CFG
++
++/* SPI 0-3 */
++#define S32V234_PAD_PB6__SPI0_SOUT_OUT  S32V234_MSCR_PB6 PAD_CTL_SPI_MSCR_SOUT
++#define S32V234_PAD_PB7__SPI0_SIN_OUT   S32V234_MSCR_PB7 PAD_CTL_SPI_MSCR_SIN
++#define S32V234_PAD_PB7__SPI0_SIN_IN    S32V234_IMCR_SPI0_SIN \
++					PAD_CTL_SPI_IMCR_SIN
++#define S32V234_PAD_PB5__SPI0_SCK_OUT   S32V234_MSCR_PB5 PAD_CTL_SPI_MSCR_SCK
++#define S32V234_PAD_PB8__SPI0_CS0_OUT   S32V234_MSCR_PB8 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT1)
++#define S32V234_PAD_PC0__SPI0_CS4_OUT   S32V234_MSCR_PC0 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT3)
++#define S32V234_PAD_PC1__SPI0_CS5_OUT   S32V234_MSCR_PC1 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT3)
++#define S32V234_PAD_PC2__SPI0_CS6_OUT   S32V234_MSCR_PC2 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT3)
++#define S32V234_PAD_PC3__SPI0_CS7_OUT   S32V234_MSCR_PC3 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT2)
++
++#define S32V234_PAD_PB10__SPI1_SOUT_OUT S32V234_MSCR_PB10 PAD_CTL_SPI_MSCR_SOUT
++#define S32V234_PAD_PB11__SPI1_SIN_OUT  S32V234_MSCR_PB11 PAD_CTL_SPI_MSCR_SIN
++#define S32V234_PAD_PB11__SPI1_SIN_IN   S32V234_IMCR_SPI1_SIN \
++					PAD_CTL_SPI_IMCR_SIN
++#define S32V234_PAD_PB9__SPI1_SCK_OUT   S32V234_MSCR_PB9 PAD_CTL_SPI_MSCR_SCK
++#define S32V234_PAD_PB12__SPI1_CS0_OUT  S32V234_MSCR_PB12 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT1)
++
++#define S32V234_PAD_PB14__SPI2_SOUT_OUT S32V234_MSCR_PB14 PAD_CTL_SPI_MSCR_SOUT
++#define S32V234_PAD_PB15__SPI2_SIN_OUT  S32V234_MSCR_PB15 PAD_CTL_SPI_MSCR_SIN
++#define S32V234_PAD_PB15__SPI2_SIN_IN   S32V234_IMCR_SPI2_SIN \
++					PAD_CTL_SPI_IMCR_SIN
++#define S32V234_PAD_P13__SPI2_SCK_OUT   S32V234_MSCR_PB13 PAD_CTL_SPI_MSCR_SCK
++#define S32V234_PAD_PC0__SPI2_CS0_OUT   S32V234_MSCR_PC0 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT1)
++
++#define S32V234_PAD_PC2__SPI3_SOUT_OUT  S32V234_MSCR_PC2 PAD_CTL_SPI_MSCR_SOUT
++#define S32V234_PAD_PC3__SPI3_SIN_OUT   S32V234_MSCR_PC3 PAD_CTL_SPI_MSCR_SIN
++#define S32V234_PAD_PC3__SPI3_SIN_IN    S32V234_IMCR_SPI3_SIN \
++					PAD_CTL_SPI_IMCR_SIN
++#define S32V234_PAD_PC1__SPI3_SCK_OUT   S32V234_MSCR_PC1 PAD_CTL_SPI_MSCR_SCK
++#define S32V234_PAD_PC4__SPI3_CS0_OUT   S32V234_MSCR_PC4 \
++					(PAD_CTL_SPI_MSCR_CSx | \
++					PAD_CTL_MUX_MODE_ALT1)
++
++/* SIUL2 GPIOs */
++#define S32V234_PAD_PA0__SIUL_GPIO0    S32V234_MSCR_PA0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA1__SIUL_GPIO1    S32V234_MSCR_PA1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA2__SIUL_GPIO2    S32V234_MSCR_PA2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA3__SIUL_GPIO3    S32V234_MSCR_PA3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA4__SIUL_GPIO4    S32V234_MSCR_PA4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA5__SIUL_GPIO5    S32V234_MSCR_PA5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA6__SIUL_GPIO6    S32V234_MSCR_PA6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA7__SIUL_GPIO7    S32V234_MSCR_PA7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA8__SIUL_GPIO8    S32V234_MSCR_PA8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA9__SIUL_GPIO9    S32V234_MSCR_PA9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA10__SIUL_GPIO10  S32V234_MSCR_PA10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA11__SIUL_GPIO11  S32V234_MSCR_PA11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA12__SIUL_GPIO12  S32V234_MSCR_PA12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA13__SIUL_GPIO13  S32V234_MSCR_PA13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA14__SIUL_GPIO14  S32V234_MSCR_PA14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PA15__SIUL_GPIO15  S32V234_MSCR_PA15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB0__SIUL_GPIO16   S32V234_MSCR_PB0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB1__SIUL_GPIO17   S32V234_MSCR_PB1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB2__SIUL_GPIO18   S32V234_MSCR_PB2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB3__SIUL_GPIO19   S32V234_MSCR_PB3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB4__SIUL_GPIO20   S32V234_MSCR_PB4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB5__SIUL_GPIO21   S32V234_MSCR_PB5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB6__SIUL_GPIO22   S32V234_MSCR_PB6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB7__SIUL_GPIO23   S32V234_MSCR_PB7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB8__SIUL_GPIO24   S32V234_MSCR_PB8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB9__SIUL_GPIO25   S32V234_MSCR_PB9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB10__SIUL_GPIO26  S32V234_MSCR_PB10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB11__SIUL_GPIO27  S32V234_MSCR_PB11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB12__SIUL_GPIO28  S32V234_MSCR_PB12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB13__SIUL_GPIO29  S32V234_MSCR_PB13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB14__SIUL_GPIO30  S32V234_MSCR_PB14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PB15__SIUL_GPIO31  S32V234_MSCR_PB15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC0__SIUL_GPIO32   S32V234_MSCR_PC0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC1__SIUL_GPIO33   S32V234_MSCR_PC1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC2__SIUL_GPIO34   S32V234_MSCR_PC2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC3__SIUL_GPIO35   S32V234_MSCR_PC3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC4__SIUL_GPIO36   S32V234_MSCR_PC4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC5__SIUL_GPIO37   S32V234_MSCR_PC5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC6__SIUL_GPIO38   S32V234_MSCR_PC6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC7__SIUL_GPIO39   S32V234_MSCR_PC7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC8__SIUL_GPIO40   S32V234_MSCR_PC8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC9__SIUL_GPIO41   S32V234_MSCR_PC9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC10__SIUL_GPIO42  S32V234_MSCR_PC10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC11__SIUL_GPIO43  S32V234_MSCR_PC11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC12__SIUL_GPIO44  S32V234_MSCR_PC12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC13__SIUL_GPIO45  S32V234_MSCR_PC13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC14__SIUL_GPIO46  S32V234_MSCR_PC14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PC15__SIUL_GPIO47  S32V234_MSCR_PC15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD0__SIUL_GPIO48   S32V234_MSCR_PD0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD1__SIUL_GPIO49   S32V234_MSCR_PD1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD2__SIUL_GPIO50   S32V234_MSCR_PD2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD3__SIUL_GPIO51   S32V234_MSCR_PD3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD4__SIUL_GPIO52   S32V234_MSCR_PD4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD5__SIUL_GPIO53   S32V234_MSCR_PD5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD6__SIUL_GPIO54   S32V234_MSCR_PD6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD7__SIUL_GPIO55   S32V234_MSCR_PD7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD8__SIUL_GPIO56   S32V234_MSCR_PD8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD9__SIUL_GPIO57   S32V234_MSCR_PD9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD10__SIUL_GPIO58  S32V234_MSCR_PD10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD11__SIUL_GPIO59  S32V234_MSCR_PD11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD12__SIUL_GPIO60  S32V234_MSCR_PD12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD13__SIUL_GPIO61  S32V234_MSCR_PD13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD14__SIUL_GPIO62  S32V234_MSCR_PD14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PD15__SIUL_GPIO63  S32V234_MSCR_PD15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE0__SIUL_GPIO64   S32V234_MSCR_PE0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE1__SIUL_GPIO65   S32V234_MSCR_PE1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE2__SIUL_GPIO66   S32V234_MSCR_PE2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE3__SIUL_GPIO67   S32V234_MSCR_PE3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE4__SIUL_GPIO68   S32V234_MSCR_PE4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE5__SIUL_GPIO69   S32V234_MSCR_PE5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE6__SIUL_GPIO70   S32V234_MSCR_PE6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE7__SIUL_GPIO71   S32V234_MSCR_PE7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE8__SIUL_GPIO72   S32V234_MSCR_PE8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE9__SIUL_GPIO73   S32V234_MSCR_PE9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE10__SIUL_GPIO74  S32V234_MSCR_PE10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE11__SIUL_GPIO75  S32V234_MSCR_PE11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE12__SIUL_GPIO76  S32V234_MSCR_PE12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE13__SIUL_GPIO77  S32V234_MSCR_PE13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE14__SIUL_GPIO78  S32V234_MSCR_PE14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PE15__SIUL_GPIO79  S32V234_MSCR_PE15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF0__SIUL_GPIO80   S32V234_MSCR_PF0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF1__SIUL_GPIO81   S32V234_MSCR_PF1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF2__SIUL_GPIO82   S32V234_MSCR_PF2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF3__SIUL_GPIO83   S32V234_MSCR_PF3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF4__SIUL_GPIO84   S32V234_MSCR_PF4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF5__SIUL_GPIO85   S32V234_MSCR_PF5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF6__SIUL_GPIO86   S32V234_MSCR_PF6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF7__SIUL_GPIO87   S32V234_MSCR_PF7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF8__SIUL_GPIO88   S32V234_MSCR_PF8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF9__SIUL_GPIO89   S32V234_MSCR_PF9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF10__SIUL_GPIO90  S32V234_MSCR_PF10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF11__SIUL_GPIO91  S32V234_MSCR_PF11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF12__SIUL_GPIO92  S32V234_MSCR_PF12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF13__SIUL_GPIO93  S32V234_MSCR_PF13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF14__SIUL_GPIO94  S32V234_MSCR_PF14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PF15__SIUL_GPIO95  S32V234_MSCR_PF15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG0__SIUL_GPIO96   S32V234_MSCR_PG0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG1__SIUL_GPIO97   S32V234_MSCR_PG1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG2__SIUL_GPIO98   S32V234_MSCR_PG2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG3__SIUL_GPIO99   S32V234_MSCR_PG3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG4__SIUL_GPIO100  S32V234_MSCR_PG4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG5__SIUL_GPIO101  S32V234_MSCR_PG5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG6__SIUL_GPIO102  S32V234_MSCR_PG6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG7__SIUL_GPIO103  S32V234_MSCR_PG7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG8__SIUL_GPIO104  S32V234_MSCR_PG8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG9__SIUL_GPIO105  S32V234_MSCR_PG9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG10__SIUL_GPIO106 S32V234_MSCR_PG10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG11__SIUL_GPIO107 S32V234_MSCR_PG11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG12__SIUL_GPIO108 S32V234_MSCR_PG12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG13__SIUL_GPIO109 S32V234_MSCR_PG13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG14__SIUL_GPIO110 S32V234_MSCR_PG14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PG15__SIUL_GPIO111 S32V234_MSCR_PG15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH0__SIUL_GPIO112  S32V234_MSCR_PH0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH1__SIUL_GPIO113  S32V234_MSCR_PH1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH2__SIUL_GPIO114  S32V234_MSCR_PH2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH3__SIUL_GPIO115  S32V234_MSCR_PH3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH4__SIUL_GPIO116  S32V234_MSCR_PH4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH5__SIUL_GPIO117  S32V234_MSCR_PH5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH6__SIUL_GPIO118  S32V234_MSCR_PH6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH7__SIUL_GPIO119  S32V234_MSCR_PH7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH8__SIUL_GPIO120  S32V234_MSCR_PH8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH9__SIUL_GPIO121  S32V234_MSCR_PH9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH10__SIUL_GPIO122 S32V234_MSCR_PH10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH11__SIUL_GPIO123 S32V234_MSCR_PH11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH12__SIUL_GPIO124 S32V234_MSCR_PH12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH13__SIUL_GPIO125 S32V234_MSCR_PH13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH14__SIUL_GPIO126 S32V234_MSCR_PH14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PH15__SIUL_GPIO127 S32V234_MSCR_PH15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ0__SIUL_GPIO128  S32V234_MSCR_PJ0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ1__SIUL_GPIO129  S32V234_MSCR_PJ1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ2__SIUL_GPIO130  S32V234_MSCR_PJ2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ3__SIUL_GPIO131  S32V234_MSCR_PJ3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ4__SIUL_GPIO132  S32V234_MSCR_PJ4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ5__SIUL_GPIO133  S32V234_MSCR_PJ5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ6__SIUL_GPIO134  S32V234_MSCR_PJ6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ7__SIUL_GPIO135  S32V234_MSCR_PJ7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ8__SIUL_GPIO136  S32V234_MSCR_PJ8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ9__SIUL_GPIO137  S32V234_MSCR_PJ9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ10__SIUL_GPIO138 S32V234_MSCR_PJ10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ11__SIUL_GPIO139 S32V234_MSCR_PJ11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ12__SIUL_GPIO140 S32V234_MSCR_PJ12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ13__SIUL_GPIO141 S32V234_MSCR_PJ13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ14__SIUL_GPIO142 S32V234_MSCR_PJ14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PJ15__SIUL_GPIO143 S32V234_MSCR_PJ15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK0__SIUL_GPIO144  S32V234_MSCR_PK0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK1__SIUL_GPIO145  S32V234_MSCR_PK1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK2__SIUL_GPIO146  S32V234_MSCR_PK2  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK3__SIUL_GPIO147  S32V234_MSCR_PK3  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK4__SIUL_GPIO148  S32V234_MSCR_PK4  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK5__SIUL_GPIO149  S32V234_MSCR_PK5  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK6__SIUL_GPIO150  S32V234_MSCR_PK6  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK7__SIUL_GPIO151  S32V234_MSCR_PK7  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK8__SIUL_GPIO152  S32V234_MSCR_PK8  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK9__SIUL_GPIO153  S32V234_MSCR_PK9  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK10__SIUL_GPIO154 S32V234_MSCR_PK10 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK11__SIUL_GPIO155 S32V234_MSCR_PK11 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK12__SIUL_GPIO156 S32V234_MSCR_PK12 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK13__SIUL_GPIO157 S32V234_MSCR_PK13 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK14__SIUL_GPIO158 S32V234_MSCR_PK14 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PK15__SIUL_GPIO159 S32V234_MSCR_PK15 PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PL0__SIUL_GPIO160  S32V234_MSCR_PL0  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PL1__SIUL_GPIO161  S32V234_MSCR_PL1  PAD_CTL_MUX_MODE_ALT0
++#define S32V234_PAD_PL2__SIUL_GPIO162  S32V234_MSCR_PL2  PAD_CTL_MUX_MODE_ALT0
++
++/* SIUL2 EIRQ pins */
++#define S32V234_PAD_PA0__SIUL_EIRQ0   S32V234_IMCR_SIUL_EIRQ0  PAD_CTL_EIRQ
++#define S32V234_PAD_PA1__SIUL_EIRQ1   S32V234_IMCR_SIUL_EIRQ1  PAD_CTL_EIRQ
++#define S32V234_PAD_PA2__SIUL_EIRQ2   S32V234_IMCR_SIUL_EIRQ2  PAD_CTL_EIRQ
++#define S32V234_PAD_PA3__SIUL_EIRQ3   S32V234_IMCR_SIUL_EIRQ3  PAD_CTL_EIRQ
++#define S32V234_PAD_PA4__SIUL_EIRQ4   S32V234_IMCR_SIUL_EIRQ4  PAD_CTL_EIRQ
++#define S32V234_PAD_PA5__SIUL_EIRQ5   S32V234_IMCR_SIUL_EIRQ5  PAD_CTL_EIRQ
++#define S32V234_PAD_PA6__SIUL_EIRQ6   S32V234_IMCR_SIUL_EIRQ6  PAD_CTL_EIRQ
++#define S32V234_PAD_PA7__SIUL_EIRQ7   S32V234_IMCR_SIUL_EIRQ7  PAD_CTL_EIRQ
++#define S32V234_PAD_PA8__SIUL_EIRQ8   S32V234_IMCR_SIUL_EIRQ8  PAD_CTL_EIRQ
++#define S32V234_PAD_PA9__SIUL_EIRQ9   S32V234_IMCR_SIUL_EIRQ9  PAD_CTL_EIRQ
++#define S32V234_PAD_PA10__SIUL_EIRQ10 S32V234_IMCR_SIUL_EIRQ10 PAD_CTL_EIRQ
++#define S32V234_PAD_PA11__SIUL_EIRQ11 S32V234_IMCR_SIUL_EIRQ11 PAD_CTL_EIRQ
++#define S32V234_PAD_PA12__SIUL_EIRQ12 S32V234_IMCR_SIUL_EIRQ12 PAD_CTL_EIRQ
++#define S32V234_PAD_PA13__SIUL_EIRQ13 S32V234_IMCR_SIUL_EIRQ13 PAD_CTL_EIRQ
++#define S32V234_PAD_PA14__SIUL_EIRQ14 S32V234_IMCR_SIUL_EIRQ14 PAD_CTL_EIRQ
++#define S32V234_PAD_PA15__SIUL_EIRQ15 S32V234_IMCR_SIUL_EIRQ15 PAD_CTL_EIRQ
++#define S32V234_PAD_PB0__SIUL_EIRQ16  S32V234_IMCR_SIUL_EIRQ16 PAD_CTL_EIRQ
++#define S32V234_PAD_PB1__SIUL_EIRQ17  S32V234_IMCR_SIUL_EIRQ17 PAD_CTL_EIRQ
++#define S32V234_PAD_PB2__SIUL_EIRQ18  S32V234_IMCR_SIUL_EIRQ18 PAD_CTL_EIRQ
++#define S32V234_PAD_PB3__SIUL_EIRQ19  S32V234_IMCR_SIUL_EIRQ19 PAD_CTL_EIRQ
++#define S32V234_PAD_PB4__SIUL_EIRQ20  S32V234_IMCR_SIUL_EIRQ20 PAD_CTL_EIRQ
++#define S32V234_PAD_PB5__SIUL_EIRQ21  S32V234_IMCR_SIUL_EIRQ21 PAD_CTL_EIRQ
++#define S32V234_PAD_PB6__SIUL_EIRQ22  S32V234_IMCR_SIUL_EIRQ22 PAD_CTL_EIRQ
++#define S32V234_PAD_PB7__SIUL_EIRQ23  S32V234_IMCR_SIUL_EIRQ23 PAD_CTL_EIRQ
++#define S32V234_PAD_PB8__SIUL_EIRQ24  S32V234_IMCR_SIUL_EIRQ24 PAD_CTL_EIRQ
++#define S32V234_PAD_PB9__SIUL_EIRQ25  S32V234_IMCR_SIUL_EIRQ25 PAD_CTL_EIRQ
++#define S32V234_PAD_PB10__SIUL_EIRQ26 S32V234_IMCR_SIUL_EIRQ26 PAD_CTL_EIRQ
++#define S32V234_PAD_PB11__SIUL_EIRQ27 S32V234_IMCR_SIUL_EIRQ27 PAD_CTL_EIRQ
++#define S32V234_PAD_PB12__SIUL_EIRQ28 S32V234_IMCR_SIUL_EIRQ28 PAD_CTL_EIRQ
++#define S32V234_PAD_PB13__SIUL_EIRQ29 S32V234_IMCR_SIUL_EIRQ29 PAD_CTL_EIRQ
++#define S32V234_PAD_PB14__SIUL_EIRQ30 S32V234_IMCR_SIUL_EIRQ30 PAD_CTL_EIRQ
++#define S32V234_PAD_PB15__SIUL_EIRQ31 S32V234_IMCR_SIUL_EIRQ31 PAD_CTL_EIRQ
++
++#endif /* __DT_BINDINGS_S32V234_PINCTRL_H__ */
+diff --git a/include/dt-bindings/power/imx8ulp-power.h b/include/dt-bindings/power/imx8ulp-power.h
+new file mode 100644
+index 000000000..a556b2e96
+--- /dev/null
++++ b/include/dt-bindings/power/imx8ulp-power.h
+@@ -0,0 +1,26 @@
++/* SPDX-License-Identifier: (GPL-2.0 OR MIT) */
++/*
++ *  Copyright 2021 NXP
++ */
++
++#ifndef __DT_BINDINGS_IMX8ULP_POWER_H__
++#define __DT_BINDINGS_IMX8ULP_POWER_H__
++
++#define IMX8ULP_PD_DMA1		0
++#define IMX8ULP_PD_FLEXSPI2	1
++#define IMX8ULP_PD_USB0		2
++#define IMX8ULP_PD_USDHC0	3
++#define IMX8ULP_PD_USDHC1	4
++#define IMX8ULP_PD_USDHC2_USB1	5
++#define IMX8ULP_PD_DCNANO	6
++#define IMX8ULP_PD_EPDC		7
++#define IMX8ULP_PD_DMA2		8
++#define IMX8ULP_PD_GPU2D	9
++#define IMX8ULP_PD_GPU3D	10
++#define IMX8ULP_PD_HIFI4	11
++#define IMX8ULP_PD_ISI		12
++#define IMX8ULP_PD_MIPI_CSI	13
++#define IMX8ULP_PD_MIPI_DSI	14
++#define IMX8ULP_PD_PXP		15
++
++#endif
+diff --git a/include/dt-bindings/power/imx93-power.h b/include/dt-bindings/power/imx93-power.h
+new file mode 100644
+index 000000000..005227db5
+--- /dev/null
++++ b/include/dt-bindings/power/imx93-power.h
+@@ -0,0 +1,18 @@
++/* SPDX-License-Identifier: (GPL-2.0 OR MIT) */
++/*
++ *  Copyright 2022 NXP
++ */
++
++#ifndef __DT_BINDINGS_IMX93_POWER_H__
++#define __DT_BINDINGS_IMX93_POWER_H__
++
++#define IMX93_POWER_DOMAIN_MEDIAMIX		0
++#define IMX93_POWER_DOMAIN_MLMIX		1
++
++#define IMX93_MEDIABLK_PD_MIPI_DSI		0
++#define IMX93_MEDIABLK_PD_MIPI_CSI		1
++#define IMX93_MEDIABLK_PD_PXP			2
++#define IMX93_MEDIABLK_PD_LCDIF			3
++#define IMX93_MEDIABLK_PD_ISI			4
++
++#endif
+diff --git a/include/dt-bindings/reset/imx8mm-dispmix.h b/include/dt-bindings/reset/imx8mm-dispmix.h
+new file mode 100644
+index 000000000..3af137b1b
+--- /dev/null
++++ b/include/dt-bindings/reset/imx8mm-dispmix.h
+@@ -0,0 +1,49 @@
++/*
++ * Copyright 2019 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef __IMX8MM_DISPMIX_H__
++#define __IMX8MM_DISPMIX_H__
++
++/* DISPMIX soft reset */
++#define IMX8MM_CSI_BRIDGE_CHIP_RESET			0
++#define IMX8MM_CSI_BRIDGE_IPG_HARD_ASYNC_RESET		1
++#define IMX8MM_CSI_BRIDGE_CSI_HRESET			2
++#define IMX8MM_CAMERA_PIXEL_RESET			3
++#define IMX8MM_MIPI_CSI_I_PRESET			4
++#define IMX8MM_MIPI_DSI_I_PRESET			5
++#define IMX8MM_BUS_RSTN_BLK_SYNC			6
++#define IMX8MM_DISPMIX_SFT_RSTN_NUM			7
++
++/* DISPMIX clock soft enable */
++#define IMX8MM_CSI_BRIDGE_CSI_HCLK_EN			0
++#define IMX8MM_CSI_BRIDGE_SPU_CLK_EN			1
++#define IMX8MM_CSI_BRIDGE_MEM_WRAPPER_CLK_EN		2
++#define IMX8MM_CSI_BRIDGE_IPG_CLK_EN			3
++#define IMX8MM_CSI_BRIDGE_IPG_CLK_S_EN			4
++#define IMX8MM_CSI_BRIDGE_IPG_CLK_S_RAW_EN		5
++#define IMX8MM_LCDIF_APB_CLK_EN				6
++#define IMX8MM_LCDIF_PIXEL_CLK_EN			7
++#define IMX8MM_MIPI_DSI_PCLK_EN				8
++#define IMX8MM_MIPI_DSI_CLKREF_EN			9
++#define IMX8MM_MIPI_CSI_ACLK_EN				10
++#define IMX8MM_MIPI_CSI_PCLK_EN				11
++#define IMX8MM_BUS_BLK_CLK_EN				12
++#define IMX8MM_DISPMIX_CLK_EN_NUM			13
++
++/* MIPI reset */
++#define IMX8MM_MIPI_S_RESET				0
++#define IMX8MM_MIPI_M_RESET				1
++#define IMX8MM_MIPI_RESET_NUM				2
++
++#endif
+diff --git a/include/dt-bindings/reset/imx8mn-dispmix.h b/include/dt-bindings/reset/imx8mn-dispmix.h
+new file mode 100644
+index 000000000..8703ebe7d
+--- /dev/null
++++ b/include/dt-bindings/reset/imx8mn-dispmix.h
+@@ -0,0 +1,47 @@
++/*
++ * Copyright 2019 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef __IMX8MN_DISPMIX_H__
++#define __IMX8MN_DISPMIX_H__
++
++/* DISPMIX soft reset */
++#define IMX8MN_MIPI_DSI_PCLK_RESET			0
++#define IMX8MN_MIPI_DSI_CLKREF_RESET			1
++#define IMX8MN_MIPI_CSI_PCLK_RESET			2
++#define IMX8MN_MIPI_CSI_ACLK_RESET			3
++#define IMX8MN_LCDIF_PIXEL_CLK_RESET			4
++#define IMX8MN_LCDIF_APB_CLK_RESET			5
++#define IMX8MN_ISI_PROC_CLK_RESET			6
++#define IMX8MN_ISI_APB_CLK_RESET			7
++#define IMX8MN_BUS_BLK_CLK_RESET			8
++#define IMX8MN_DISPMIX_SFT_RSTN_NUM			9
++
++/* DISPMIX clock soft enable */
++#define IMX8MN_MIPI_DSI_PCLK_EN				0
++#define IMX8MN_MIPI_DSI_CLKREF_EN			1
++#define IMX8MN_MIPI_CSI_PCLK_EN				2
++#define IMX8MN_MIPI_CSI_ACLK_EN				3
++#define IMX8MN_LCDIF_PIXEL_CLK_EN			4
++#define IMX8MN_LCDIF_APB_CLK_EN				5
++#define IMX8MN_ISI_PROC_CLK_EN				6
++#define IMX8MN_ISI_APB_CLK_EN				7
++#define IMX8MN_BUS_BLK_CLK_EN				8
++#define IMX8MN_DISPMIX_CLK_EN_NUM			9
++
++/* MIPI reset */
++#define IMX8MN_MIPI_S_RESET				0
++#define IMX8MN_MIPI_M_RESET				1
++#define IMX8MN_MIPI_RESET_NUM				2
++
++#endif
+diff --git a/include/dt-bindings/reset/imx8mp-reset.h b/include/dt-bindings/reset/imx8mp-reset.h
+index 2e8c9104b..113a9a0e8 100644
+--- a/include/dt-bindings/reset/imx8mp-reset.h
++++ b/include/dt-bindings/reset/imx8mp-reset.h
+@@ -44,7 +44,53 @@
+ #define IMX8MP_RESET_VPU_G2_RESET		35
+ #define IMX8MP_RESET_VPUVC8KE_RESET		36
+ #define IMX8MP_RESET_NOC_RESET			37
++#define IMX8MP_RESET_PCIE_CTRL_APPS_CLK_REQ	38
++
++#define IMX8MP_RESET_NUM			39
++
++#define IMX8MP_AUDIO_BLK_CTRL_EARC_RESET	0
++#define IMX8MP_AUDIO_BLK_CTRL_EARC_PHY_RESET	1
++
++#define IMX8MP_AUDIO_BLK_CTRL_RESET_NUM		2
++
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_DSI_PCLK	0
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_DSI_CLKREF	1
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_CSI_PCLK	2
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_CSI_ACLK	3
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF_PIXEL		4
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF_APB		5
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISI_PROC		6
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISI_APB		7
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_BUS_BLK		8
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_CSI2_PCLK	9
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_CSI2_ACLK	10
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF2_PIXEL	11
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF2_APB		12
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP1_COR		13
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP1_AXI		14
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP1_AHB		15
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP0_COR		16
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP0_AXI		17
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_ISP0_AHB		18
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_DWE_COR		19
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_DWE_AXI		20
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_DWE_AHB		21
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_MIPI_DSI2		22
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF_AXI		23
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_LCDIF2_AXI		24
++
++#define IMX8MP_MEDIA_BLK_CTRL_RESET_NUM			25
++
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_TX_RESET		0
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_PHY_RESET		1
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_PAI_RESET		2
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_PVI_RESET		3
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_TRNG_RESET		4
++#define IMX8MP_HDMI_BLK_CTRL_IRQ_STEER_RESET		5
++#define IMX8MP_HDMI_BLK_CTRL_HDMI_HDCP_RESET		6
++#define IMX8MP_HDMI_BLK_CTRL_LCDIF_RESET		7
++
++#define IMX8MP_HDMI_BLK_CTRL_RESET_NUM			8
+ 
+-#define IMX8MP_RESET_NUM			38
+ 
+ #endif
+diff --git a/include/dt-bindings/reset/imx8mq-reset.h b/include/dt-bindings/reset/imx8mq-reset.h
+index 705870693..5d201c000 100644
+--- a/include/dt-bindings/reset/imx8mq-reset.h
++++ b/include/dt-bindings/reset/imx8mq-reset.h
+@@ -61,7 +61,9 @@
+ #define IMX8MQ_RESET_SW_M4C_RST			50
+ #define IMX8MQ_RESET_SW_M4P_RST			51
+ #define IMX8MQ_RESET_M4_ENABLE			52
++#define IMX8MQ_RESET_PCIE_CTRL_APPS_CLK_REQ	53	/* i.MX8M PCIe CTL CLK REQ */
++#define IMX8MQ_RESET_PCIE2_CTRL_APPS_CLK_REQ	54	/* i.MX8M PCIe CTL CLK REQ */
+ 
+-#define IMX8MQ_RESET_NUM			53
++#define IMX8MQ_RESET_NUM			55
+ 
+ #endif
+diff --git a/include/dt-bindings/reset/imx8ulp-pcc-reset.h b/include/dt-bindings/reset/imx8ulp-pcc-reset.h
+new file mode 100644
+index 000000000..e99a4735c
+--- /dev/null
++++ b/include/dt-bindings/reset/imx8ulp-pcc-reset.h
+@@ -0,0 +1,59 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright 2021 NXP
++ */
++
++#ifndef DT_BINDING_PCC_RESET_IMX8ULP_H
++#define DT_BINDING_PCC_RESET_IMX8ULP_H
++
++/* PCC3 */
++#define PCC3_WDOG3_SWRST	0
++#define PCC3_WDOG4_SWRST	1
++#define PCC3_LPIT1_SWRST	2
++#define PCC3_TPM4_SWRST		3
++#define PCC3_TPM5_SWRST		4
++#define PCC3_FLEXIO1_SWRST	5
++#define PCC3_I3C2_SWRST		6
++#define PCC3_LPI2C4_SWRST	7
++#define PCC3_LPI2C5_SWRST	8
++#define PCC3_LPUART4_SWRST	9
++#define PCC3_LPUART5_SWRST	10
++#define PCC3_LPSPI4_SWRST	11
++#define PCC3_LPSPI5_SWRST	12
++
++/* PCC4 */
++#define PCC4_FLEXSPI2_SWRST	0
++#define PCC4_TPM6_SWRST		1
++#define PCC4_TPM7_SWRST		2
++#define PCC4_LPI2C6_SWRST	3
++#define PCC4_LPI2C7_SWRST	4
++#define PCC4_LPUART6_SWRST	5
++#define PCC4_LPUART7_SWRST	6
++#define PCC4_SAI4_SWRST		7
++#define PCC4_SAI5_SWRST		8
++#define PCC4_USDHC0_SWRST	9
++#define PCC4_USDHC1_SWRST	10
++#define PCC4_USDHC2_SWRST	11
++#define PCC4_USB0_SWRST		12
++#define PCC4_USB0_PHY_SWRST	13
++#define PCC4_USB1_SWRST		14
++#define PCC4_USB1_PHY_SWRST	15
++#define PCC4_ENET_SWRST		16
++
++/* PCC5 */
++#define PCC5_TPM8_SWRST		0
++#define PCC5_SAI6_SWRST		1
++#define PCC5_SAI7_SWRST		2
++#define PCC5_SPDIF_SWRST	3
++#define PCC5_ISI_SWRST		4
++#define PCC5_CSI_REGS_SWRST	5
++#define PCC5_CSI_SWRST		6
++#define PCC5_DSI_SWRST		7
++#define PCC5_WDOG5_SWRST	8
++#define PCC5_EPDC_SWRST		9
++#define PCC5_PXP_SWRST		10
++#define PCC5_GPU2D_SWRST	11
++#define PCC5_GPU3D_SWRST	12
++#define PCC5_DC_NANO_SWRST	13
++
++#endif /*DT_BINDING_RESET_IMX8ULP_H */
+diff --git a/include/dt-bindings/reset/imx8ulp-sim-reset.h b/include/dt-bindings/reset/imx8ulp-sim-reset.h
+new file mode 100644
+index 000000000..b6b752fb1
+--- /dev/null
++++ b/include/dt-bindings/reset/imx8ulp-sim-reset.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++
++/*
++ * Copyright 2021 NXP
++ */
++
++#ifndef DT_BINDING_RESET_IMX8ULP_SIM_H
++#define DT_BINDING_RESET_IMX8ULP_SIM_H
++
++#define IMX8ULP_SIM_RESET_MIPI_DSI_RST_DPI_N	0
++#define IMX8ULP_SIM_RESET_MIPI_DSI_RST_ESC_N	1
++#define IMX8ULP_SIM_RESET_MIPI_DSI_RST_BYTE_N	2
++
++#define IMX8ULP_SIM_RESET_NUM			3
++
++#endif
+diff --git a/include/dt-bindings/soc/imx8_hsio.h b/include/dt-bindings/soc/imx8_hsio.h
+new file mode 100644
+index 000000000..3cf1056b6
+--- /dev/null
++++ b/include/dt-bindings/soc/imx8_hsio.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Copyright 2019 NXP
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef __DT_BINDINGS_IMX8_HSIO_H
++#define __DT_BINDINGS_IMX8_HSIO_H
++
++/*
++ * imx8qm hsio has pciea, pcieb and sata modules, and hsio
++ * can be configured to the following different work modes.
++ * 1 - pciea 2 lanes and one sata ahci port.
++ * 2 - pciea 1 lane, pcieb 1 lane and one sata ahci port.
++ * 3 - pciea 2 lanes, pcieb 1 lane.
++ * Choose one mode, refer to the exact hardware board design.
++ */
++#define		PCIEAX2SATA		1
++#define		PCIEAX1PCIEBX1SATA	2
++#define		PCIEAX2PCIEBX1		3
++
++#endif /* __DT_BINDINGS_IMX8_HSIO_H */
+diff --git a/include/linux/mailbox_client.h b/include/linux/mailbox_client.h
+index 65229a455..584d4fa19 100644
+--- a/include/linux/mailbox_client.h
++++ b/include/linux/mailbox_client.h
+@@ -45,5 +45,6 @@ int mbox_flush(struct mbox_chan *chan, unsigned long timeout);
+ void mbox_client_txdone(struct mbox_chan *chan, int r); /* atomic */
+ bool mbox_client_peek_data(struct mbox_chan *chan); /* atomic */
+ void mbox_free_channel(struct mbox_chan *chan); /* may sleep */
++extern uint8_t *get_mu_buf(struct mbox_chan *chan);
+ 
+ #endif /* __MAILBOX_CLIENT_H */
+-- 
+2.25.1
+
