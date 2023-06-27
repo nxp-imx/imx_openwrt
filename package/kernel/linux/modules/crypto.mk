@@ -309,12 +309,23 @@ define KernelPackage/crypto-ghash
   $(call AddDepends/crypto)
 endef
 
+ifndef CONFIG_TARGET_imx_imx8
 define KernelPackage/crypto-ghash/arm-ce
   FILES+= $(LINUX_DIR)/arch/arm/crypto/ghash-arm-ce.ko
   AUTOLOAD+=$(call AutoLoad,09,ghash-arm-ce)
 endef
+else
+define KernelPackage/crypto-ghash/arm64-ce
+  FILES+= $(LINUX_DIR)/arch/arm64/crypto/ghash-arm64-ce.ko
+  AUTOLOAD+=$(call AutoLoad,09,ghash-arm64-ce)
+endef
+endif
 
+ifndef CONFIG_TARGET_imx_imx8
 KernelPackage/crypto-ghash/imx=$(KernelPackage/crypto-ghash/arm-ce)
+else
+KernelPackage/crypto-ghash/imx8=$(KernelPackage/crypto-ghash/arm64-ce)
+endif
 KernelPackage/crypto-ghash/ipq40xx=$(KernelPackage/crypto-ghash/arm-ce)
 KernelPackage/crypto-ghash/mvebu/cortexa9=$(KernelPackage/crypto-ghash/arm-ce)
 
@@ -965,12 +976,23 @@ define KernelPackage/crypto-sha512
   $(call AddDepends/crypto)
 endef
 
+ifndef CONFIG_TARGET_imx_imx8
 define KernelPackage/crypto-sha512/arm
   FILES+=$(LINUX_DIR)/arch/arm/crypto/sha512-arm.ko
   AUTOLOAD+=$(call AutoLoad,09,sha512-arm)
 endef
+else
+define KernelPackage/crypto-sha512/arm64
+  FILES+=$(LINUX_DIR)/arch/arm64/crypto/sha512-arm64.ko
+  AUTOLOAD+=$(call AutoLoad,09,sha512-arm64)
+endef
+endif
 
+ifndef CONFIG_TARGET_imx_imx8
 KernelPackage/crypto-sha512/imx=$(KernelPackage/crypto-sha512/arm)
+else
+KernelPackage/crypto-sha512/imx8=$(KernelPackage/crypto-sha512/arm64)
+endif
 KernelPackage/crypto-sha512/ipq40xx=$(KernelPackage/crypto-sha512/arm)
 KernelPackage/crypto-sha512/mvebu/cortexa9=$(KernelPackage/crypto-sha512/arm)
 
