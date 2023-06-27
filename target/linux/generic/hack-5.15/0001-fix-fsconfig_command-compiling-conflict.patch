@@ -1,0 +1,84 @@
+From 6f4864270a45c1bcf4f1d70989990dcd8c03e1d8 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 7 Jun 2023 14:44:17 +0800
+Subject: [PATCH] fix fsconfig_command compiling conflict
+
+---
+ include/uapi/linux/mount.h       | 5 ++++-
+ tools/include/uapi/linux/mount.h | 4 ++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/include/uapi/linux/mount.h b/include/uapi/linux/mount.h
+index 4d93967f8..14c76c48d 100644
+--- a/include/uapi/linux/mount.h
++++ b/include/uapi/linux/mount.h
+@@ -92,6 +92,7 @@
+ /*
+  * The type of fsconfig() call made.
+  */
++#ifdef __KERNEL__
+ enum fsconfig_command {
+ 	FSCONFIG_SET_FLAG	= 0,	/* Set parameter, supplying no value */
+ 	FSCONFIG_SET_STRING	= 1,	/* Set parameter, supplying a string value */
+@@ -102,7 +103,7 @@ enum fsconfig_command {
+ 	FSCONFIG_CMD_CREATE	= 6,	/* Invoke superblock creation */
+ 	FSCONFIG_CMD_RECONFIGURE = 7,	/* Invoke superblock reconfiguration */
+ };
+-
++#endif
+ /*
+  * fsmount() flags.
+  */
+@@ -126,12 +127,14 @@ enum fsconfig_command {
+ /*
+  * mount_setattr()
+  */
++#ifdef __KERNEL__
+ struct mount_attr {
+ 	__u64 attr_set;
+ 	__u64 attr_clr;
+ 	__u64 propagation;
+ 	__u64 userns_fd;
+ };
++#endif
+ 
+ /* List of all mount_attr versions. */
+ #define MOUNT_ATTR_SIZE_VER0	32 /* sizeof first published struct */
+diff --git a/tools/include/uapi/linux/mount.h b/tools/include/uapi/linux/mount.h
+index 4d93967f8..431218c18 100644
+--- a/tools/include/uapi/linux/mount.h
++++ b/tools/include/uapi/linux/mount.h
+@@ -92,6 +92,7 @@
+ /*
+  * The type of fsconfig() call made.
+  */
++#ifdef __KERNEL__
+ enum fsconfig_command {
+ 	FSCONFIG_SET_FLAG	= 0,	/* Set parameter, supplying no value */
+ 	FSCONFIG_SET_STRING	= 1,	/* Set parameter, supplying a string value */
+@@ -102,6 +103,7 @@ enum fsconfig_command {
+ 	FSCONFIG_CMD_CREATE	= 6,	/* Invoke superblock creation */
+ 	FSCONFIG_CMD_RECONFIGURE = 7,	/* Invoke superblock reconfiguration */
+ };
++#endif
+ 
+ /*
+  * fsmount() flags.
+@@ -126,12 +128,14 @@ enum fsconfig_command {
+ /*
+  * mount_setattr()
+  */
++#ifdef __KERNEL__
+ struct mount_attr {
+ 	__u64 attr_set;
+ 	__u64 attr_clr;
+ 	__u64 propagation;
+ 	__u64 userns_fd;
+ };
++#endif
+ 
+ /* List of all mount_attr versions. */
+ #define MOUNT_ATTR_SIZE_VER0	32 /* sizeof first published struct */
+-- 
+2.25.1
+
