@@ -644,12 +644,14 @@ endef
 define Build/Compile/supplicant
 	+$(call Build/RunMake,wpa_supplicant, \
 		wpa_cli wpa_supplicant \
+		wpa_passphrase \
 	)
 endef
 
 define Build/Compile/supplicant-full-internal
 	+$(call Build/RunMake,wpa_supplicant, \
 		eapol_test \
+		wpa_passphrase \
 	)
 endef
 
@@ -663,12 +665,14 @@ endef
 define Build/Compile/supplicant-full-wolfssl
 	+$(call Build/RunMake,wpa_supplicant, \
 		eapol_test \
+		wpa_passphrase \
 	)
 endef
 
 define Build/Compile/supplicant-full-mbedtls
 	+$(call Build/RunMake,wpa_supplicant, \
 		eapol_test \
+		wpa_passphrase \
 	)
 endef
 
