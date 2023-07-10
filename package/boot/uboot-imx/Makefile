@@ -58,6 +58,17 @@ define U-Boot/wandboard
   UBOOT_MAKE_FLAGS += u-boot.imx
 endef
 
+define U-Boot/imx6ull
+  NAME:=imx6ultra lite board
+  BUILD_SUBTARGET:=cortexa7
+  BUILD_DEVICES:=imx6ull
+  UBOOT_CONFIG:=mx6ull_14x14_evk
+  ENV_SIZE:=0x2000
+  ENV_NAME:=imx6ull-sdboot
+  DTB_NAME:=imx6ull-14x14-evk
+  UBOOT_IMAGE:=u-boot-dtb.imx
+endef
+
 define U-Boot/imx8mp
   NAME:=imx8mplus lpddr4 board
   BUILD_TARGET:=imx
@@ -111,6 +122,7 @@ UBOOT_TARGETS := \
 	mx6cuboxi \
 	pico-pi-imx7d \
 	wandboard \
+	imx6ull \
 	imx8mp \
 	imx8mm \
 	imx8mn \
@@ -137,6 +149,11 @@ define Build/InstallDev
 	$(foreach img,$(UBOOT_IMAGE), \
 		$(CP) $(PKG_BUILD_DIR)/$(img) $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-$(img); \
 	)
+    ifneq ($(ENV_NAME),)
+		$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
+			-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
+			files/$(ENV_NAME)-uEnv.txt
+    endif
 endef
 endif
 

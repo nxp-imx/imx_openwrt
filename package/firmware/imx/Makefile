@@ -15,17 +15,44 @@ PKG_HASH:=ef91390da6c8a6a48c8121a5dd667de8
 
 include $(INCLUDE_DIR)/package.mk
 
+FIRMWARE_IMX:=firmware-imx-8.17
+FIRMWARE_IMX_BIN:=$(FIRMWARE_IMX).bin
+define Download/firmware-imx
+  URL:=$(PKG_SOURCE_URL)
+  FILE:=$(FIRMWARE_IMX_BIN)
+  HASH:=63eac7b400d711c668458ec4bf5d0c60
+endef
+
 define Package/firmware-imx
   SECTION:=firmware
   CATEGORY:=Firmware
   TITLE:=NXP firmware for imx soc
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
   BUILD_TARGET:=imx
-  BUILD_SUBTARGET:=imx8
-  DEPENDS:=+imx-mkimage
 endef
 
+UNPACK_CMD:=
 define Package/firmware-imx/install
+	$(if $(CONFIG_TARGET_imx_cortexa7),
+		$(INSTALL_DIR) $(1)/lib/firmware/imx/sdma
+		$(INSTALL_DATA) \
+			$(PKG_BUILD_DIR)/firmware-imx-8.15/firmware/sdma/sdma-imx6q.bin \
+			$(1)/lib/firmware/imx/sdma/ )
+	$(if $(CONFIG_TARGET_imx_imx8),
+		$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/ddr/synopsys/* \
+			$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+		$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/hdmi/cadence/* \
+			$(STAGING_DIR_IMAGE)/$(MKIMG_DIR) )
+endef
+
+define Build/Prepare
+	# Download sources
+	$(eval $(call Download,firmware-imx))
+	$(call Build/Prepare/Default,)
+
+	$(PKG_UNPACK)
+	$(CP) $(DL_DIR)/$(PKG_SOURCE) $(PKG_BUILD_DIR)
+	chmod a+x $(PKG_BUILD_DIR)/$(PKG_SOURCE)
+	cd $(PKG_BUILD_DIR) && ./$(PKG_SOURCE) --auto-accept
 endef
 
 define Build/Compile
@@ -34,16 +61,7 @@ endef
 define Build/Install
 endef
 
-UNPACK_CMD:=
 define Build/InstallDev
-	$(PKG_UNPACK)
-	$(CP) $(DL_DIR)/$(PKG_SOURCE) $(PKG_BUILD_DIR)
-	chmod a+x $(PKG_BUILD_DIR)/$(PKG_SOURCE)
-	cd $(PKG_BUILD_DIR) && ./$(PKG_SOURCE) --auto-accept
-	$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/ddr/synopsys/* \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
-	$(CP) $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/firmware/hdmi/cadence/* \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
 endef
 
 $(eval $(call BuildPackage,firmware-imx))
