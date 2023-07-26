@@ -5,13 +5,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=imx-mkimage
-PKG_VERSION:=lf-5.15.5-1.0.0
+PKG_VERSION:=lf-5.15.71-2.2.1
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-mkimage.git
-PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
-PKG_MIRROR_HASH:=d16e78537b8728234f28edafefbb5537c18c47408d6bcdcc40db0476437aeed6
+PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
+PKG_MIRROR_HASH:=9713189390c0f1d097f3d0a75b5ab05dd65ead0d0dcb42410ecf563c4ac473c1
 
 PKG_FLAGS:=nonshared
 
@@ -23,8 +23,6 @@ define Package/imx-mkimage
   CATEGORY:=Utilities
   TITLE:=Combine uboot and other firmware together
   BUILD_TARGET:=imx
-  BUILD_SUBTARGET:=imx8
-  DEPENDS:=@TARGET_imx_imx8
 endef
 
 define Build/Compile

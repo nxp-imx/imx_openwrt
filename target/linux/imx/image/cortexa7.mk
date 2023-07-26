@@ -78,7 +78,7 @@ define Device/imx6ull
   BOARD_NAME := iMX6ULL
   ENV_NAME:=imx6ull-sdboot
   DEVICE_PACKAGES += \
-	firmware-imx \
+	firmware-sdma \
 	u-boot-imx6ull
   UBOOT_NAME:=imx6ull-u-boot-dtb.imx
   DEVICE_DTS := imx6ull-14x14-evk
