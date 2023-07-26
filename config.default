@@ -116,6 +116,7 @@ CONFIG_VIRTIO_SUPPORT=y
 CONFIG_USES_ROOTFS_PART=y
 CONFIG_USES_BOOT_PART=y
 CONFIG_aarch64=y
+CONFIG_arm_v7=y
 CONFIG_ARCH="aarch64"
 
 #
@@ -2884,7 +2885,22 @@ CONFIG_ZRAM_DEF_COMP_LZORLE=y
 # CONFIG_PACKAGE_kmod-mt7921e is not set
 # CONFIG_PACKAGE_kmod-mt7921s is not set
 # CONFIG_PACKAGE_kmod-mt7921u is not set
-# CONFIG_PACKAGE_kmod-mwifiex is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8801-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8801-sdio-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8987-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8987-sdio-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8997-pcie is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8997-pcie-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8997-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-8997-sdio-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-9098-pcie is not set
+# CONFIG_PACKAGE_kmod-mwifiex-9098-pcie-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-9098-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-9098-sdio-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-iw416-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-iw416-sdio-firmware is not set
+# CONFIG_PACKAGE_kmod-mwifiex-iw612-sdio is not set
+# CONFIG_PACKAGE_kmod-mwifiex-iw612-sdio-firmware is not set
 # CONFIG_PACKAGE_kmod-mwifiex-pcie is not set
 # CONFIG_PACKAGE_kmod-mwifiex-sdio is not set
 # CONFIG_PACKAGE_kmod-mwl8k is not set
