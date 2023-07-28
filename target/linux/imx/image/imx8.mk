@@ -21,7 +21,7 @@ endef
 
 define Build/imx-create-flash
 	# Combile firmware + bl31 + uboot to flash.bin
-	cd $(STAGING_DIR_IMAGE)/$(MKIMG_DIR) && $(MAKE) SOC=$(1) $(2)
+	cd $(MKIMG_DIR) && $(MAKE) SOC=$(1) $(2)
 endef
 
 define Build/imx-append
@@ -31,7 +31,7 @@ endef
 
 define Build/imx-append-boot
 	# Append the uboot, firmware etc.
-	dd if=$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)/$(1)/flash.bin >> $@
+	dd if=$(MKIMG_DIR)/$(1)/flash.bin >> $@
 endef
 
 define Build/imx-append-dtb
@@ -78,7 +78,7 @@ define Device/imx8mplus
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mp-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mp \
 	firmware-imx \
@@ -105,7 +105,7 @@ define Device/imx8mmini
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mm-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mm \
 	firmware-imx \
@@ -132,7 +132,7 @@ define Device/imx8mnano
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mn-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mn \
 	firmware-imx \
@@ -159,7 +159,7 @@ define Device/imx8mquad
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mq-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage* | xargs basename`
+  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mq \
 	firmware-imx \

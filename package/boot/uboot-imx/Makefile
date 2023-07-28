@@ -75,7 +75,7 @@ define U-Boot/imx8mp
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mp_evk
   ENV_NAME:=imx8mp-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mp-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -87,7 +87,7 @@ define U-Boot/imx8mm
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mm_evk
   ENV_NAME:=imx8mm-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mm-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -99,7 +99,7 @@ define U-Boot/imx8mn
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mn_evk
   ENV_NAME:=imx8mn-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mn-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -111,7 +111,7 @@ define U-Boot/imx8mq
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mq_evk
   ENV_NAME:=imx8mq-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mq-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -132,13 +132,10 @@ ifeq ($(SUBTARGET),imx8)
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
-	$(CP) $(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
-	$(CP) $(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
-	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)/mkimage_uboot
+		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
+		$(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
+		$$(MKIMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/tools/mkimage $$(MKIMG_DIR)/mkimage_uboot
 	$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
 		-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
 		files/$(ENV_NAME)-uEnv.txt

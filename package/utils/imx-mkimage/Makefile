@@ -25,11 +25,14 @@ define Package/imx-mkimage
   BUILD_TARGET:=imx
 endef
 
+define Package/imx-mkimage/install
+	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+endef
+
 define Build/Compile
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 	$(CP) -rp $(PKG_BUILD_DIR) $(STAGING_DIR_IMAGE)
 endef
 

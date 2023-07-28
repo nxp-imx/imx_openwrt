@@ -30,7 +30,7 @@ define Package/atf-imx8m/Default
   SECTION:=boot
   CATEGORY:=Boot Loaders
   TITLE:=NXP i.MX8M SD Boot Trusted Firmware
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   BUILD_TARGET:=imx
   BUILD_SUBTARGET:=imx8
   DEPENDS:=@TARGET_imx_imx8 +imx-mkimage
@@ -66,7 +66,7 @@ MAKE_FLAGS += \
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 	$(CP) $(PKG_BUILD_DIR)/build/$(BUILD_VARIANT)/release/bl31.bin \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+		$$(MKIMG_DIR)
 endef
 
 $(eval $(call BuildPackage,atf-imx8mp))

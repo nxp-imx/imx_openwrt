@@ -5,7 +5,7 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=firmware-imx
+PKG_NAME:=fw-imx
 PKG_RELEASE:=1
 
 FIRMWARE_URL:=https://www.nxp.com/lgfiles/NMG/MAD/YOCTO/
@@ -36,21 +36,25 @@ endef
 define Package/firmware-sdma/install
 	$(INSTALL_DIR) $(1)/lib/firmware/imx/sdma
 	$(INSTALL_DATA) \
-		$(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/sdma/sdma-imx6q.bin \
+		$(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/sdma/* \
 		$(1)/lib/firmware/imx/sdma/
 endef
 
 define Package/firmware-imx
   $(Package/fw-default)
-  TITLE:=NXP firmware for imx8
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage*  | xargs basename`/iMX8M
-  BUILD_SUBTARGET:=imx8
-  DEPENDS:=@CONFIG_PACKAGE_imx-mkimage
+  TITLE:=NXP firmware for imx8/9
+  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
+  DEPENDS:=+imx-mkimage
 endef
 
 define Package/firmware-imx/install
-	$(CP) $(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/ddr/synopsys/* \
-		$(STAGING_DIR_IMAGE)/$(MKIMG_DIR)
+	$(INSTALL_DIR) $$(MKIMG_DIR)
+	$(INSTALL_DIR) $(1)/lib/firmware/imx/sdma
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/ddr/synopsys/* \
+		$$(MKIMG_DIR)
+	$(INSTALL_DATA) \
+		$(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/sdma/sdma-imx7d.bin \
+		$(1)/lib/firmware/imx/sdma
 endef
 
 UNPACK_CMD:=
@@ -62,6 +66,9 @@ define Build/Prepare
 endef
 
 define Build/Compile
+endef
+
+define Build/InstallDev
 endef
 
 $(eval $(call BuildPackage,firmware-sdma))
