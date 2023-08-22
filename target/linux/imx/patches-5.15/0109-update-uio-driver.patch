@@ -1,0 +1,430 @@
+From 68fe6945d209f06b206a44b2c482385e4746922f Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 16:54:05 +0800
+Subject: [PATCH 09/24] update uio driver
+
+---
+ drivers/uio/Kconfig            |   7 +
+ drivers/uio/Makefile           |   1 +
+ drivers/uio/uio_ivshmem.c      | 241 +++++++++++++++++++++++++++++++++
+ include/linux/uio_driver.h     |   2 +
+ include/net/xdp_sock_drv.h     |  22 +++
+ include/net/xsk_buff_pool.h    |  13 +-
+ include/soc/mscc/ocelot_vcap.h |   2 +-
+ 7 files changed, 284 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/uio/uio_ivshmem.c
+
+diff --git a/drivers/uio/Kconfig b/drivers/uio/Kconfig
+index 2e16c5338..d2cc0d03d 100644
+--- a/drivers/uio/Kconfig
++++ b/drivers/uio/Kconfig
+@@ -182,4 +182,11 @@ config UIO_DFL
+ 	    opae-sdk/tools/libopaeuio/
+ 
+ 	  If you compile this as a module, it will be called uio_dfl.
++
++config UIO_IVSHMEM
++	tristate "Inter-VM Shared Memory driver"
++	depends on PCI
++	help
++	  Userspace I/O driver for the inter-VM shared memory PCI device
++	  as provided by QEMU and the Jailhouse hypervisor.
+ endif
+diff --git a/drivers/uio/Makefile b/drivers/uio/Makefile
+index f2f416a14..893c9d0a3 100644
+--- a/drivers/uio/Makefile
++++ b/drivers/uio/Makefile
+@@ -12,3 +12,4 @@ obj-$(CONFIG_UIO_MF624)         += uio_mf624.o
+ obj-$(CONFIG_UIO_FSL_ELBC_GPCM)	+= uio_fsl_elbc_gpcm.o
+ obj-$(CONFIG_UIO_HV_GENERIC)	+= uio_hv_generic.o
+ obj-$(CONFIG_UIO_DFL)	+= uio_dfl.o
++obj-$(CONFIG_UIO_IVSHMEM)	+= uio_ivshmem.o
+diff --git a/drivers/uio/uio_ivshmem.c b/drivers/uio/uio_ivshmem.c
+new file mode 100644
+index 000000000..0c16d428c
+--- /dev/null
++++ b/drivers/uio/uio_ivshmem.c
+@@ -0,0 +1,241 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * UIO driver for Inter-VM shared memory PCI device
++ *
++ * Copyright (c) Siemens AG, 2019
++ *
++ * Authors:
++ *  Jan Kiszka <jan.kiszka@siemens.com>
++ */
++
++#include <linux/ivshmem.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++#include <linux/uio_driver.h>
++
++#define DRV_NAME "uio_ivshmem"
++
++struct ivshm_dev {
++	struct uio_info info;
++	struct pci_dev *pdev;
++	struct ivshm_regs __iomem *regs;
++	int vectors;
++};
++
++static irqreturn_t ivshm_irq_handler(int irq, void *dev_id)
++{
++	struct ivshm_dev *ivshm_dev = (struct ivshm_dev *)dev_id;
++
++	/* nothing else to do, we configured one-shot interrupt mode */
++	uio_event_notify(&ivshm_dev->info);
++
++	return IRQ_HANDLED;
++}
++
++static u64 get_config_qword(struct pci_dev *pdev, unsigned int pos)
++{
++	u32 lo, hi;
++
++	pci_read_config_dword(pdev, pos, &lo);
++	pci_read_config_dword(pdev, pos + 4, &hi);
++	return lo | ((u64)hi << 32);
++}
++
++static int ivshm_release(struct uio_info *info, struct inode *inode)
++{
++	struct ivshm_dev *ivshm_dev =
++		container_of(info, struct ivshm_dev, info);
++
++	writel(0, &ivshm_dev->regs->state);
++	return 0;
++}
++
++static int ivshm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
++{
++	resource_size_t rw_section_sz, output_section_sz;
++	struct ivshm_dev *ivshm_dev;
++	phys_addr_t section_addr;
++	int err, vendor_cap, i;
++	unsigned int cap_pos;
++	struct uio_mem *mem;
++	char *device_name;
++	u32 dword;
++
++	ivshm_dev = devm_kzalloc(&pdev->dev, sizeof(struct ivshm_dev),
++				 GFP_KERNEL);
++	if (!ivshm_dev)
++		return -ENOMEM;
++
++	err = pcim_enable_device(pdev);
++	if (err)
++		return err;
++
++	device_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s[%s]", DRV_NAME,
++				     dev_name(&pdev->dev));
++	if (!device_name)
++		return -ENOMEM;
++
++	ivshm_dev->info.name = device_name;
++	ivshm_dev->info.version = "1";
++	ivshm_dev->info.release = ivshm_release;
++
++	err = pcim_iomap_regions(pdev, BIT(0), device_name);
++	if (err)
++		return err;
++	ivshm_dev->regs = pcim_iomap_table(pdev)[0];
++
++	mem = &ivshm_dev->info.mem[0];
++
++	mem->name = "registers";
++	mem->addr = pci_resource_start(pdev, 0);
++	if (!mem->addr)
++		return -ENODEV;
++	mem->size = pci_resource_len(pdev, 0);
++	mem->memtype = UIO_MEM_PHYS;
++
++	vendor_cap = pci_find_capability(pdev, PCI_CAP_ID_VNDR);
++	if (vendor_cap < 0)
++		return -ENODEV;
++
++	if (pci_resource_len(pdev, 2) > 0) {
++		section_addr = pci_resource_start(pdev, 2);
++	} else {
++		cap_pos = vendor_cap + IVSHM_CFG_ADDRESS;
++		section_addr = get_config_qword(pdev, cap_pos);
++	}
++
++	mem++;
++	mem->name = "state_table";
++	mem->addr = section_addr;
++	cap_pos = vendor_cap + IVSHM_CFG_STATE_TAB_SZ;
++	pci_read_config_dword(pdev, cap_pos, &dword);
++	mem->size = dword;
++	mem->memtype = UIO_MEM_IOVA;
++	mem->readonly = true;
++	if (!devm_request_mem_region(&pdev->dev, mem->addr, mem->size,
++				     device_name))
++		return -EBUSY;
++	dev_info(&pdev->dev, "%s at %pa, size %pa\n", mem->name, &mem->addr,
++		 &mem->size);
++
++	cap_pos = vendor_cap + IVSHM_CFG_RW_SECTION_SZ;
++	rw_section_sz = get_config_qword(pdev, cap_pos);
++	if (rw_section_sz > 0) {
++		section_addr += mem->size;
++
++		mem++;
++		mem->name = "rw_section";
++		mem->addr = section_addr;
++		mem->size = rw_section_sz;
++		mem->memtype = UIO_MEM_IOVA;
++		if (!devm_request_mem_region(&pdev->dev, mem->addr, mem->size,
++					     device_name))
++			return -EBUSY;
++		dev_info(&pdev->dev, "%s at %pa, size %pa\n", mem->name,
++			 &mem->addr, &mem->size);
++	}
++
++	cap_pos = vendor_cap + IVSHM_CFG_OUTPUT_SECTION_SZ;
++	output_section_sz = get_config_qword(pdev, cap_pos);
++	if (output_section_sz > 0) {
++		section_addr += mem->size;
++
++		mem++;
++		mem->name = "input_sections";
++		mem->addr = section_addr;
++		mem->size =
++			readl(&ivshm_dev->regs->max_peers) * output_section_sz;
++		mem->memtype = UIO_MEM_IOVA;
++		mem->readonly = true;
++		if (!devm_request_mem_region(&pdev->dev, mem->addr, mem->size,
++					     device_name))
++			return -EBUSY;
++		dev_info(&pdev->dev, "%s at %pa, size %pa\n", mem->name,
++			 &mem->addr, &mem->size);
++
++		mem++;
++		mem->name = "output_section";
++		mem->addr = section_addr +
++			readl(&ivshm_dev->regs->id) * output_section_sz;
++		mem->size = output_section_sz;
++		mem->memtype = UIO_MEM_IOVA;
++		dev_info(&pdev->dev, "%s at %pa, size %pa\n", mem->name,
++			 &mem->addr, &mem->size);
++	}
++
++	pci_write_config_byte(pdev, vendor_cap + IVSHM_CFG_PRIV_CNTL,
++			      IVSHM_PRIV_CNTL_ONESHOT_INT);
++
++	/*
++	 * Grab all vectors although we can only coalesce them into a single
++	 * notifier. This avoids missing any event.
++	 */
++	ivshm_dev->vectors = pci_msix_vec_count(pdev);
++	if (ivshm_dev->vectors < 0)
++		ivshm_dev->vectors = 1;
++
++	err = pci_alloc_irq_vectors(pdev, ivshm_dev->vectors,
++				    ivshm_dev->vectors,
++				    PCI_IRQ_LEGACY | PCI_IRQ_MSIX);
++	if (err < 0)
++		return err;
++
++	for (i = 0; i < ivshm_dev->vectors; i++) {
++		err = request_irq(pci_irq_vector(pdev, i), ivshm_irq_handler,
++				  IRQF_SHARED, ivshm_dev->info.name, ivshm_dev);
++		if (err)
++			goto error;
++	}
++
++	ivshm_dev->info.irq = UIO_IRQ_CUSTOM;
++
++	err = uio_register_device(&pdev->dev, &ivshm_dev->info);
++	if (err)
++		goto error;
++
++	pci_set_master(pdev);
++
++	pci_set_drvdata(pdev, ivshm_dev);
++
++	return 0;
++
++error:
++	while (--i > 0)
++		free_irq(pci_irq_vector(pdev, i), ivshm_dev);
++	pci_free_irq_vectors(pdev);
++	return err;
++}
++
++static void ivshm_remove(struct pci_dev *pdev)
++{
++	struct ivshm_dev *ivshm_dev = pci_get_drvdata(pdev);
++	int i;
++
++	writel(0, &ivshm_dev->regs->int_control);
++	pci_clear_master(pdev);
++
++	uio_unregister_device(&ivshm_dev->info);
++
++	for (i = 0; i < ivshm_dev->vectors; i++)
++		free_irq(pci_irq_vector(pdev, i), ivshm_dev);
++
++	pci_free_irq_vectors(pdev);
++}
++
++static const struct pci_device_id ivshm_device_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_SIEMENS, PCI_DEVICE_ID_IVSHMEM),
++	  (PCI_CLASS_OTHERS << 16) | IVSHM_PROTO_UNDEFINED, 0xffffff },
++	{ 0 }
++};
++MODULE_DEVICE_TABLE(pci, ivshm_device_id_table);
++
++static struct pci_driver uio_ivshm_driver = {
++	.name = DRV_NAME,
++	.id_table = ivshm_device_id_table,
++	.probe = ivshm_probe,
++	.remove = ivshm_remove,
++};
++module_pci_driver(uio_ivshm_driver);
++
++MODULE_AUTHOR("Jan Kiszka <jan.kiszka@siemens.com>");
++MODULE_LICENSE("GPL v2");
+diff --git a/include/linux/uio_driver.h b/include/linux/uio_driver.h
+index 47c5962b8..e7a101e47 100644
+--- a/include/linux/uio_driver.h
++++ b/include/linux/uio_driver.h
+@@ -31,6 +31,7 @@ struct uio_map;
+  * @offs:               offset of device memory within the page
+  * @size:		size of IO (multiple of page size)
+  * @memtype:		type of memory addr points to
++ * @readonly:		true of region is read-only
+  * @internal_addr:	ioremap-ped version of addr, for driver internal use
+  * @map:		for use by the UIO core only.
+  */
+@@ -40,6 +41,7 @@ struct uio_mem {
+ 	unsigned long		offs;
+ 	resource_size_t		size;
+ 	int			memtype;
++	bool			readonly;
+ 	void __iomem		*internal_addr;
+ 	struct uio_map		*map;
+ };
+diff --git a/include/net/xdp_sock_drv.h b/include/net/xdp_sock_drv.h
+index ffe13a10b..4aa031849 100644
+--- a/include/net/xdp_sock_drv.h
++++ b/include/net/xdp_sock_drv.h
+@@ -77,6 +77,12 @@ static inline struct xdp_buff *xsk_buff_alloc(struct xsk_buff_pool *pool)
+ 	return xp_alloc(pool);
+ }
+ 
++/* Returns as many entries as possible up to max. 0 <= N <= max. */
++static inline u32 xsk_buff_alloc_batch(struct xsk_buff_pool *pool, struct xdp_buff **xdp, u32 max)
++{
++	return xp_alloc_batch(pool, xdp, max);
++}
++
+ static inline bool xsk_buff_can_alloc(struct xsk_buff_pool *pool, u32 count)
+ {
+ 	return xp_can_alloc(pool, count);
+@@ -89,6 +95,13 @@ static inline void xsk_buff_free(struct xdp_buff *xdp)
+ 	xp_free(xskb);
+ }
+ 
++static inline void xsk_buff_set_size(struct xdp_buff *xdp, u32 size)
++{
++	xdp->data = xdp->data_hard_start + XDP_PACKET_HEADROOM;
++	xdp->data_meta = xdp->data;
++	xdp->data_end = xdp->data + size;
++}
++
+ static inline dma_addr_t xsk_buff_raw_get_dma(struct xsk_buff_pool *pool,
+ 					      u64 addr)
+ {
+@@ -211,6 +224,11 @@ static inline struct xdp_buff *xsk_buff_alloc(struct xsk_buff_pool *pool)
+ 	return NULL;
+ }
+ 
++static inline u32 xsk_buff_alloc_batch(struct xsk_buff_pool *pool, struct xdp_buff **xdp, u32 max)
++{
++	return 0;
++}
++
+ static inline bool xsk_buff_can_alloc(struct xsk_buff_pool *pool, u32 count)
+ {
+ 	return false;
+@@ -220,6 +238,10 @@ static inline void xsk_buff_free(struct xdp_buff *xdp)
+ {
+ }
+ 
++static inline void xsk_buff_set_size(struct xdp_buff *xdp, u32 size)
++{
++}
++
+ static inline dma_addr_t xsk_buff_raw_get_dma(struct xsk_buff_pool *pool,
+ 					      u64 addr)
+ {
+diff --git a/include/net/xsk_buff_pool.h b/include/net/xsk_buff_pool.h
+index ebd1f4357..f7c5a090d 100644
+--- a/include/net/xsk_buff_pool.h
++++ b/include/net/xsk_buff_pool.h
+@@ -67,6 +67,7 @@ struct xsk_buff_pool {
+ 	u32 dma_pages_cnt;
+ 	u32 free_heads_cnt;
+ 	u32 headroom;
++	u32 tx_headroom;
+ 	u32 chunk_size;
+ 	u32 frame_len;
+ 	u8 cached_need_wakeup;
+@@ -87,7 +88,7 @@ struct xsk_buff_pool *xp_create_and_assign_umem(struct xdp_sock *xs,
+ 						struct xdp_umem *umem);
+ int xp_assign_dev(struct xsk_buff_pool *pool, struct net_device *dev,
+ 		  u16 queue_id, u16 flags);
+-int xp_assign_dev_shared(struct xsk_buff_pool *pool, struct xdp_sock *umem_xs,
++int xp_assign_dev_shared(struct xsk_buff_pool *pool, struct xdp_umem *umem,
+ 			 struct net_device *dev, u16 queue_id);
+ int xp_alloc_tx_descs(struct xsk_buff_pool *pool, struct xdp_sock *xs);
+ void xp_destroy(struct xsk_buff_pool *pool);
+@@ -107,6 +108,7 @@ int xp_dma_map(struct xsk_buff_pool *pool, struct device *dev,
+ 	       unsigned long attrs, struct page **pages, u32 nr_pages);
+ void xp_dma_unmap(struct xsk_buff_pool *pool, unsigned long attrs);
+ struct xdp_buff *xp_alloc(struct xsk_buff_pool *pool);
++u32 xp_alloc_batch(struct xsk_buff_pool *pool, struct xdp_buff **xdp, u32 max);
+ bool xp_can_alloc(struct xsk_buff_pool *pool, u32 count);
+ void *xp_raw_get_data(struct xsk_buff_pool *pool, u64 addr);
+ dma_addr_t xp_raw_get_dma(struct xsk_buff_pool *pool, u64 addr);
+@@ -152,8 +154,13 @@ static inline bool xp_desc_crosses_non_contig_pg(struct xsk_buff_pool *pool,
+ 	if (likely(!cross_pg))
+ 		return false;
+ 
+-	return pool->dma_pages_cnt &&
+-	       !(pool->dma_pages[addr >> PAGE_SHIFT] & XSK_NEXT_PG_CONTIG_MASK);
++	if (pool->dma_pages_cnt) {
++		return !(pool->dma_pages[addr >> PAGE_SHIFT] &
++			 XSK_NEXT_PG_CONTIG_MASK);
++	}
++
++	/* skb path */
++	return addr + len > pool->addrs_cnt;
+ }
+ 
+ static inline u64 xp_aligned_extract_addr(struct xsk_buff_pool *pool, u64 addr)
+diff --git a/include/soc/mscc/ocelot_vcap.h b/include/soc/mscc/ocelot_vcap.h
+index 7b2bf9b1f..de26c992f 100644
+--- a/include/soc/mscc/ocelot_vcap.h
++++ b/include/soc/mscc/ocelot_vcap.h
+@@ -681,7 +681,6 @@ struct ocelot_vcap_id {
+ 
+ struct ocelot_vcap_filter {
+ 	struct list_head list;
+-	struct list_head trap_list;
+ 
+ 	enum ocelot_vcap_filter_type type;
+ 	int block_id;
+@@ -695,6 +694,7 @@ struct ocelot_vcap_filter {
+ 	struct ocelot_vcap_stats stats;
+ 	/* For VCAP IS1 and IS2 */
+ 	bool take_ts;
++	bool is_trap;
+ 	unsigned long ingress_port_mask;
+ 	/* For VCAP ES0 */
+ 	struct ocelot_vcap_port ingress_port;
+-- 
+2.25.1
+

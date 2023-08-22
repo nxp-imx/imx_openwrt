@@ -1,0 +1,818 @@
+From 7ca2659f61b928defe5360515a992375491cb68e Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 14:02:34 +0800
+Subject: [PATCH 02/24] add reset gpio support
+
+---
+ drivers/reset/Kconfig             |  24 ++
+ drivers/reset/Makefile            |   3 +
+ drivers/reset/gpio-reset.c        | 217 ++++++++++++++++
+ drivers/reset/reset-dispmix.c     | 399 ++++++++++++++++++++++++++++++
+ drivers/reset/reset-imx8ulp-sim.c |  98 ++++++++
+ 5 files changed, 741 insertions(+)
+ create mode 100644 drivers/reset/gpio-reset.c
+ create mode 100644 drivers/reset/reset-dispmix.c
+ create mode 100644 drivers/reset/reset-imx8ulp-sim.c
+
+diff --git a/drivers/reset/Kconfig b/drivers/reset/Kconfig
+index b0056ae5d..095afa066 100644
+--- a/drivers/reset/Kconfig
++++ b/drivers/reset/Kconfig
+@@ -66,6 +66,15 @@ config RESET_BRCMSTB_RESCAL
+ 	  This enables the RESCAL reset controller for SATA, PCIe0, or PCIe1 on
+ 	  BCM7216.
+ 
++config RESET_DISPMIX
++	tristate "IMX Display Mix reset support"
++	default y
++	select REGMAP_MMIO
++	depends on ARCH_MXC
++	help
++	  This driver provides support for Display Mix reset that is controlled
++	  by dispmix GPR registers.
++
+ config RESET_HSDK
+ 	bool "Synopsys HSDK Reset Driver"
+ 	depends on HAS_IOMEM
+@@ -82,6 +91,13 @@ config RESET_IMX7
+ 	help
+ 	  This enables the reset controller driver for i.MX7 SoCs.
+ 
++config RESET_IMX8ULP_SIM
++	tristate "i.MX8ULP SIM Reset Driver"
++	depends on ARCH_MXC
++	help
++	  This enables the SIM (System Integration Module) reset driver
++	  for i.MX8ulp SoC.
++
+ config RESET_INTEL_GW
+ 	bool "Intel Reset Controller Driver"
+ 	depends on X86 || COMPILE_TEST
+@@ -108,6 +124,14 @@ config RESET_LANTIQ
+ 	help
+ 	  This enables the reset controller driver for Lantiq / Intel XWAY SoCs.
+ 
++config RESET_GPIO
++	tristate "GPIO reset controller support"
++	default y
++	depends on GPIOLIB && OF
++	help
++	  This driver provides support for reset lines that are controlled
++	  directly by GPIOs.
++
+ config RESET_LPC18XX
+ 	bool "LPC18xx/43xx Reset Driver" if COMPILE_TEST
+ 	default ARCH_LPC18XX
+diff --git a/drivers/reset/Makefile b/drivers/reset/Makefile
+index 21d46d886..4b8921c46 100644
+--- a/drivers/reset/Makefile
++++ b/drivers/reset/Makefile
+@@ -11,10 +11,13 @@ obj-$(CONFIG_RESET_BERLIN) += reset-berlin.o
+ obj-$(CONFIG_RESET_BRCMSTB) += reset-brcmstb.o
+ obj-$(CONFIG_RESET_BRCMSTB_RESCAL) += reset-brcmstb-rescal.o
+ obj-$(CONFIG_RESET_HSDK) += reset-hsdk.o
++obj-$(CONFIG_RESET_DISPMIX) += reset-dispmix.o
+ obj-$(CONFIG_RESET_IMX7) += reset-imx7.o
++obj-$(CONFIG_RESET_IMX8ULP_SIM) += reset-imx8ulp-sim.o
+ obj-$(CONFIG_RESET_INTEL_GW) += reset-intel-gw.o
+ obj-$(CONFIG_RESET_K210) += reset-k210.o
+ obj-$(CONFIG_RESET_LANTIQ) += reset-lantiq.o
++obj-$(CONFIG_RESET_GPIO) += gpio-reset.o
+ obj-$(CONFIG_RESET_LPC18XX) += reset-lpc18xx.o
+ obj-$(CONFIG_RESET_MCHP_SPARX5) += reset-microchip-sparx5.o
+ obj-$(CONFIG_RESET_MESON) += reset-meson.o
+diff --git a/drivers/reset/gpio-reset.c b/drivers/reset/gpio-reset.c
+new file mode 100644
+index 000000000..cfd3fe026
+--- /dev/null
++++ b/drivers/reset/gpio-reset.c
+@@ -0,0 +1,217 @@
++/*
++ * GPIO Reset Controller driver
++ *
++ * Copyright 2013 Philipp Zabel, Pengutronix
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++#include <linux/delay.h>
++#include <linux/err.h>
++#include <linux/gpio.h>
++#include <linux/module.h>
++#include <linux/of_gpio.h>
++#include <linux/platform_device.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/reset-controller.h>
++
++struct gpio_reset_data {
++	struct reset_controller_dev rcdev;
++	unsigned int gpio;
++	bool active_low;
++	s32 delay_us;
++	s32 post_delay_ms;
++};
++
++static void gpio_reset_set(struct reset_controller_dev *rcdev, int asserted)
++{
++	struct gpio_reset_data *drvdata = container_of(rcdev,
++			struct gpio_reset_data, rcdev);
++	int value = asserted;
++
++	if (drvdata->active_low)
++		value = !value;
++
++	gpio_set_value_cansleep(drvdata->gpio, value);
++}
++
++static int gpio_reset(struct reset_controller_dev *rcdev, unsigned long id)
++{
++	struct gpio_reset_data *drvdata = container_of(rcdev,
++			struct gpio_reset_data, rcdev);
++
++	if (drvdata->delay_us < 0)
++		return -ENOSYS;
++
++	gpio_reset_set(rcdev, 1);
++	udelay(drvdata->delay_us);
++	gpio_reset_set(rcdev, 0);
++
++	if (drvdata->post_delay_ms < 0)
++		return 0;
++
++	msleep(drvdata->post_delay_ms);
++	return 0;
++}
++
++static int gpio_reset_assert(struct reset_controller_dev *rcdev,
++		unsigned long id)
++{
++	gpio_reset_set(rcdev, 1);
++
++	return 0;
++}
++
++static int gpio_reset_deassert(struct reset_controller_dev *rcdev,
++		unsigned long id)
++{
++	gpio_reset_set(rcdev, 0);
++
++	return 0;
++}
++
++static struct reset_control_ops gpio_reset_ops = {
++	.reset = gpio_reset,
++	.assert = gpio_reset_assert,
++	.deassert = gpio_reset_deassert,
++};
++
++static int of_gpio_reset_xlate(struct reset_controller_dev *rcdev,
++			       const struct of_phandle_args *reset_spec)
++{
++	if (WARN_ON(reset_spec->args_count != 0))
++		return -EINVAL;
++
++	return 0;
++}
++
++static int gpio_reset_probe(struct platform_device *pdev)
++{
++	struct device_node *np = pdev->dev.of_node;
++	struct gpio_reset_data *drvdata;
++	enum of_gpio_flags flags;
++	unsigned long gpio_flags;
++	bool initially_in_reset;
++	int ret;
++
++	drvdata = devm_kzalloc(&pdev->dev, sizeof(*drvdata), GFP_KERNEL);
++	if (drvdata == NULL)
++		return -ENOMEM;
++
++	if (of_gpio_named_count(np, "reset-gpios") != 1) {
++		dev_err(&pdev->dev,
++			"reset-gpios property missing, or not a single gpio\n");
++		return -EINVAL;
++	}
++
++	drvdata->gpio = of_get_named_gpio_flags(np, "reset-gpios", 0, &flags);
++	if (drvdata->gpio == -EPROBE_DEFER) {
++		return drvdata->gpio;
++	} else if (!gpio_is_valid(drvdata->gpio)) {
++		dev_err(&pdev->dev, "invalid reset gpio: %d\n", drvdata->gpio);
++		return drvdata->gpio;
++	}
++
++	drvdata->active_low = flags & OF_GPIO_ACTIVE_LOW;
++
++	ret = of_property_read_u32(np, "reset-delay-us", &drvdata->delay_us);
++	if (ret < 0)
++		drvdata->delay_us = -1;
++	else if (drvdata->delay_us < 0)
++		dev_warn(&pdev->dev, "reset delay too high\n");
++
++	/* It is optional.
++	 * Some devices need some milliseconds to wait after reset.
++	 */
++	ret = of_property_read_u32(np, "reset-post-delay-ms", &drvdata->post_delay_ms);
++	if (ret < 0)
++		drvdata->post_delay_ms = -1;
++
++	initially_in_reset = of_property_read_bool(np, "initially-in-reset");
++	if (drvdata->active_low ^ initially_in_reset)
++		gpio_flags = GPIOF_OUT_INIT_HIGH;
++	else
++		gpio_flags = GPIOF_OUT_INIT_LOW;
++
++	ret = devm_gpio_request_one(&pdev->dev, drvdata->gpio, gpio_flags, NULL);
++	if (ret < 0) {
++		dev_err(&pdev->dev, "failed to request gpio %d: %d\n",
++			drvdata->gpio, ret);
++		return ret;
++	}
++
++	platform_set_drvdata(pdev, drvdata);
++
++	drvdata->rcdev.of_node = np;
++	drvdata->rcdev.owner = THIS_MODULE;
++	drvdata->rcdev.nr_resets = 1;
++	drvdata->rcdev.ops = &gpio_reset_ops;
++	drvdata->rcdev.of_xlate = of_gpio_reset_xlate;
++	reset_controller_register(&drvdata->rcdev);
++
++	return 0;
++}
++
++static int gpio_reset_remove(struct platform_device *pdev)
++{
++	struct gpio_reset_data *drvdata = platform_get_drvdata(pdev);
++
++	reset_controller_unregister(&drvdata->rcdev);
++
++	return 0;
++}
++
++static struct of_device_id gpio_reset_dt_ids[] = {
++	{ .compatible = "gpio-reset" },
++	{ }
++};
++
++#ifdef CONFIG_PM_SLEEP
++static int gpio_reset_suspend(struct device *dev)
++{
++	pinctrl_pm_select_sleep_state(dev);
++
++	return 0;
++}
++static int gpio_reset_resume(struct device *dev)
++{
++	pinctrl_pm_select_default_state(dev);
++
++	return 0;
++}
++#endif
++
++static const struct dev_pm_ops gpio_reset_pm_ops = {
++	SET_LATE_SYSTEM_SLEEP_PM_OPS(gpio_reset_suspend, gpio_reset_resume)
++};
++
++static struct platform_driver gpio_reset_driver = {
++	.probe = gpio_reset_probe,
++	.remove = gpio_reset_remove,
++	.driver = {
++		.name = "gpio-reset",
++		.owner = THIS_MODULE,
++		.of_match_table = of_match_ptr(gpio_reset_dt_ids),
++		.pm = &gpio_reset_pm_ops,
++	},
++};
++
++static int __init gpio_reset_init(void)
++{
++	return platform_driver_register(&gpio_reset_driver);
++}
++arch_initcall(gpio_reset_init);
++
++static void __exit gpio_reset_exit(void)
++{
++	platform_driver_unregister(&gpio_reset_driver);
++}
++module_exit(gpio_reset_exit);
++
++MODULE_AUTHOR("Philipp Zabel <p.zabel@pengutronix.de>");
++MODULE_DESCRIPTION("gpio reset controller");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("platform:gpio-reset");
++MODULE_DEVICE_TABLE(of, gpio_reset_dt_ids);
+diff --git a/drivers/reset/reset-dispmix.c b/drivers/reset/reset-dispmix.c
+new file mode 100644
+index 000000000..60daf7109
+--- /dev/null
++++ b/drivers/reset/reset-dispmix.c
+@@ -0,0 +1,399 @@
++/*
++ * IMX Display Mix GPR reset driver
++ *
++ * Copyright 2019 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/module.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/regmap.h>
++#include <linux/reset-controller.h>
++#include <dt-bindings/reset/imx8mm-dispmix.h>
++#include <dt-bindings/reset/imx8mn-dispmix.h>
++
++#define DRIVER_NAME		"dispmix_reset_drv"
++
++/* DISPMIX GPR registers */
++#define DISPLAY_MIX_SFT_RSTN_CSR		0x00
++#define DISPLAY_MIX_CLK_EN_CSR			0x00
++#define GPR_MIPI_RESET_DIV			0x00
++
++struct dispmix_reset_controller {
++	struct reset_controller_dev rcdev;
++	struct device *dev;
++	struct regmap *rstcon;
++	struct clk *ipg_clk;
++	bool active_low;
++};
++
++struct dispmix_reset_entry {
++	uint32_t reg_off;
++	uint32_t bit_off;
++};
++
++struct dispmix_reset_pdata {
++	const struct dispmix_reset_entry *resets;
++	uint32_t nr_resets;
++	const struct regmap_config *config;
++};
++
++#define RESET_ENTRY(id, reg, bit)			\
++	[id] = { .reg_off = (reg), .bit_off = (bit) }
++
++static const struct dispmix_reset_entry imx8mm_sft_rstn[] = {
++	/* dispmix reset entry */
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_CHIP_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 0),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_IPG_HARD_ASYNC_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 1),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_CSI_HRESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 2),
++	RESET_ENTRY(IMX8MM_CAMERA_PIXEL_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 3),
++	RESET_ENTRY(IMX8MM_MIPI_CSI_I_PRESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 4),
++	RESET_ENTRY(IMX8MM_MIPI_DSI_I_PRESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 5),
++	RESET_ENTRY(IMX8MM_BUS_RSTN_BLK_SYNC,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 6),
++};
++
++static const struct dispmix_reset_entry imx8mm_clk_en[] = {
++	/* dispmix clock enable entry */
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_CSI_HCLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  0),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_SPU_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  1),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_MEM_WRAPPER_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  2),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_IPG_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  3),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_IPG_CLK_S_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  4),
++	RESET_ENTRY(IMX8MM_CSI_BRIDGE_IPG_CLK_S_RAW_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  5),
++	RESET_ENTRY(IMX8MM_LCDIF_APB_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  6),
++	RESET_ENTRY(IMX8MM_LCDIF_PIXEL_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  7),
++	RESET_ENTRY(IMX8MM_MIPI_DSI_PCLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  8),
++	RESET_ENTRY(IMX8MM_MIPI_DSI_CLKREF_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  9),
++	RESET_ENTRY(IMX8MM_MIPI_CSI_ACLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR, 10),
++	RESET_ENTRY(IMX8MM_MIPI_CSI_PCLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR, 11),
++	RESET_ENTRY(IMX8MM_BUS_BLK_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR, 12),
++};
++
++static const struct dispmix_reset_entry imx8mm_mipi_rst[] = {
++	/* mipi lanes reset entry */
++	RESET_ENTRY(IMX8MM_MIPI_S_RESET,
++		    GPR_MIPI_RESET_DIV, 16),
++	RESET_ENTRY(IMX8MM_MIPI_M_RESET,
++		    GPR_MIPI_RESET_DIV, 17),
++};
++
++static const struct dispmix_reset_entry imx8mn_sft_rstn[] = {
++	/* dispmix reset entry */
++	RESET_ENTRY(IMX8MN_MIPI_DSI_PCLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 0),
++	RESET_ENTRY(IMX8MN_MIPI_DSI_CLKREF_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 1),
++	RESET_ENTRY(IMX8MN_MIPI_CSI_PCLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 2),
++	RESET_ENTRY(IMX8MN_MIPI_CSI_ACLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 3),
++	RESET_ENTRY(IMX8MN_LCDIF_PIXEL_CLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 4),
++	RESET_ENTRY(IMX8MN_LCDIF_APB_CLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 5),
++	RESET_ENTRY(IMX8MN_ISI_PROC_CLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 6),
++	RESET_ENTRY(IMX8MN_ISI_APB_CLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 7),
++	RESET_ENTRY(IMX8MN_BUS_BLK_CLK_RESET,
++		    DISPLAY_MIX_SFT_RSTN_CSR, 8),
++};
++
++static const struct dispmix_reset_entry imx8mn_clk_en[] = {
++	/* dispmix clock enable entry */
++	RESET_ENTRY(IMX8MN_MIPI_DSI_PCLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  0),
++	RESET_ENTRY(IMX8MN_MIPI_DSI_CLKREF_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  1),
++	RESET_ENTRY(IMX8MN_MIPI_CSI_PCLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  2),
++	RESET_ENTRY(IMX8MN_MIPI_CSI_ACLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  3),
++	RESET_ENTRY(IMX8MN_LCDIF_PIXEL_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  4),
++	RESET_ENTRY(IMX8MN_LCDIF_APB_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  5),
++	RESET_ENTRY(IMX8MN_ISI_PROC_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  6),
++	RESET_ENTRY(IMX8MN_ISI_APB_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  7),
++	RESET_ENTRY(IMX8MN_BUS_BLK_CLK_EN,
++		    DISPLAY_MIX_CLK_EN_CSR,  8),
++};
++
++static const struct dispmix_reset_entry imx8mn_mipi_rst[] = {
++	/* mipi lanes reset entry */
++	RESET_ENTRY(IMX8MN_MIPI_S_RESET,
++		    GPR_MIPI_RESET_DIV, 16),
++	RESET_ENTRY(IMX8MN_MIPI_M_RESET,
++		    GPR_MIPI_RESET_DIV, 17),
++};
++
++static const struct regmap_config sft_rstn_config = {
++	.name = "sft_rstn",
++	.reg_bits = 32,
++	.val_bits = 32,
++	.reg_stride = 4,
++	.max_register = 0x00,
++};
++
++static const struct regmap_config clk_en_config = {
++	.name = "clk_en",
++	.reg_bits = 32,
++	.val_bits = 32,
++	.reg_stride = 4,
++	.max_register = 0x00,
++};
++
++static const struct regmap_config mipi_rst_config = {
++	.name = "mipi_rst",
++	.reg_bits = 32,
++	.val_bits = 32,
++	.reg_stride = 4,
++	.max_register = 0x00,
++};
++
++static const struct dispmix_reset_pdata imx8mm_sft_rstn_pdata = {
++	.resets    = imx8mm_sft_rstn,
++	.nr_resets = IMX8MM_DISPMIX_SFT_RSTN_NUM,
++	.config    = &sft_rstn_config,
++};
++
++static const struct dispmix_reset_pdata imx8mm_clk_en_pdata = {
++	.resets    = imx8mm_clk_en,
++	.nr_resets = IMX8MM_DISPMIX_CLK_EN_NUM,
++	.config    = &clk_en_config,
++};
++
++static const struct dispmix_reset_pdata imx8mm_mipi_rst_pdata = {
++	.resets    = imx8mm_mipi_rst,
++	.nr_resets = IMX8MM_MIPI_RESET_NUM,
++	.config    = &mipi_rst_config,
++};
++
++static const struct dispmix_reset_pdata imx8mn_sft_rstn_pdata = {
++	.resets    = imx8mn_sft_rstn,
++	.nr_resets = IMX8MN_DISPMIX_SFT_RSTN_NUM,
++	.config    = &sft_rstn_config,
++};
++
++static const struct dispmix_reset_pdata imx8mn_clk_en_pdata = {
++	.resets    = imx8mn_clk_en,
++	.nr_resets = IMX8MN_DISPMIX_CLK_EN_NUM,
++	.config    = &clk_en_config,
++};
++
++static const struct dispmix_reset_pdata imx8mn_mipi_rst_pdata = {
++	.resets    = imx8mn_mipi_rst,
++	.nr_resets = IMX8MN_MIPI_RESET_NUM,
++	.config    = &mipi_rst_config,
++};
++
++static const struct of_device_id dispmix_reset_dt_ids[] = {
++	{
++		.compatible = "fsl,imx8mm-dispmix-sft-rstn",
++		.data = &imx8mm_sft_rstn_pdata,
++	},
++	{
++		.compatible = "fsl,imx8mm-dispmix-clk-en",
++		.data = &imx8mm_clk_en_pdata,
++	},
++	{
++		.compatible = "fsl,imx8mm-dispmix-mipi-rst",
++		.data = &imx8mm_mipi_rst_pdata,
++	},
++	{
++		.compatible = "fsl,imx8mn-dispmix-sft-rstn",
++		.data = &imx8mn_sft_rstn_pdata,
++	},
++	{
++		.compatible = "fsl,imx8mn-dispmix-clk-en",
++		.data = &imx8mn_clk_en_pdata,
++	},
++	{
++		.compatible = "fsl,imx8mn-dispmix-mipi-rst",
++		.data = &imx8mn_mipi_rst_pdata,
++	},
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, dispmix_reset_dt_ids);
++
++static int dispmix_reset_assert(struct reset_controller_dev *rcdev,
++				unsigned long id)
++{
++	struct dispmix_reset_controller *drcdev;
++	const struct of_device_id *of_id;
++	const struct dispmix_reset_pdata *pdata;
++	const struct dispmix_reset_entry *rstent;
++	struct regmap *rstcon;
++
++	if (id >= rcdev->nr_resets) {
++		pr_info("dispmix reset: %lu is not a valid line\n", id);
++		return -EINVAL;
++	}
++
++	drcdev = container_of(rcdev, struct dispmix_reset_controller, rcdev);
++	of_id  = of_match_device(dispmix_reset_dt_ids, drcdev->dev);
++	pdata = of_id->data;
++
++	rstcon = drcdev->rstcon;
++	rstent = &pdata->resets[id];
++
++	pm_runtime_get_sync(drcdev->dev);
++	regmap_update_bits(rstcon, rstent->reg_off,
++			   1 << rstent->bit_off,
++			   !drcdev->active_low << rstent->bit_off);
++	pm_runtime_put(drcdev->dev);
++
++	return 0;
++}
++
++static int dispmix_reset_deassert(struct reset_controller_dev *rcdev,
++				  unsigned long id)
++{
++	struct dispmix_reset_controller *drcdev;
++	const struct of_device_id *of_id;
++	const struct dispmix_reset_pdata *pdata;
++	const struct dispmix_reset_entry *rstent;
++	struct regmap *rstcon;
++
++	if (id >= rcdev->nr_resets) {
++		pr_info("dispmix reset: %lu is not a valid line\n", id);
++		return -EINVAL;
++	}
++
++	drcdev = container_of(rcdev, struct dispmix_reset_controller, rcdev);
++	of_id  = of_match_device(dispmix_reset_dt_ids, drcdev->dev);
++	pdata = of_id->data;
++
++	rstcon = drcdev->rstcon;
++	rstent = &pdata->resets[id];
++
++	pm_runtime_get_sync(drcdev->dev);
++	regmap_update_bits(rstcon, rstent->reg_off,
++			   1 << rstent->bit_off,
++			   !!drcdev->active_low << rstent->bit_off);
++	pm_runtime_put(drcdev->dev);
++
++	return 0;
++}
++
++static const struct reset_control_ops dispmix_reset_ops = {
++	.assert   = dispmix_reset_assert,
++	.deassert = dispmix_reset_deassert,
++};
++
++static int dispmix_reset_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	const struct of_device_id *of_id;
++	struct dispmix_reset_controller *drcdev;
++	const struct dispmix_reset_pdata *pdata;
++	struct resource *res;
++	void __iomem *regs;
++	struct regmap *regmap;
++	struct clk *apb_clk;
++
++	drcdev = devm_kzalloc(dev, sizeof(*drcdev), GFP_KERNEL);
++	if (!drcdev)
++		return -ENOMEM;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -ENODEV;
++
++	regs = devm_ioremap_resource(dev, res);
++	if (IS_ERR(regs))
++		return PTR_ERR(regs);
++
++	apb_clk = devm_clk_get(dev, "disp_apb_root_clk");
++	if (IS_ERR(apb_clk)) {
++		dev_err(dev, "Unable to get disp apb clock\n");
++		return PTR_ERR(apb_clk);
++	}
++
++	drcdev->active_low = of_property_read_bool(np, "active_low");
++
++	of_id = of_match_device(dispmix_reset_dt_ids, dev);
++	pdata = of_id->data;
++
++	/* init mmio regmap */
++	regmap = regmap_init_mmio_clk(NULL, NULL,
++				      regs, pdata->config);
++	if (IS_ERR(regmap)) {
++		dev_err(dev, "Failed to init mmio regmap: %ld\n",
++			PTR_ERR(regmap));
++		return PTR_ERR(regmap);
++	}
++	drcdev->rstcon = regmap;
++
++	platform_set_drvdata(pdev, drcdev);
++	pm_runtime_enable(dev);
++
++	/* register reset controller */
++	drcdev->dev = dev;
++	drcdev->rcdev.of_node = dev->of_node;
++	drcdev->rcdev.owner = THIS_MODULE;
++	drcdev->rcdev.nr_resets = pdata->nr_resets;
++	drcdev->rcdev.ops = &dispmix_reset_ops;
++
++	return devm_reset_controller_register(dev, &drcdev->rcdev);
++}
++
++static int dispmix_reset_remove(struct platform_device *pdev)
++{
++	pm_runtime_disable(&pdev->dev);
++	platform_set_drvdata(pdev, NULL);
++
++	return 0;
++}
++
++static struct platform_driver dispmix_reset_driver = {
++	.probe  = dispmix_reset_probe,
++	.remove = dispmix_reset_remove,
++	.driver = {
++		.name  = DRIVER_NAME,
++		.owner = THIS_MODULE,
++		.of_match_table = of_match_ptr(dispmix_reset_dt_ids),
++	},
++};
++
++builtin_platform_driver(dispmix_reset_driver);
++
++MODULE_DESCRIPTION("IMX Display Mix reset driver");
++MODULE_AUTHOR("Fancy Fang <chen.fang@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/reset/reset-imx8ulp-sim.c b/drivers/reset/reset-imx8ulp-sim.c
+new file mode 100644
+index 000000000..08d214318
+--- /dev/null
++++ b/drivers/reset/reset-imx8ulp-sim.c
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: GPL-2.0+
++
++/*
++ * Copyright 2021 NXP
++ */
++
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/reset-controller.h>
++#include <dt-bindings/reset/imx8ulp-sim-reset.h>
++
++#define AVD_SIM_SYSCTRL0	0x8
++
++struct imx8ulp_sim_reset {
++	struct reset_controller_dev	rcdev;
++	struct regmap			*regmap;
++};
++
++static const u32 imx8ulp_sim_reset_bits[IMX8ULP_SIM_RESET_NUM] = {
++	[IMX8ULP_SIM_RESET_MIPI_DSI_RST_DPI_N] = BIT(3),
++	[IMX8ULP_SIM_RESET_MIPI_DSI_RST_ESC_N] = BIT(4),
++	[IMX8ULP_SIM_RESET_MIPI_DSI_RST_BYTE_N] = BIT(5),
++};
++
++static inline struct imx8ulp_sim_reset *
++to_imx8ulp_sim_reset(struct reset_controller_dev *rcdev)
++{
++	return container_of(rcdev, struct imx8ulp_sim_reset, rcdev);
++}
++
++static int imx8ulp_sim_reset_assert(struct reset_controller_dev *rcdev,
++				    unsigned long id)
++{
++	struct imx8ulp_sim_reset *simr = to_imx8ulp_sim_reset(rcdev);
++	const u32 bit = imx8ulp_sim_reset_bits[id];
++
++	return regmap_update_bits(simr->regmap, AVD_SIM_SYSCTRL0, bit, 0);
++}
++
++static int imx8ulp_sim_reset_deassert(struct reset_controller_dev *rcdev,
++				      unsigned long id)
++{
++	struct imx8ulp_sim_reset *simr = to_imx8ulp_sim_reset(rcdev);
++	const u32 bit = imx8ulp_sim_reset_bits[id];
++
++	return regmap_update_bits(simr->regmap, AVD_SIM_SYSCTRL0, bit, bit);
++}
++
++static const struct reset_control_ops imx8ulp_sim_reset_ops = {
++	.assert		= imx8ulp_sim_reset_assert,
++	.deassert	= imx8ulp_sim_reset_deassert,
++};
++
++static const struct of_device_id imx8ulp_sim_reset_dt_ids[] = {
++	{ .compatible = "nxp,imx8ulp-avd-sim-reset", },
++	{ /* sentinel */ },
++};
++
++static int imx8ulp_sim_reset_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct imx8ulp_sim_reset *simr;
++	int ret;
++
++	simr = devm_kzalloc(dev, sizeof(*simr), GFP_KERNEL);
++	if (!simr)
++		return -ENOMEM;
++
++	simr->regmap = syscon_node_to_regmap(dev->of_node->parent);
++	if (IS_ERR(simr->regmap)) {
++		ret = PTR_ERR(simr->regmap);
++		dev_err(dev, "failed to get regmap: %d\n", ret);
++		return ret;
++	}
++
++	simr->rcdev.owner = THIS_MODULE;
++	simr->rcdev.nr_resets = IMX8ULP_SIM_RESET_NUM;
++	simr->rcdev.ops = &imx8ulp_sim_reset_ops;
++	simr->rcdev.of_node = dev->of_node;
++
++	return devm_reset_controller_register(dev, &simr->rcdev);
++}
++
++static struct platform_driver imx8ulp_sim_reset_driver = {
++	.probe	= imx8ulp_sim_reset_probe,
++	.driver = {
++		.name		= KBUILD_MODNAME,
++		.of_match_table	= imx8ulp_sim_reset_dt_ids,
++	},
++};
++module_platform_driver(imx8ulp_sim_reset_driver);
++
++MODULE_AUTHOR("NXP Semiconductor");
++MODULE_DESCRIPTION("NXP i.MX8ulp System Integretion Module reset driver");
++MODULE_LICENSE("GPL v2");
+-- 
+2.25.1
+

@@ -1,0 +1,4139 @@
+From 2e2966f2d1a13de2f08d4affab70e33f86a43ee2 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 11:31:46 +0800
+Subject: [PATCH 19/24] add ethosu npu driver
+
+---
+ drivers/staging/Kconfig                       |   2 +
+ drivers/staging/Makefile                      |   1 +
+ drivers/staging/ethosu/Kconfig                |  24 +
+ drivers/staging/ethosu/Makefile               |  31 +
+ drivers/staging/ethosu/ethosu_buffer.c        | 319 +++++++++++
+ drivers/staging/ethosu/ethosu_buffer.h        | 106 ++++
+ .../staging/ethosu/ethosu_cancel_inference.c  | 185 ++++++
+ .../staging/ethosu/ethosu_cancel_inference.h  |  55 ++
+ drivers/staging/ethosu/ethosu_capabilities.c  | 157 ++++++
+ drivers/staging/ethosu/ethosu_capabilities.h  |  47 ++
+ .../staging/ethosu/ethosu_core_interface.h    | 276 +++++++++
+ drivers/staging/ethosu/ethosu_device.c        | 404 +++++++++++++
+ drivers/staging/ethosu/ethosu_device.h        |  81 +++
+ drivers/staging/ethosu/ethosu_driver.c        | 201 +++++++
+ drivers/staging/ethosu/ethosu_inference.c     | 529 ++++++++++++++++++
+ drivers/staging/ethosu/ethosu_inference.h     | 125 +++++
+ drivers/staging/ethosu/ethosu_network.c       | 229 ++++++++
+ drivers/staging/ethosu/ethosu_network.h       |  84 +++
+ drivers/staging/ethosu/ethosu_network_info.c  | 184 ++++++
+ drivers/staging/ethosu/ethosu_network_info.h  |  56 ++
+ drivers/staging/ethosu/ethosu_rpmsg.c         | 406 ++++++++++++++
+ drivers/staging/ethosu/ethosu_rpmsg.h         | 154 +++++
+ drivers/staging/ethosu/uapi/ethosu.h          | 285 ++++++++++
+ 23 files changed, 3941 insertions(+)
+ create mode 100644 drivers/staging/ethosu/Kconfig
+ create mode 100644 drivers/staging/ethosu/Makefile
+ create mode 100644 drivers/staging/ethosu/ethosu_buffer.c
+ create mode 100644 drivers/staging/ethosu/ethosu_buffer.h
+ create mode 100644 drivers/staging/ethosu/ethosu_cancel_inference.c
+ create mode 100644 drivers/staging/ethosu/ethosu_cancel_inference.h
+ create mode 100644 drivers/staging/ethosu/ethosu_capabilities.c
+ create mode 100644 drivers/staging/ethosu/ethosu_capabilities.h
+ create mode 100644 drivers/staging/ethosu/ethosu_core_interface.h
+ create mode 100644 drivers/staging/ethosu/ethosu_device.c
+ create mode 100644 drivers/staging/ethosu/ethosu_device.h
+ create mode 100644 drivers/staging/ethosu/ethosu_driver.c
+ create mode 100644 drivers/staging/ethosu/ethosu_inference.c
+ create mode 100644 drivers/staging/ethosu/ethosu_inference.h
+ create mode 100644 drivers/staging/ethosu/ethosu_network.c
+ create mode 100644 drivers/staging/ethosu/ethosu_network.h
+ create mode 100644 drivers/staging/ethosu/ethosu_network_info.c
+ create mode 100644 drivers/staging/ethosu/ethosu_network_info.h
+ create mode 100644 drivers/staging/ethosu/ethosu_rpmsg.c
+ create mode 100644 drivers/staging/ethosu/ethosu_rpmsg.h
+ create mode 100644 drivers/staging/ethosu/uapi/ethosu.h
+
+diff --git a/drivers/staging/Kconfig b/drivers/staging/Kconfig
+index e03627ad4..f5b312301 100644
+--- a/drivers/staging/Kconfig
++++ b/drivers/staging/Kconfig
+@@ -102,4 +102,6 @@ source "drivers/staging/qlge/Kconfig"
+ 
+ source "drivers/staging/wfx/Kconfig"
+ 
++source "drivers/staging/ethosu/Kconfig"
++
+ endif # STAGING
+diff --git a/drivers/staging/Makefile b/drivers/staging/Makefile
+index c7f8d8d8d..aa587033a 100644
+--- a/drivers/staging/Makefile
++++ b/drivers/staging/Makefile
+@@ -41,3 +41,4 @@ obj-$(CONFIG_XIL_AXIS_FIFO)	+= axis-fifo/
+ obj-$(CONFIG_FIELDBUS_DEV)     += fieldbus/
+ obj-$(CONFIG_QLGE)		+= qlge/
+ obj-$(CONFIG_WFX)		+= wfx/
++obj-$(CONFIG_ETHOSU)		+= ethosu/
+diff --git a/drivers/staging/ethosu/Kconfig b/drivers/staging/ethosu/Kconfig
+new file mode 100644
+index 000000000..4d3b1b86a
+--- /dev/null
++++ b/drivers/staging/ethosu/Kconfig
+@@ -0,0 +1,24 @@
++#
++# (C) COPYRIGHT 2020,2022 ARM Limited.
++#
++# This program is free software and is provided to you under the terms of the
++# GNU General Public License version 2 as published by the Free Software
++# Foundation, and any use by you of this program is subject to the terms
++# of such GNU licence.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, you can access it online at
++# http://www.gnu.org/licenses/gpl-2.0.html.
++#
++# SPDX-License-Identifier: GPL-2.0-only
++#
++
++config ETHOSU
++    tristate "Arm Ethos-U NPU support"
++    help
++      Arm Ethos-U NPU driver.
+diff --git a/drivers/staging/ethosu/Makefile b/drivers/staging/ethosu/Makefile
+new file mode 100644
+index 000000000..88a352690
+--- /dev/null
++++ b/drivers/staging/ethosu/Makefile
+@@ -0,0 +1,31 @@
++#
++# Copyright (c) 2020,2022 Arm Limited.
++#
++# This program is free software and is provided to you under the terms of the
++# GNU General Public License version 2 as published by the Free Software
++# Foundation, and any use by you of this program is subject to the terms
++# of such GNU licence.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, you can access it online at
++# http://www.gnu.org/licenses/gpl-2.0.html.
++#
++# SPDX-License-Identifier: GPL-2.0-only
++#
++
++obj-$(CONFIG_ETHOSU) = ethosu.o
++
++ethosu-objs := ethosu_driver.o \
++               ethosu_buffer.o \
++               ethosu_device.o \
++               ethosu_inference.o \
++               ethosu_rpmsg.o \
++               ethosu_network.o \
++               ethosu_network_info.o \
++               ethosu_capabilities.o \
++               ethosu_cancel_inference.o
+diff --git a/drivers/staging/ethosu/ethosu_buffer.c b/drivers/staging/ethosu/ethosu_buffer.c
+new file mode 100644
+index 000000000..d71db348a
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_buffer.c
+@@ -0,0 +1,319 @@
++/*
++ * Copyright (c) 2020-2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_buffer.h"
++
++#include "ethosu_device.h"
++#include "uapi/ethosu.h"
++
++#include <linux/anon_inodes.h>
++#include <linux/dma-mapping.h>
++#include <linux/of_address.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++/****************************************************************************
++ * Variables
++ ****************************************************************************/
++
++static int ethosu_buffer_release(struct inode *inode,
++				 struct file *file);
++
++static int ethosu_buffer_mmap(struct file *file,
++			      struct vm_area_struct *vma);
++
++static long ethosu_buffer_ioctl(struct file *file,
++				unsigned int cmd,
++				unsigned long arg);
++
++static const struct file_operations ethosu_buffer_fops = {
++	.release        = &ethosu_buffer_release,
++	.mmap           = &ethosu_buffer_mmap,
++	.unlocked_ioctl = &ethosu_buffer_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl   = &ethosu_buffer_ioctl,
++#endif
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/*
++ * The 'dma-ranges' device tree property for shared dma memory does not seem
++ * to be fully supported for coherent memory. Therefor we apply the DMA range
++ * offset ourselves.
++ */
++static dma_addr_t ethosu_buffer_dma_ranges(struct device *dev,
++					   dma_addr_t dma_addr,
++					   size_t dma_buf_size)
++{
++	struct device_node *node = dev->of_node;
++	const __be32 *ranges;
++	int len;
++	int naddr;
++	int nsize;
++	int inc;
++	int i;
++
++	if (!node)
++		return dma_addr;
++
++	/* Get the #address-cells and #size-cells properties */
++	naddr = of_n_addr_cells(node);
++	nsize = of_n_size_cells(node);
++
++	/* Read the 'dma-ranges' property */
++	ranges = of_get_property(node, "dma-ranges", &len);
++	if (!ranges || len <= 0)
++		return dma_addr;
++
++	dev_dbg(dev, "ranges=%p, len=%d, naddr=%d, nsize=%d\n",
++		ranges, len, naddr, nsize);
++
++	len /= sizeof(*ranges);
++	inc = naddr + naddr + nsize;
++
++	for (i = 0; (i + inc) <= len; i += inc) {
++		dma_addr_t daddr;
++		dma_addr_t paddr;
++		dma_addr_t size;
++
++		daddr = of_read_number(&ranges[i], naddr);
++		paddr = of_read_number(&ranges[i + naddr], naddr);
++		size = of_read_number(&ranges[i + naddr + naddr], nsize);
++
++		dev_dbg(dev, "daddr=0x%llx, paddr=0x%llx, size=0x%llx\n",
++			daddr, paddr, size);
++
++		if (dma_addr >= paddr &&
++		    (dma_addr + dma_buf_size) < (paddr + size))
++			return dma_addr + daddr - paddr;
++	}
++
++	return dma_addr;
++}
++
++static bool ethosu_buffer_verify(struct file *file)
++{
++	return file->f_op == &ethosu_buffer_fops;
++}
++
++static void ethosu_buffer_destroy(struct kref *kref)
++{
++	struct ethosu_buffer *buf =
++		container_of(kref, struct ethosu_buffer, kref);
++
++	dev_dbg(buf->edev->dev, "Buffer destroy. buf=0x%pK\n", buf);
++
++	dma_free_coherent(buf->edev->dev, buf->capacity, buf->cpu_addr,
++			  buf->dma_addr_orig);
++	devm_kfree(buf->edev->dev, buf);
++}
++
++static int ethosu_buffer_release(struct inode *inode,
++				 struct file *file)
++{
++	struct ethosu_buffer *buf = file->private_data;
++
++	dev_dbg(buf->edev->dev, "Buffer release. file=0x%pK, buf=0x%pK\n",
++		file, buf);
++
++	ethosu_buffer_put(buf);
++
++	return 0;
++}
++
++static int ethosu_buffer_mmap(struct file *file,
++			      struct vm_area_struct *vma)
++{
++	struct ethosu_buffer *buf = file->private_data;
++	int ret;
++
++	dev_dbg(buf->edev->dev, "Buffer mmap. file=0x%pK, buf=0x%pK\n",
++		file, buf);
++
++	ret = dma_mmap_coherent(buf->edev->dev, vma, buf->cpu_addr,
++				buf->dma_addr_orig,
++				buf->capacity);
++
++	return ret;
++}
++
++static long ethosu_buffer_ioctl(struct file *file,
++				unsigned int cmd,
++				unsigned long arg)
++{
++	struct ethosu_buffer *buf = file->private_data;
++	void __user *udata = (void __user *)arg;
++	int ret = -EINVAL;
++
++	ret = mutex_lock_interruptible(&buf->edev->mutex);
++	if (ret)
++		return ret;
++
++	dev_dbg(buf->edev->dev,
++		"Buffer ioctl. file=0x%pK, buf=0x%pK, cmd=0x%x, arg=%lu\n",
++		file, buf, cmd, arg);
++
++	switch (cmd) {
++	case ETHOSU_IOCTL_BUFFER_SET: {
++		struct ethosu_uapi_buffer uapi;
++
++		if (copy_from_user(&uapi, udata, sizeof(uapi)))
++			break;
++
++		dev_dbg(buf->edev->dev,
++			"Buffer ioctl: Buffer set. size=%u, offset=%u\n",
++			uapi.size, uapi.offset);
++
++		ret = ethosu_buffer_resize(buf, uapi.size, uapi.offset);
++		break;
++	}
++	case ETHOSU_IOCTL_BUFFER_GET: {
++		struct ethosu_uapi_buffer uapi;
++
++		uapi.size = buf->size;
++		uapi.offset = buf->offset;
++
++		dev_dbg(buf->edev->dev,
++			"Buffer ioctl: Buffer get. size=%u, offset=%u\n",
++			uapi.size, uapi.offset);
++
++		if (copy_to_user(udata, &uapi, sizeof(uapi)))
++			break;
++
++		ret = 0;
++		break;
++	}
++	default: {
++		dev_err(buf->edev->dev, "Invalid ioctl. cmd=%u, arg=%lu",
++			cmd, arg);
++		break;
++	}
++	}
++
++	mutex_unlock(&buf->edev->mutex);
++
++	return ret;
++}
++
++int ethosu_buffer_create(struct ethosu_device *edev,
++			 size_t capacity)
++{
++	struct ethosu_buffer *buf;
++	int ret = -ENOMEM;
++
++	if (!capacity)
++		return -EINVAL;
++
++	buf = devm_kzalloc(edev->dev, sizeof(*buf), GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	buf->edev = edev;
++	buf->capacity = capacity;
++	buf->offset = 0;
++	buf->size = 0;
++	kref_init(&buf->kref);
++
++	buf->cpu_addr = dma_alloc_coherent(buf->edev->dev, capacity,
++					   &buf->dma_addr_orig, GFP_KERNEL);
++	if (!buf->cpu_addr)
++		goto free_buf;
++
++	buf->dma_addr = ethosu_buffer_dma_ranges(buf->edev->dev,
++						 buf->dma_addr_orig,
++						 buf->capacity);
++
++	ret = anon_inode_getfd("ethosu-buffer", &ethosu_buffer_fops, buf,
++			       O_RDWR | O_CLOEXEC);
++	if (ret < 0)
++		goto free_dma;
++
++	buf->file = fget(ret);
++	fput(buf->file);
++
++	dev_dbg(buf->edev->dev,
++		"Buffer create. file=0x%pK, fd=%d, buf=0x%pK, capacity=%zu, cpu_addr=0x%pK, dma_addr=0x%llx, dma_addr_orig=0x%llx, phys_addr=0x%llx\n",
++		buf->file, ret, buf, capacity, buf->cpu_addr, buf->dma_addr,
++		buf->dma_addr_orig, virt_to_phys(buf->cpu_addr));
++
++	return ret;
++
++free_dma:
++	dma_free_coherent(buf->edev->dev, buf->capacity, buf->cpu_addr,
++			  buf->dma_addr_orig);
++
++free_buf:
++	devm_kfree(buf->edev->dev, buf);
++
++	return ret;
++}
++
++struct ethosu_buffer *ethosu_buffer_get_from_fd(int fd)
++{
++	struct ethosu_buffer *buf;
++	struct file *file;
++
++	file = fget(fd);
++	if (!file)
++		return ERR_PTR(-EINVAL);
++
++	if (!ethosu_buffer_verify(file)) {
++		fput(file);
++
++		return ERR_PTR(-EINVAL);
++	}
++
++	buf = file->private_data;
++	ethosu_buffer_get(buf);
++	fput(file);
++
++	return buf;
++}
++
++void ethosu_buffer_get(struct ethosu_buffer *buf)
++{
++	kref_get(&buf->kref);
++}
++
++void ethosu_buffer_put(struct ethosu_buffer *buf)
++{
++	kref_put(&buf->kref, ethosu_buffer_destroy);
++}
++
++int ethosu_buffer_resize(struct ethosu_buffer *buf,
++			 size_t size,
++			 size_t offset)
++{
++	if ((size + offset) > buf->capacity)
++		return -EINVAL;
++
++	buf->size = size;
++	buf->offset = offset;
++
++	return 0;
++}
+diff --git a/drivers/staging/ethosu/ethosu_buffer.h b/drivers/staging/ethosu/ethosu_buffer.h
+new file mode 100644
+index 000000000..7a21fcb36
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_buffer.h
+@@ -0,0 +1,106 @@
++/*
++ * Copyright (c) 2020,2022 ARM Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef ETHOSU_BUFFER_H
++#define ETHOSU_BUFFER_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include <linux/kref.h>
++#include <linux/types.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_device;
++struct device;
++
++/**
++ * struct ethosu_buffer - Buffer
++ * @dev:		Device
++ * @file:		File
++ * @kref:		Reference counting
++ * @capacity:		Maximum capacity of the buffer
++ * @offset:		Offset to first byte of buffer
++ * @size:		Size of the data in the buffer
++ * @cpu_addr:		Kernel mapped address
++ * @dma_addr:		DMA address
++ * @dma_addr_orig:	Original DMA address before range mapping
++ *
++ * 'offset + size' must not be larger than 'capacity'.
++ */
++struct ethosu_buffer {
++	struct ethosu_device *edev;
++	struct file          *file;
++	struct kref          kref;
++	size_t               capacity;
++	size_t               offset;
++	size_t               size;
++	void                 *cpu_addr;
++	dma_addr_t           dma_addr;
++	dma_addr_t           dma_addr_orig;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_buffer_create() - Create buffer
++ *
++ * This function must be called in the context of a user space process.
++ *
++ * Return: fd on success, else error code.
++ */
++int ethosu_buffer_create(struct ethosu_device *edev,
++			 size_t capacity);
++
++/**
++ * ethosu_buffer_get_from_fd() - Get buffer handle from fd
++ *
++ * This function must be called from a user space context.
++ *
++ * Return: Pointer on success, else ERR_PTR.
++ */
++struct ethosu_buffer *ethosu_buffer_get_from_fd(int fd);
++
++/**
++ * ethosu_buffer_get() - Put buffer
++ */
++void ethosu_buffer_get(struct ethosu_buffer *buf);
++
++/**
++ * ethosu_buffer_put() - Put buffer
++ */
++void ethosu_buffer_put(struct ethosu_buffer *buf);
++
++/**
++ * ethosu_buffer_resize() - Resize and validate buffer
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_buffer_resize(struct ethosu_buffer *buf,
++			 size_t size,
++			 size_t offset);
++
++#endif /* ETHOSU_BUFFER_H */
+diff --git a/drivers/staging/ethosu/ethosu_cancel_inference.c b/drivers/staging/ethosu/ethosu_cancel_inference.c
+new file mode 100644
+index 000000000..bea48afc7
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_cancel_inference.c
+@@ -0,0 +1,185 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_cancel_inference.h"
++
++#include "ethosu_core_interface.h"
++#include "ethosu_device.h"
++#include "ethosu_inference.h"
++
++#include <linux/wait.h>
++
++/****************************************************************************
++ * Defines
++ ****************************************************************************/
++
++#define CANCEL_INFERENCE_RESP_TIMEOUT_MS 2000
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++static int ethosu_cancel_inference_send(struct ethosu_cancel_inference *cancellation)
++{
++	return ethosu_rpmsg_cancel_inference(&cancellation->edev->erp,
++					     &cancellation->msg,
++					     cancellation->inf->msg.id);
++}
++
++static void ethosu_cancel_inference_fail(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_cancel_inference *cancellation =
++		container_of(msg, typeof(*cancellation), msg);
++
++	if (completion_done(&cancellation->done))
++		return;
++
++	cancellation->errno = -EFAULT;
++	cancellation->uapi->status = ETHOSU_UAPI_STATUS_ERROR;
++	complete(&cancellation->done);
++}
++
++static int ethosu_cancel_inference_complete(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_cancel_inference *cancellation =
++		container_of(msg, typeof(*cancellation), msg);
++
++	if (completion_done(&cancellation->done))
++		return 0;
++
++	cancellation->errno = 0;
++	cancellation->uapi->status =
++		cancellation->inf->done &&
++		cancellation->inf->status != ETHOSU_UAPI_STATUS_OK ?
++		ETHOSU_UAPI_STATUS_OK :
++		ETHOSU_UAPI_STATUS_ERROR;
++	complete(&cancellation->done);
++
++	return 0;
++}
++
++int ethosu_cancel_inference_request(struct ethosu_inference *inf,
++				    struct ethosu_uapi_cancel_inference_status *uapi)
++{
++	struct ethosu_cancel_inference *cancellation;
++	int ret;
++	int timeout;
++
++	if (inf->done) {
++		uapi->status = ETHOSU_UAPI_STATUS_ERROR;
++
++		return 0;
++	}
++
++	cancellation =
++		devm_kzalloc(inf->edev->dev,
++			     sizeof(struct ethosu_cancel_inference),
++			     GFP_KERNEL);
++	if (!cancellation)
++		return -ENOMEM;
++
++	/* increase ref count on the inference we are referring to */
++	ethosu_inference_get(inf);
++	/* mark inference ABORTING to avoid resending the inference message */
++	inf->status = ETHOSU_CORE_STATUS_ABORTING;
++
++	cancellation->edev = inf->edev;
++	cancellation->inf = inf;
++	cancellation->uapi = uapi;
++	init_completion(&cancellation->done);
++	cancellation->msg.fail = ethosu_cancel_inference_fail;
++
++	/* Never resend messages but always complete, since we have restart the
++	 * whole firmware and marked the inference as aborted
++	 */
++	cancellation->msg.resend = ethosu_cancel_inference_complete;
++
++	ret = ethosu_rpmsg_register(&cancellation->edev->erp,
++				    &cancellation->msg);
++	if (ret < 0)
++		goto kfree;
++
++	dev_dbg(cancellation->edev->dev,
++		"Inference cancellation create. cancel=0x%pK, msg.id=%d\n",
++		cancellation, cancellation->msg.id);
++
++	ret = ethosu_cancel_inference_send(cancellation);
++	if (ret != 0)
++		goto deregister;
++
++	/* Unlock the mutex before going to block on the condition */
++	mutex_unlock(&cancellation->edev->mutex);
++	/* wait for response to arrive back */
++	timeout = wait_for_completion_timeout(&cancellation->done,
++					      msecs_to_jiffies(CANCEL_INFERENCE_RESP_TIMEOUT_MS));
++
++	/* take back the mutex before resuming to do anything */
++	ret = mutex_lock_interruptible(&cancellation->edev->mutex);
++	if (ret != 0)
++		goto deregister;
++
++	if (timeout == 0) {
++		dev_warn(inf->edev->dev,
++			 "Msg: Cancel Inference response lost - timeout\n");
++		ret = -EIO;
++		goto deregister;
++	}
++
++	if (cancellation->errno) {
++		ret = cancellation->errno;
++		goto deregister;
++	}
++
++deregister:
++	ethosu_rpmsg_deregister(&cancellation->edev->erp,
++				&cancellation->msg);
++
++kfree:
++	dev_dbg(cancellation->edev->dev,
++		"Cancel inference destroy. cancel=0x%pK\n", cancellation);
++	/* decrease the reference on the inference we are referring to */
++	ethosu_inference_put(cancellation->inf);
++	devm_kfree(cancellation->edev->dev, cancellation);
++
++	return ret;
++}
++
++void ethosu_cancel_inference_rsp(struct ethosu_device *edev,
++				 struct ethosu_core_cancel_inference_rsp *rsp)
++{
++	int id = (int)rsp->user_arg;
++	struct ethosu_rpmsg_msg *msg;
++	struct ethosu_cancel_inference *cancellation;
++
++	msg = ethosu_rpmsg_find(&edev->erp, id);
++	if (IS_ERR(msg)) {
++		dev_warn(edev->dev,
++			 "Handle not found in cancel inference list. handle=0x%p\n",
++			 rsp);
++
++		return;
++	}
++
++	cancellation = container_of(msg, typeof(*cancellation), msg);
++
++	if (completion_done(&cancellation->done))
++		return;
++
++	cancellation->errno = 0;
++	switch (rsp->status) {
++	case ETHOSU_CORE_STATUS_OK:
++		cancellation->uapi->status = ETHOSU_UAPI_STATUS_OK;
++		break;
++	case ETHOSU_CORE_STATUS_ERROR:
++		cancellation->uapi->status = ETHOSU_UAPI_STATUS_ERROR;
++		break;
++	}
++
++	complete(&cancellation->done);
++}
+diff --git a/drivers/staging/ethosu/ethosu_cancel_inference.h b/drivers/staging/ethosu/ethosu_cancel_inference.h
+new file mode 100644
+index 000000000..940e05899
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_cancel_inference.h
+@@ -0,0 +1,55 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++#ifndef ETHOSU_CANCEL_INFERENCE_H
++#define ETHOSU_CANCEL_INFERENCE_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_rpmsg.h"
++#include "uapi/ethosu.h"
++
++#include <linux/types.h>
++#include <linux/completion.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_core_cancel_inference_rsp;
++struct ethosu_device;
++struct ethosu_uapi_cancel_inference_status;
++struct ethosu_inference;
++
++struct ethosu_cancel_inference {
++	struct ethosu_device                       *edev;
++	struct ethosu_inference                    *inf;
++	struct ethosu_uapi_cancel_inference_status *uapi;
++	struct completion                          done;
++	struct ethosu_rpmsg_msg                    msg;
++	int                                        errno;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_cancel_inference_request() - Send cancel inference request
++ *
++ * Return: 0 on success, error code otherwise.
++ */
++int ethosu_cancel_inference_request(struct ethosu_inference *inf,
++				    struct ethosu_uapi_cancel_inference_status *uapi);
++
++/**
++ * ethosu_cancel_inference_rsp() - Handle cancel inference response
++ */
++void ethosu_cancel_inference_rsp(struct ethosu_device *edev,
++				 struct ethosu_core_cancel_inference_rsp *rsp);
++
++#endif /* ETHOSU_CANCEL_INFERENCE_H */
+diff --git a/drivers/staging/ethosu/ethosu_capabilities.c b/drivers/staging/ethosu/ethosu_capabilities.c
+new file mode 100644
+index 000000000..5d7818fea
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_capabilities.c
+@@ -0,0 +1,157 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_capabilities.h"
++
++#include "ethosu_device.h"
++
++#include <linux/delay.h>
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++
++/****************************************************************************
++ * Defines
++ ****************************************************************************/
++
++#define CAPABILITIES_RESP_TIMEOUT_MS 2000
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++static inline int ethosu_capabilities_send(struct ethosu_capabilities *cap)
++{
++	return ethosu_rpmsg_capabilities_request(&cap->edev->erp,
++						 &cap->msg);
++}
++
++static void ethosu_capabilities_fail(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_capabilities *cap =
++		container_of(msg, typeof(*cap), msg);
++
++	if (completion_done(&cap->done))
++		return;
++
++	cap->errno = -EFAULT;
++	complete(&cap->done);
++}
++
++static int ethosu_capabilities_resend(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_capabilities *cap =
++		container_of(msg, typeof(*cap), msg);
++
++	/* Don't resend request if response has already been received */
++	if (completion_done(&cap->done))
++		return 0;
++
++	/* Resend request */
++	return ethosu_capabilities_send(cap);
++}
++
++void ethosu_capability_rsp(struct ethosu_device *edev,
++			   struct ethosu_core_msg_capabilities_rsp *rsp)
++{
++	int id = (int)rsp->user_arg;
++	struct ethosu_rpmsg_msg *msg;
++	struct ethosu_capabilities *cap;
++
++	msg = ethosu_rpmsg_find(&edev->erp, id);
++	if (IS_ERR(msg)) {
++		dev_warn(edev->dev,
++			 "Id for capabilities msg not found. id=%d\n",
++			 id);
++
++		return;
++	}
++
++	cap = container_of(msg, typeof(*cap), msg);
++
++	if (completion_done(&cap->done))
++		return;
++
++	cap->uapi->hw_id.version_status = rsp->version_status;
++	cap->uapi->hw_id.version_minor = rsp->version_minor;
++	cap->uapi->hw_id.version_major = rsp->version_major;
++	cap->uapi->hw_id.product_major = rsp->product_major;
++	cap->uapi->hw_id.arch_patch_rev = rsp->arch_patch_rev;
++	cap->uapi->hw_id.arch_minor_rev = rsp->arch_minor_rev;
++	cap->uapi->hw_id.arch_major_rev = rsp->arch_major_rev;
++	cap->uapi->driver_patch_rev = rsp->driver_patch_rev;
++	cap->uapi->driver_minor_rev = rsp->driver_minor_rev;
++	cap->uapi->driver_major_rev = rsp->driver_major_rev;
++	cap->uapi->hw_cfg.macs_per_cc = rsp->macs_per_cc;
++	cap->uapi->hw_cfg.cmd_stream_version = rsp->cmd_stream_version;
++	cap->uapi->hw_cfg.custom_dma = rsp->custom_dma;
++
++	cap->errno = 0;
++	complete(&cap->done);
++}
++
++int ethosu_capabilities_request(struct ethosu_device *edev,
++				struct ethosu_uapi_device_capabilities *uapi)
++{
++	struct ethosu_capabilities *cap;
++	int ret;
++	int timeout;
++
++	cap = devm_kzalloc(edev->dev, sizeof(struct ethosu_capabilities),
++			   GFP_KERNEL);
++	if (!cap)
++		return -ENOMEM;
++
++	cap->edev = edev;
++	cap->uapi = uapi;
++	init_completion(&cap->done);
++	cap->msg.fail = ethosu_capabilities_fail;
++	cap->msg.resend = ethosu_capabilities_resend;
++
++	ret = ethosu_rpmsg_register(&cap->edev->erp, &cap->msg);
++	if (ret < 0)
++		goto kfree;
++
++	dev_dbg(edev->dev, "Capabilities create. Id=%d, handle=0x%p\n",
++		cap->msg.id, cap);
++
++	ret = ethosu_capabilities_send(cap);
++	if (ret != 0)
++		goto deregister;
++
++	/* Unlock the mutex before going to block on the condition */
++	mutex_unlock(&edev->mutex);
++
++	/* wait for response to arrive back */
++	timeout = wait_for_completion_timeout(&cap->done,
++					      msecs_to_jiffies(CAPABILITIES_RESP_TIMEOUT_MS));
++
++	/* take back the mutex before resuming to do anything */
++	mutex_lock(&edev->mutex);
++
++	if (timeout == 0) {
++		dev_warn(edev->dev, "Capabilities response timeout");
++		ret = -ETIME;
++		goto deregister;
++	}
++
++	if (cap->errno) {
++		ret = cap->errno;
++		goto deregister;
++	}
++
++deregister:
++	ethosu_rpmsg_deregister(&cap->edev->erp, &cap->msg);
++
++kfree:
++	dev_dbg(cap->edev->dev, "Capabilities destroy. Id=%d, handle=0x%p\n",
++		cap->msg.id, cap);
++	devm_kfree(cap->edev->dev, cap);
++
++	return ret;
++}
+diff --git a/drivers/staging/ethosu/ethosu_capabilities.h b/drivers/staging/ethosu/ethosu_capabilities.h
+new file mode 100644
+index 000000000..87ddac3f6
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_capabilities.h
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++#ifndef ETHOSU_CAPABILITIES_H
++#define ETHOSU_CAPABILITIES_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_core_interface.h"
++#include "ethosu_rpmsg.h"
++
++#include <linux/types.h>
++#include <linux/completion.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_device;
++struct ethosu_uapi_device_capabilities;
++
++/**
++ * struct ethosu_capabilities - Capabilities internal struct
++ */
++struct ethosu_capabilities {
++	struct ethosu_device                   *edev;
++	struct completion                      done;
++	struct ethosu_uapi_device_capabilities *uapi;
++	struct ethosu_rpmsg_msg                msg;
++	int                                    errno;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++int ethosu_capabilities_request(struct ethosu_device *edev,
++				struct ethosu_uapi_device_capabilities *uapi);
++
++void ethosu_capability_rsp(struct ethosu_device *edev,
++			   struct ethosu_core_msg_capabilities_rsp *rsp);
++
++#endif
+diff --git a/drivers/staging/ethosu/ethosu_core_interface.h b/drivers/staging/ethosu/ethosu_core_interface.h
+new file mode 100644
+index 000000000..b1244ce28
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_core_interface.h
+@@ -0,0 +1,276 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++#ifndef ETHOSU_CORE_INTERFACE_H
++#define ETHOSU_CORE_INTERFACE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdint.h>
++#endif
++
++#ifdef __cplusplus
++namespace EthosU {
++#endif
++
++/** Maximum number of IFM/OFM buffers per inference */
++#define ETHOSU_CORE_BUFFER_MAX 4
++/** Maximum number of dimensions for input and output */
++#define ETHOSU_CORE_DIM_MAX 4
++
++/** Maximum number of PMU counters to be returned for inference */
++#define ETHOSU_CORE_PMU_MAX 4
++
++#define ETHOSU_CORE_MSG_MAGIC 0x41457631
++#define ETHOSU_CORE_MSG_VERSION_MAJOR 0
++#define ETHOSU_CORE_MSG_VERSION_MINOR 2
++#define ETHOSU_CORE_MSG_VERSION_PATCH 0
++
++#define ETHOSU_CORE_INFERENCE_MODEL 0
++#define ETHOSU_CORE_INFERENCE_OP    1
++
++/**
++ * enum ethosu_core_msg_type - Message types
++ *
++ * Types for the messages sent between the host and the core subsystem.
++ */
++enum ethosu_core_msg_type {
++	ETHOSU_CORE_MSG_ERR = 1,
++	ETHOSU_CORE_MSG_PING,
++	ETHOSU_CORE_MSG_PONG,
++	ETHOSU_CORE_MSG_INFERENCE_REQ,
++	ETHOSU_CORE_MSG_INFERENCE_RSP,
++	ETHOSU_CORE_MSG_VERSION_REQ,
++	ETHOSU_CORE_MSG_VERSION_RSP,
++	ETHOSU_CORE_MSG_CAPABILITIES_REQ,
++	ETHOSU_CORE_MSG_CAPABILITIES_RSP,
++	ETHOSU_CORE_MSG_NETWORK_INFO_REQ,
++	ETHOSU_CORE_MSG_NETWORK_INFO_RSP,
++	ETHOSU_CORE_MSG_CANCEL_INFERENCE_REQ,
++	ETHOSU_CORE_MSG_CANCEL_INFERENCE_RSP,
++	ETHOSU_CORE_MSG_POWER_REQ,
++	ETHOSU_CORE_MSG_POWER_RSP,
++	ETHOSU_CORE_MSG_MAX
++};
++
++/**
++ * struct ethosu_core_msg - Message header
++ */
++struct ethosu_core_msg {
++	uint32_t magic;
++	uint32_t type;
++	uint32_t length;
++};
++
++/**
++ * struct ethosu_core_queue_header - Message queue header
++ */
++struct ethosu_core_queue_header {
++	uint32_t size;
++	uint32_t read;
++	uint32_t write;
++};
++
++/**
++ * struct ethosu_core_queue - Message queue
++ *
++ * Dynamically sized message queue.
++ */
++struct ethosu_core_queue {
++	struct ethosu_core_queue_header header;
++	uint8_t                         data[];
++};
++
++/**
++ * enum ethosu_core_status - Status
++ */
++enum ethosu_core_status {
++	ETHOSU_CORE_STATUS_OK,
++	ETHOSU_CORE_STATUS_ERROR,
++	ETHOSU_CORE_STATUS_RUNNING,
++	ETHOSU_CORE_STATUS_REJECTED,
++	ETHOSU_CORE_STATUS_ABORTED,
++	ETHOSU_CORE_STATUS_ABORTING,
++};
++
++/**
++ * struct ethosu_core_buffer - Buffer descriptor
++ *
++ * Pointer and size to a buffer within the Ethos-U
++ * address space.
++ */
++struct ethosu_core_buffer {
++	uint32_t ptr;
++	uint32_t size;
++};
++
++/**
++ * enum ethosu_core_network_type - Network buffer type
++ */
++enum ethosu_core_network_type {
++	ETHOSU_CORE_NETWORK_BUFFER = 1,
++	ETHOSU_CORE_NETWORK_INDEX
++};
++
++/**
++ * struct ethosu_core_network_buffer - Network buffer
++ */
++struct ethosu_core_network_buffer {
++	u32 type;
++	union {
++		struct ethosu_core_buffer buffer;
++		u32                       index;
++	};
++};
++
++/**
++ * struct ethosu_core_inference_req - Inference request
++ */
++struct ethosu_core_inference_req {
++	uint64_t                  user_arg;
++	uint32_t                  ifm_count;
++	struct ethosu_core_buffer ifm[ETHOSU_CORE_BUFFER_MAX];
++	uint32_t                  ofm_count;
++	struct ethosu_core_buffer ofm[ETHOSU_CORE_BUFFER_MAX];
++	struct ethosu_core_network_buffer network;
++	uint8_t                   pmu_event_config[ETHOSU_CORE_PMU_MAX];
++	uint32_t                  pmu_cycle_counter_enable;
++	uint32_t                  inference_type;
++};
++
++/**
++ * struct ethosu_core_inference_rsp - Inference response
++ */
++struct ethosu_core_inference_rsp {
++	uint64_t user_arg;
++	uint32_t ofm_count;
++	uint32_t ofm_size[ETHOSU_CORE_BUFFER_MAX];
++	uint32_t status;
++	uint8_t  pmu_event_config[ETHOSU_CORE_PMU_MAX];
++	uint32_t pmu_event_count[ETHOSU_CORE_PMU_MAX];
++	uint32_t pmu_cycle_counter_enable;
++	uint64_t pmu_cycle_counter_count;
++};
++
++/**
++ * struct ethosu_core_network_info_req - Network information request
++ */
++struct ethosu_core_network_info_req {
++	u64                               user_arg;
++	struct ethosu_core_network_buffer network;
++};
++
++/**
++ * struct ethosu_core_network_info_rsp - Network information response
++ */
++struct ethosu_core_network_info_rsp {
++	u64      user_arg;
++	char     desc[32];
++	u32      is_vela;
++	u32      ifm_count;
++	u32      ifm_size[ETHOSU_CORE_BUFFER_MAX];
++	u32      ifm_types[ETHOSU_CORE_BUFFER_MAX];
++	u32      ifm_offset[ETHOSU_CORE_BUFFER_MAX];
++	u32      ifm_dims[ETHOSU_CORE_BUFFER_MAX];
++	u32      ifm_shapes[ETHOSU_CORE_BUFFER_MAX][ETHOSU_CORE_DIM_MAX];
++	u32      ofm_count;
++	u32      ofm_size[ETHOSU_CORE_BUFFER_MAX];
++	u32      ofm_types[ETHOSU_CORE_BUFFER_MAX];
++	u32      ofm_offset[ETHOSU_CORE_BUFFER_MAX];
++	u32      ofm_dims[ETHOSU_CORE_BUFFER_MAX];
++	u32      ofm_shapes[ETHOSU_CORE_BUFFER_MAX][ETHOSU_CORE_DIM_MAX];
++	u32      status;
++};
++
++/**
++ * struct ethosu_core_msg_version - Message protocol version
++ */
++struct ethosu_core_msg_version {
++	uint8_t major;
++	uint8_t minor;
++	uint8_t patch;
++	uint8_t _reserved;
++};
++
++/**
++ * struct ethosu_core_capabilities_req - Message capabilities request
++ */
++struct ethosu_core_capabilities_req {
++	uint64_t user_arg;
++};
++
++/**
++ * struct ethosu_core_capabilities_rsp - Message capabilities response
++ */
++struct ethosu_core_msg_capabilities_rsp {
++	uint64_t user_arg;
++	uint32_t version_status;
++	uint32_t version_minor;
++	uint32_t version_major;
++	uint32_t product_major;
++	uint32_t arch_patch_rev;
++	uint32_t arch_minor_rev;
++	uint32_t arch_major_rev;
++	uint32_t driver_patch_rev;
++	uint32_t driver_minor_rev;
++	uint32_t driver_major_rev;
++	uint32_t macs_per_cc;
++	uint32_t cmd_stream_version;
++	uint32_t custom_dma;
++};
++
++/**
++ * struct ethosu_core_cancel_inference_req - Message cancel inference request
++ */
++struct ethosu_core_cancel_inference_req {
++	u64 user_arg;
++	u64 inference_handle;
++};
++
++/**
++ * struct ethosu_core_cancel_inference_rsp - Message cancel inference response
++ */
++struct ethosu_core_cancel_inference_rsp {
++	u64 user_arg;
++	u32 status;
++};
++
++enum ethosu_core_power_req_type {
++	ETHOSU_CORE_POWER_REQ_SUSPEND = 0,
++	ETHOSU_CORE_POWER_REQ_RESUME
++};
++
++/**
++ * struct ethosu_core_power_req - Message power request
++ */
++struct ethosu_core_power_req {
++	enum ethosu_core_power_req_type type;
++};
++
++/**
++ * enum ethosu_core_msg_err_type - Error types
++ */
++enum ethosu_core_msg_err_type {
++	ETHOSU_CORE_MSG_ERR_GENERIC = 0,
++	ETHOSU_CORE_MSG_ERR_UNSUPPORTED_TYPE,
++	ETHOSU_CORE_MSG_ERR_INVALID_PAYLOAD,
++	ETHOSU_CORE_MSG_ERR_INVALID_SIZE,
++	ETHOSU_CORE_MSG_ERR_INVALID_MAGIC,
++	ETHOSU_CORE_MSG_ERR_MAX
++};
++
++/**
++ * struct ethosu_core_msg_err - Error message struct
++ */
++struct ethosu_core_msg_err {
++	uint32_t type;     /* optional use of extra error code */
++	char     msg[128];
++};
++#ifdef __cplusplus
++} /*namespace EthosU */
++#endif
++
++#endif
+diff --git a/drivers/staging/ethosu/ethosu_device.c b/drivers/staging/ethosu/ethosu_device.c
+new file mode 100644
+index 000000000..b0be4bcba
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_device.c
+@@ -0,0 +1,404 @@
++/*
++ * Copyright (c) 2020-2022 Arm Limited.
++ * Copyright 2020-2022 NXP
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_device.h"
++
++#include "ethosu_buffer.h"
++#include "ethosu_core_interface.h"
++#include "ethosu_capabilities.h"
++#include "ethosu_inference.h"
++#include "ethosu_network.h"
++#include "ethosu_network_info.h"
++#include "uapi/ethosu.h"
++
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++#include <linux/fs.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/remoteproc.h>
++#include <linux/uaccess.h>
++#include <linux/slab.h>
++
++/****************************************************************************
++ * Defines
++ ****************************************************************************/
++
++#define DMA_ADDR_BITS 32 /* Number of address bits */
++
++#define ETHOSU_FIRMWARE_NAME "ethosu_firmware"
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/* Incoming messages */
++static int ethosu_handle_msg(struct ethosu_device *edev, void *data)
++{
++	int ret = 0;
++	struct ethosu_core_msg *header = (struct ethosu_core_msg *)data;
++	struct ethosu_core_msg_err *error =
++			(struct ethosu_core_msg_err *)
++			((char *)data + sizeof(struct ethosu_core_msg));
++	struct ethosu_core_inference_rsp *rsp =
++			(struct ethosu_core_inference_rsp *)
++			((char *)data + sizeof(struct ethosu_core_msg));
++	struct ethosu_core_msg_version *version =
++			(struct ethosu_core_msg_version *)
++			((char *)data + sizeof(struct ethosu_core_msg));
++	struct ethosu_core_msg_capabilities_rsp *capabilities =
++			(struct ethosu_core_msg_capabilities_rsp *)
++			((char *)data + sizeof(struct ethosu_core_msg));
++	struct ethosu_core_network_info_rsp *network_info =
++			(struct ethosu_core_network_info_rsp *)
++			((char *)data + sizeof(struct ethosu_core_msg));
++
++	switch (header->type) {
++	case ETHOSU_CORE_MSG_ERR:
++		if (header->length != sizeof(struct ethosu_core_msg_err)) {
++			dev_warn(edev->dev,
++				 "Msg: Error message of incorrect size. size=%u, expected=%zu\n", header->length,
++				 sizeof(struct ethosu_core_msg_err));
++			ret = -EBADMSG;
++			break;
++		}
++
++		error->msg[sizeof(error->msg) - 1] = '\0';
++		dev_warn(edev->dev, "Msg: Error. type=%u, msg=\"%s\"\n",
++			 error->type, error->msg);
++		ret = -EBADMSG;
++		break;
++	case ETHOSU_CORE_MSG_PING:
++		dev_dbg(edev->dev, "Msg: Ping\n");
++		ret = ethosu_rpmsg_pong(&edev->erp);
++		break;
++	case ETHOSU_CORE_MSG_PONG:
++		dev_dbg(edev->dev, "Msg: Pong\n");
++		break;
++	case ETHOSU_CORE_MSG_POWER_RSP:
++		dev_dbg(edev->dev, "Msg: Power response\n");
++		break;
++	case ETHOSU_CORE_MSG_INFERENCE_RSP:
++		if (header->length != sizeof(struct ethosu_core_inference_rsp)) {
++			dev_warn(edev->dev,
++				 "Msg: Inference response of incorrect size. size=%u, expected=%zu\n", header->length,
++				 sizeof(struct ethosu_core_inference_rsp));
++			ret = -EBADMSG;
++			break;
++		}
++
++		dev_dbg(edev->dev,
++			"Msg: Inference response. user_arg=0x%llx, ofm_count=%u, status=%u\n",
++			rsp->user_arg, rsp->ofm_count,
++			rsp->status);
++		ethosu_inference_rsp(edev, rsp);
++		break;
++	case ETHOSU_CORE_MSG_VERSION_RSP:
++		if (header->length != sizeof(struct ethosu_core_msg_version)) {
++			dev_warn(edev->dev,
++				 "Msg: Version response of incorrect size. size=%u, expected=%zu\n", header->length,
++				 sizeof(struct ethosu_core_msg_version));
++			ret = -EBADMSG;
++			break;
++		}
++
++		dev_dbg(edev->dev, "Msg: Version response v%u.%u.%u\n",
++			version->major, version->minor,
++			version->patch);
++
++		/* Check major and minor version match, else return error */
++		if (version->major != ETHOSU_CORE_MSG_VERSION_MAJOR ||
++		    version->minor != ETHOSU_CORE_MSG_VERSION_MINOR) {
++			dev_warn(edev->dev, "Msg: Version mismatch detected! ");
++			dev_warn(edev->dev, "Local version: v%u.%u.%u\n",
++				 ETHOSU_CORE_MSG_VERSION_MAJOR,
++				 ETHOSU_CORE_MSG_VERSION_MINOR,
++				 ETHOSU_CORE_MSG_VERSION_PATCH);
++		}
++
++		break;
++	case ETHOSU_CORE_MSG_CAPABILITIES_RSP:
++		if (header->length != sizeof(struct ethosu_core_msg_capabilities_rsp)) {
++			dev_warn(edev->dev,
++				 "Msg: Capabilities response of incorrect size. size=%u, expected=%zu\n", header->length,
++				 sizeof(struct ethosu_core_msg_capabilities_rsp));
++			ret = -EBADMSG;
++			break;
++		}
++
++		dev_dbg(edev->dev,
++			"Msg: Capabilities response ua%llx vs%hhu v%hhu.%hhu p%hhu av%hhu.%hhu.%hhu dv%hhu.%hhu.%hhu mcc%hhu csv%hhu cd%hhu\n",
++			capabilities->user_arg,
++			capabilities->version_status,
++			capabilities->version_major,
++			capabilities->version_minor,
++			capabilities->product_major,
++			capabilities->arch_major_rev,
++			capabilities->arch_minor_rev,
++			capabilities->arch_patch_rev,
++			capabilities->driver_major_rev,
++			capabilities->driver_minor_rev,
++			capabilities->driver_patch_rev,
++			capabilities->macs_per_cc,
++			capabilities->cmd_stream_version,
++			capabilities->custom_dma);
++
++		ethosu_capability_rsp(edev, capabilities);
++		break;
++	case ETHOSU_CORE_MSG_NETWORK_INFO_RSP:
++		if (header->length != sizeof(struct ethosu_core_network_info_rsp)) {
++			dev_warn(edev->dev,
++				 "Msg: Network info response of incorrect size. size=%u, expected=%zu\n",
++				 header->length, sizeof(struct ethosu_core_network_info_rsp));
++			ret = -EBADMSG;
++			break;
++		}
++
++		dev_dbg(edev->dev,
++			"Msg: Network info response. user_arg=0x%llx, status=%u",
++			network_info->user_arg,
++			network_info->status);
++
++		ethosu_network_info_rsp(edev, network_info);
++		break;
++	default:
++		/* This should not happen due to version checks */
++		dev_warn(edev->dev, "Msg: Protocol error\n");
++		ret = -EPROTO;
++		break;
++	}
++
++	return ret;
++}
++
++static int ethosu_open(struct inode *inode,
++		       struct file *file)
++{
++	struct ethosu_device *edev =
++		container_of(inode->i_cdev, struct ethosu_device, cdev);
++	phandle rproc_phandle;
++	struct rproc *rproc;
++	int ret = 0;
++
++	file->private_data = edev;
++
++	dev_dbg(edev->dev, "Device open. file=0x%pK\n", file);
++
++	if (of_property_read_u32(edev->dev->of_node, "fsl,cm33-proc",
++				 &rproc_phandle)) {
++		dev_err(edev->dev, "could not get rproc phandle\n");
++		return -ENODEV;
++	}
++
++	rproc = rproc_get_by_phandle(rproc_phandle);
++	if (!rproc) {
++		dev_err(edev->dev, "could not get rproc handle\n");
++		return -EINVAL;
++	}
++
++	ret = rproc_set_firmware(rproc, ETHOSU_FIRMWARE_NAME);
++
++	if (!ret && atomic_read(&rproc->power) == 0) {
++		init_completion(&edev->erp.rpmsg_ready);
++		ret = rproc_boot(rproc);
++		if (ret || wait_for_completion_interruptible(&edev->erp.rpmsg_ready))
++			dev_err(edev->dev, "could not boot a remote processor\n");
++	} else {
++		dev_err(edev->dev, "can't change firmware or remote processor is running\n");
++	}
++
++	edev->open = true;
++
++	return nonseekable_open(inode, file);
++}
++
++static long ethosu_ioctl(struct file *file,
++			 unsigned int cmd,
++			 unsigned long arg)
++{
++	struct ethosu_device *edev = file->private_data;
++	void __user *udata = (void __user *)arg;
++	int ret = -EINVAL;
++
++	ret = mutex_lock_interruptible(&edev->mutex);
++	if (ret)
++		return ret;
++
++	dev_dbg(edev->dev, "Device ioctl. file=0x%pK, cmd=0x%x, arg=0x%lx\n",
++		file, cmd, arg);
++
++	switch (cmd) {
++	case ETHOSU_IOCTL_VERSION_REQ:
++		dev_dbg(edev->dev, "Device ioctl: Send version request\n");
++		ret = ethosu_rpmsg_version_request(&edev->erp);
++		break;
++	case ETHOSU_IOCTL_CAPABILITIES_REQ: {
++		struct ethosu_uapi_device_capabilities uapi;
++
++		dev_dbg(edev->dev,
++			"Device ioctl: Send capabilities request\n");
++
++		ret = ethosu_capabilities_request(edev, &uapi);
++		if (ret)
++			break;
++
++		ret = copy_to_user(udata, &uapi, sizeof(uapi)) ? -EFAULT : 0;
++		break;
++	}
++	case ETHOSU_IOCTL_PING: {
++		dev_dbg(edev->dev, "Device ioctl: Send ping\n");
++		ret = ethosu_rpmsg_ping(&edev->erp);
++		break;
++	}
++	case ETHOSU_IOCTL_BUFFER_CREATE: {
++		struct ethosu_uapi_buffer_create uapi;
++
++		if (copy_from_user(&uapi, udata, sizeof(uapi)))
++			break;
++
++		dev_dbg(edev->dev,
++			"Device ioctl: Buffer create. capacity=%u\n",
++			uapi.capacity);
++
++		ret = ethosu_buffer_create(edev, uapi.capacity);
++		break;
++	}
++	case ETHOSU_IOCTL_NETWORK_CREATE: {
++		struct ethosu_uapi_network_create uapi;
++
++		if (copy_from_user(&uapi, udata, sizeof(uapi)))
++			break;
++
++		dev_dbg(edev->dev,
++			"Device ioctl: Network create. type=%u, fd/index=%u\n",
++			uapi.type, uapi.fd);
++
++		ret = ethosu_network_create(edev, &uapi);
++		break;
++	}
++	default: {
++		dev_err(edev->dev, "Invalid ioctl. cmd=%u, arg=%lu",
++			cmd, arg);
++		break;
++	}
++	}
++
++	mutex_unlock(&edev->mutex);
++
++	return ret;
++}
++
++static void ethosu_rpmsg_rx(void *user_arg, void *data)
++{
++	struct ethosu_device *edev = user_arg;
++	int ret;
++
++	mutex_lock(&edev->mutex);
++
++	do {
++		ret = ethosu_handle_msg(edev, data);
++	} while (ret != 0);
++
++	mutex_unlock(&edev->mutex);
++}
++
++int ethosu_dev_init(struct ethosu_device *edev,
++		    struct device *dev,
++		    struct class *class,
++		    dev_t devt)
++{
++	static const struct file_operations fops = {
++		.owner          = THIS_MODULE,
++		.open           = &ethosu_open,
++		.unlocked_ioctl = &ethosu_ioctl,
++#ifdef CONFIG_COMPAT
++		.compat_ioctl   = &ethosu_ioctl,
++#endif
++	};
++	struct device *sysdev;
++	int ret;
++
++	edev->dev = dev;
++	edev->class = class;
++	edev->devt = devt;
++	mutex_init(&edev->mutex);
++
++	ret = of_reserved_mem_device_init(edev->dev);
++	if (ret)
++		return ret;
++
++	dma_set_mask_and_coherent(edev->dev, DMA_BIT_MASK(DMA_ADDR_BITS));
++
++	ret = ethosu_rpmsg_init(&edev->erp, ethosu_rpmsg_rx, edev);
++	if (ret)
++		goto release_reserved_mem;
++
++	cdev_init(&edev->cdev, &fops);
++	edev->cdev.owner = THIS_MODULE;
++
++	ret = cdev_add(&edev->cdev, edev->devt, 1);
++	if (ret) {
++		dev_err(edev->dev, "Failed to add character device.\n");
++		goto deinit_rpmsg;
++	}
++
++	sysdev = device_create(edev->class, NULL, edev->devt, edev,
++			       "ethosu%d", MINOR(edev->devt));
++	if (IS_ERR(sysdev)) {
++		dev_err(edev->dev, "Failed to create device.\n");
++		ret = PTR_ERR(sysdev);
++		goto del_cdev;
++	}
++
++	dev_dbg(edev->dev,
++		"Created Arm Ethos-U device. name=%s, major=%d, minor=%d\n",
++		dev_name(sysdev), MAJOR(edev->devt), MINOR(edev->devt));
++
++	return 0;
++
++del_cdev:
++	cdev_del(&edev->cdev);
++
++deinit_rpmsg:
++	ethosu_rpmsg_deinit(&edev->erp);
++
++release_reserved_mem:
++	of_reserved_mem_device_release(edev->dev);
++
++	return ret;
++}
++
++void ethosu_dev_deinit(struct ethosu_device *edev)
++{
++	ethosu_rpmsg_deinit(&edev->erp);
++	device_destroy(edev->class, edev->cdev.dev);
++	cdev_del(&edev->cdev);
++	of_reserved_mem_device_release(edev->dev);
++}
+diff --git a/drivers/staging/ethosu/ethosu_device.h b/drivers/staging/ethosu/ethosu_device.h
+new file mode 100644
+index 000000000..d027d8d9b
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_device.h
+@@ -0,0 +1,81 @@
++/*
++ * Copyright (c) 2020-2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef ETHOSU_DEVICE_H
++#define ETHOSU_DEVICE_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "uapi/ethosu.h"
++#include "ethosu_rpmsg.h"
++
++#include <linux/device.h>
++#include <linux/cdev.h>
++#include <linux/io.h>
++#include <linux/mutex.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++/**
++ * struct ethosu_device - Device structure
++ */
++struct ethosu_device {
++	struct device         *dev;
++	struct cdev           cdev;
++	struct                class *class;
++	dev_t                 devt;
++	struct mutex          mutex;
++	struct ethosu_rpmsg   erp;
++	bool                  open;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_dev_init() - Initialize the device
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_dev_init(struct ethosu_device *edev,
++		    struct device *dev,
++		    struct class *class,
++		    dev_t devt);
++
++/**
++ * ethosu_dev_deinit() - Initialize the device
++ */
++void ethosu_dev_deinit(struct ethosu_device *edev);
++
++/**
++ * ethosu_suspend() - Suspend the device
++ */
++int ethosu_suspend(struct device *dev);
++/**
++ * ethosu_resume() - Resume the device
++ */
++int ethosu_resume(struct device *dev);
++
++#endif /* ETHOSU_DEVICE_H */
+diff --git a/drivers/staging/ethosu/ethosu_driver.c b/drivers/staging/ethosu/ethosu_driver.c
+new file mode 100644
+index 000000000..59ae79256
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_driver.c
+@@ -0,0 +1,201 @@
++/*
++ * Copyright (c) 2020-2022 Arm Limited.
++ * Copyright 2020-2022 NXP
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include <linux/bitmap.h>
++#include <linux/fs.h>
++#include <linux/module.h>
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++
++#include "ethosu_core_interface.h"
++#include "ethosu_device.h"
++
++/****************************************************************************
++ * Defines
++ ****************************************************************************/
++
++#define ETHOSU_DRIVER_VERSION "1.0"
++#define ETHOSU_DRIVER_NAME    "ethosu"
++
++#define MINOR_BASE      0 /* Minor version starts at 0 */
++#define MINOR_COUNT    64 /* Allocate minor versions */
++
++/****************************************************************************
++ * Variables
++ ****************************************************************************/
++
++static struct class *ethosu_class;
++
++static dev_t devt;
++
++static DECLARE_BITMAP(minors, MINOR_COUNT);
++
++/****************************************************************************
++ * Arm Ethos-U
++ ****************************************************************************/
++
++static int ethosu_pdev_probe(struct platform_device *pdev)
++{
++	struct ethosu_device *edev;
++	int minor;
++	int ret;
++
++	dev_dbg(&pdev->dev, "Probe\n");
++
++	minor = find_first_zero_bit(minors, MINOR_COUNT);
++	if (minor >= MINOR_COUNT) {
++		dev_err(&pdev->dev, "No more minor numbers.\n");
++
++		return -ENOMEM;
++	}
++
++	/* Allocate memory for Arm Ethos-U device */
++	edev = devm_kzalloc(&pdev->dev, sizeof(*edev), GFP_KERNEL);
++	if (!edev)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, edev);
++
++	/* Initialize device */
++	ret = ethosu_dev_init(edev, &pdev->dev, ethosu_class,
++			      MKDEV(MAJOR(devt), minor));
++	if (ret)
++		goto free_dev;
++
++	set_bit(minor, minors);
++
++	return 0;
++
++free_dev:
++	devm_kfree(&pdev->dev, edev);
++
++	return ret;
++}
++
++static int ethosu_pdev_remove(struct platform_device *pdev)
++{
++	struct ethosu_device *edev = platform_get_drvdata(pdev);
++
++	clear_bit(MINOR(edev->devt), minors);
++	ethosu_dev_deinit(edev);
++
++	return 0;
++}
++
++int ethosu_suspend(struct device *dev)
++{
++	struct ethosu_device *edev = dev->driver_data;
++	int ret = 0;
++
++	if (edev->open)
++		ret = ethosu_rpmsg_power_request(&edev->erp, ETHOSU_CORE_POWER_REQ_SUSPEND);
++
++	return ret;
++}
++
++int ethosu_resume(struct device *dev)
++{
++	struct ethosu_device *edev = dev->driver_data;
++	int ret = 0;
++
++	if (edev->open)
++		ret = ethosu_rpmsg_power_request(&edev->erp, ETHOSU_CORE_POWER_REQ_RESUME);
++
++	return ret;
++}
++
++struct dev_pm_ops ethosu_pm_ops = {
++	.suspend = ethosu_suspend,
++	.resume = ethosu_resume,
++};
++
++static const struct of_device_id ethosu_pdev_match[] = {
++	{ .compatible = "arm,ethosu" },
++	{ /* Sentinel */ },
++};
++
++MODULE_DEVICE_TABLE(of, ethosu_pdev_match);
++
++static struct platform_driver ethosu_pdev_driver = {
++	.probe                  = &ethosu_pdev_probe,
++	.remove                 = &ethosu_pdev_remove,
++	.driver                 = {
++		.name           = ETHOSU_DRIVER_NAME,
++		.owner          = THIS_MODULE,
++		.of_match_table = of_match_ptr(ethosu_pdev_match),
++		.pm		= &ethosu_pm_ops,
++	},
++};
++
++/****************************************************************************
++ * Module init and exit
++ ****************************************************************************/
++
++static int __init ethosu_init(void)
++{
++	int ret;
++
++	ethosu_class = class_create(THIS_MODULE, ETHOSU_DRIVER_NAME);
++	if (IS_ERR(ethosu_class)) {
++		printk("Failed to create class '%s'.\n", ETHOSU_DRIVER_NAME);
++
++		return PTR_ERR(ethosu_class);
++	}
++
++	ret = alloc_chrdev_region(&devt, MINOR_BASE, MINOR_COUNT,
++				  ETHOSU_DRIVER_NAME);
++	if (ret) {
++		printk("Failed to allocate chrdev region.\n");
++		goto destroy_class;
++	}
++
++	ret = platform_driver_register(&ethosu_pdev_driver);
++	if (ret) {
++		printk("Failed to register Arm Ethos-U platform driver.\n");
++		goto region_unregister;
++	}
++
++	return 0;
++
++region_unregister:
++	unregister_chrdev_region(devt, MINOR_COUNT);
++
++destroy_class:
++	class_destroy(ethosu_class);
++
++	return ret;
++}
++
++static void __exit ethosu_exit(void)
++{
++	platform_driver_unregister(&ethosu_pdev_driver);
++	unregister_chrdev_region(devt, MINOR_COUNT);
++	class_destroy(ethosu_class);
++}
++
++module_init(ethosu_init)
++module_exit(ethosu_exit)
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Arm Ltd");
++MODULE_DESCRIPTION("Arm Ethos-U NPU Driver");
++MODULE_VERSION(ETHOSU_DRIVER_VERSION);
+diff --git a/drivers/staging/ethosu/ethosu_inference.c b/drivers/staging/ethosu/ethosu_inference.c
+new file mode 100644
+index 000000000..8c0c59242
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_inference.c
+@@ -0,0 +1,529 @@
++/*
++ * Copyright (c) 2020,2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_inference.h"
++
++#include "ethosu_buffer.h"
++#include "ethosu_core_interface.h"
++#include "ethosu_device.h"
++#include "ethosu_network.h"
++#include "ethosu_cancel_inference.h"
++#include "uapi/ethosu.h"
++
++#include <linux/anon_inodes.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/poll.h>
++
++/****************************************************************************
++ * Variables
++ ****************************************************************************/
++
++static int ethosu_inference_release(struct inode *inode,
++				    struct file *file);
++
++static unsigned int ethosu_inference_poll(struct file *file,
++					  poll_table *wait);
++
++static long ethosu_inference_ioctl(struct file *file,
++				   unsigned int cmd,
++				   unsigned long arg);
++
++static const struct file_operations ethosu_inference_fops = {
++	.release        = &ethosu_inference_release,
++	.poll           = &ethosu_inference_poll,
++	.unlocked_ioctl = &ethosu_inference_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl   = &ethosu_inference_ioctl,
++#endif
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++static const char *status_to_string(const enum ethosu_uapi_status status)
++{
++	switch (status) {
++	case ETHOSU_UAPI_STATUS_OK: {
++		return "Ok";
++	}
++	case ETHOSU_UAPI_STATUS_ERROR: {
++		return "Error";
++	}
++	case ETHOSU_UAPI_STATUS_RUNNING: {
++		return "Running";
++	}
++	case ETHOSU_UAPI_STATUS_REJECTED: {
++		return "Rejected";
++	}
++	case ETHOSU_UAPI_STATUS_ABORTED: {
++		return "Aborted";
++	}
++	case ETHOSU_UAPI_STATUS_ABORTING: {
++		return "Aborting";
++	}
++	default: {
++		return "Unknown";
++	}
++	}
++}
++
++static int ethosu_inference_send(struct ethosu_inference *inf)
++{
++	int ret;
++
++	inf->status = ETHOSU_UAPI_STATUS_ERROR;
++
++	ret = ethosu_rpmsg_inference(&inf->edev->erp, &inf->msg,
++				     inf->ifm_count, inf->ifm,
++				     inf->ofm_count, inf->ofm,
++				     inf->net->buf,
++				     inf->net->index,
++				     inf->pmu_event_config,
++				     ETHOSU_PMU_EVENT_MAX,
++				     inf->pmu_cycle_counter_enable,
++				     inf->inference_type);
++	if (ret) {
++		dev_warn(inf->edev->dev,
++			 "Failed to send inference request. inf=0x%pK, ret=%d",
++			 inf, ret);
++
++		return ret;
++	}
++
++	inf->status = ETHOSU_UAPI_STATUS_RUNNING;
++
++	ethosu_inference_get(inf);
++
++	return 0;
++}
++
++static void ethosu_inference_fail(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_inference *inf =
++		container_of(msg, typeof(*inf), msg);
++	int ret;
++
++	if (inf->done)
++		return;
++
++	/* Decrement reference count if inference was pending response */
++	ret = ethosu_inference_put(inf);
++	if (ret)
++		return;
++
++	/* Set status accordingly to the inference state */
++	inf->status = inf->status == ETHOSU_UAPI_STATUS_ABORTING ?
++		      ETHOSU_UAPI_STATUS_ABORTED :
++		      ETHOSU_UAPI_STATUS_ERROR;
++	/* Mark it done and wake up the waiting process */
++	inf->done = true;
++	wake_up_interruptible(&inf->waitq);
++}
++
++static int ethosu_inference_resend(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_inference *inf =
++		container_of(msg, typeof(*inf), msg);
++	int ret;
++
++	/* Don't resend request if response has already been received */
++	if (inf->done)
++		return 0;
++
++	/* If marked as ABORTING simply fail it and return */
++	if (inf->status == ETHOSU_UAPI_STATUS_ABORTING) {
++		ethosu_inference_fail(msg);
++
++		return 0;
++	}
++
++	/* Decrement reference count for pending request */
++	ret = ethosu_inference_put(inf);
++	if (ret)
++		return 0;
++
++	/* Resend request */
++	ret = ethosu_inference_send(inf);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++static bool ethosu_inference_verify(struct file *file)
++{
++	return file->f_op == &ethosu_inference_fops;
++}
++
++static void ethosu_inference_kref_destroy(struct kref *kref)
++{
++	struct ethosu_inference *inf =
++		container_of(kref, struct ethosu_inference, kref);
++
++	dev_dbg(inf->edev->dev,
++		"Inference destroy. inf=0x%pK, status=%d, ifm_count=%u, ofm_count=%u",
++		inf, inf->status, inf->ifm_count, inf->ofm_count);
++
++	ethosu_rpmsg_deregister(&inf->edev->erp, &inf->msg);
++
++	while (inf->ifm_count-- > 0)
++		ethosu_buffer_put(inf->ifm[inf->ifm_count]);
++
++	while (inf->ofm_count-- > 0)
++		ethosu_buffer_put(inf->ofm[inf->ofm_count]);
++
++	ethosu_network_put(inf->net);
++	devm_kfree(inf->edev->dev, inf);
++}
++
++static int ethosu_inference_release(struct inode *inode,
++				    struct file *file)
++{
++	struct ethosu_inference *inf = file->private_data;
++
++	dev_dbg(inf->edev->dev,
++		"Inference release. file=0x%pK, inf=0x%pK",
++		file, inf);
++
++	ethosu_inference_put(inf);
++
++	return 0;
++}
++
++static unsigned int ethosu_inference_poll(struct file *file,
++					  poll_table *wait)
++{
++	struct ethosu_inference *inf = file->private_data;
++	int ret = 0;
++
++	poll_wait(file, &inf->waitq, wait);
++
++	if (inf->done)
++		ret |= POLLIN;
++
++	return ret;
++}
++
++static long ethosu_inference_ioctl(struct file *file,
++				   unsigned int cmd,
++				   unsigned long arg)
++{
++	struct ethosu_inference *inf = file->private_data;
++	void __user *udata = (void __user *)arg;
++	int ret;
++
++	ret = mutex_lock_interruptible(&inf->edev->mutex);
++	if (ret)
++		return ret;
++
++	dev_dbg(inf->edev->dev,
++		"Inference ioctl: file=0x%pK, inf=0x%pK, cmd=0x%x, arg=%lu",
++		file, inf, cmd, arg);
++
++	switch (cmd) {
++	case ETHOSU_IOCTL_INFERENCE_STATUS: {
++		struct ethosu_uapi_result_status uapi;
++		int i;
++
++		uapi.status = inf->status;
++
++		for (i = 0; i < ETHOSU_PMU_EVENT_MAX; i++) {
++			uapi.pmu_config.events[i] =
++				inf->pmu_event_config[i];
++			uapi.pmu_count.events[i] =
++				inf->pmu_event_count[i];
++		}
++
++		uapi.pmu_config.cycle_count = inf->pmu_cycle_counter_enable;
++		uapi.pmu_count.cycle_count = inf->pmu_cycle_counter_count;
++
++		dev_dbg(inf->edev->dev,
++			"Inference ioctl: Inference status. status=%s (%d)\n",
++			status_to_string(uapi.status), uapi.status);
++
++		ret = copy_to_user(udata, &uapi, sizeof(uapi)) ? -EFAULT : 0;
++
++		break;
++	}
++	case ETHOSU_IOCTL_INFERENCE_CANCEL: {
++		struct ethosu_uapi_cancel_inference_status uapi;
++
++		dev_dbg(inf->edev->dev,
++			"Inference ioctl: Cancel Inference. Handle=%p\n",
++			inf);
++
++		ret = ethosu_cancel_inference_request(inf, &uapi);
++		if (ret)
++			break;
++
++		ret = copy_to_user(udata, &uapi, sizeof(uapi)) ? -EFAULT : 0;
++
++		break;
++	}
++	default: {
++		dev_err(inf->edev->dev, "Invalid ioctl. cmd=%u, arg=%lu\n",
++			cmd, arg);
++		break;
++	}
++	}
++
++	mutex_unlock(&inf->edev->mutex);
++
++	return ret;
++}
++
++int ethosu_inference_create(struct ethosu_device *edev,
++			    struct ethosu_network *net,
++			    struct ethosu_uapi_inference_create *uapi)
++{
++	struct ethosu_inference *inf;
++	uint32_t i;
++	int fd;
++	int ret = -ENOMEM;
++
++	if (uapi->ifm_count > ETHOSU_FD_MAX ||
++	    uapi->ofm_count > ETHOSU_FD_MAX) {
++		dev_warn(edev->dev,
++			 "Too many IFM and/or OFM buffers for inference. ifm_count=%u, ofm_count=%u",
++			 uapi->ifm_count, uapi->ofm_count);
++
++		return -EFAULT;
++	}
++
++	inf = devm_kzalloc(edev->dev, sizeof(*inf), GFP_KERNEL);
++	if (!inf)
++		return -ENOMEM;
++
++	switch (uapi->inference_type) {
++	case ETHOSU_UAPI_INFERENCE_MODEL:
++		inf->inference_type = ETHOSU_CORE_INFERENCE_MODEL;
++		break;
++	case ETHOSU_UAPI_INFERENCE_OP:
++		inf->inference_type = ETHOSU_CORE_INFERENCE_OP;
++		break;
++	default:
++		inf->inference_type = ETHOSU_CORE_INFERENCE_MODEL;
++		break;
++	}
++
++	inf->edev = edev;
++	inf->net = net;
++	inf->done = false;
++	inf->status = ETHOSU_UAPI_STATUS_ERROR;
++	kref_init(&inf->kref);
++	init_waitqueue_head(&inf->waitq);
++	inf->msg.fail = ethosu_inference_fail;
++	inf->msg.resend = ethosu_inference_resend;
++
++	/* Add inference to pending list */
++	ret = ethosu_rpmsg_register(&edev->erp, &inf->msg);
++	if (ret < 0)
++		goto kfree;
++
++	/* Get pointer to IFM buffers */
++	for (i = 0; i < uapi->ifm_count; i++) {
++		inf->ifm[i] = ethosu_buffer_get_from_fd(uapi->ifm_fd[i]);
++		if (IS_ERR(inf->ifm[i])) {
++			ret = PTR_ERR(inf->ifm[i]);
++			goto put_ifm;
++		}
++
++		inf->ifm_count++;
++	}
++
++	/* Get pointer to OFM buffer */
++	for (i = 0; i < uapi->ofm_count; i++) {
++		inf->ofm[i] = ethosu_buffer_get_from_fd(uapi->ofm_fd[i]);
++		if (IS_ERR(inf->ofm[i])) {
++			ret = PTR_ERR(inf->ofm[i]);
++			goto put_ofm;
++		}
++
++		inf->ofm_count++;
++	}
++
++	/* Configure PMU and cycle counter */
++	dev_dbg(inf->edev->dev,
++		"Configuring events for PMU. events=[%u, %u, %u, %u]\n",
++		uapi->pmu_config.events[0], uapi->pmu_config.events[1],
++		uapi->pmu_config.events[2], uapi->pmu_config.events[3]);
++
++	/* Configure events and reset count for all events */
++	for (i = 0; i < ETHOSU_PMU_EVENT_MAX; i++) {
++		inf->pmu_event_config[i] = uapi->pmu_config.events[i];
++		inf->pmu_event_count[i] = 0;
++	}
++
++	if (uapi->pmu_config.cycle_count)
++		dev_dbg(inf->edev->dev, "Enabling cycle counter\n");
++
++	/* Configure cycle counter and reset any previous count */
++	inf->pmu_cycle_counter_enable = uapi->pmu_config.cycle_count;
++	inf->pmu_cycle_counter_count = 0;
++
++	/* Increment network reference count */
++	ethosu_network_get(net);
++
++	/* Send inference request to Arm Ethos-U subsystem */
++	ret = ethosu_inference_send(inf);
++	if (ret)
++		goto put_net;
++
++	/* Create file descriptor */
++	ret = fd = anon_inode_getfd("ethosu-inference", &ethosu_inference_fops,
++				    inf, O_RDWR | O_CLOEXEC);
++	if (ret < 0)
++		goto put_net;
++
++	/* Store pointer to file structure */
++	inf->file = fget(ret);
++	fput(inf->file);
++
++	dev_dbg(edev->dev,
++		"Inference create. file=0x%pK, fd=%d, inf=0x%p, net=0x%pK, msg.id=0x%x",
++		 inf->file, fd, inf, inf->net, inf->msg.id);
++
++	return fd;
++
++put_net:
++	ethosu_network_put(inf->net);
++
++put_ofm:
++	while (inf->ofm_count-- > 0)
++		ethosu_buffer_put(inf->ofm[inf->ofm_count]);
++
++put_ifm:
++	while (inf->ifm_count-- > 0)
++		ethosu_buffer_put(inf->ifm[inf->ifm_count]);
++
++kfree:
++	devm_kfree(edev->dev, inf);
++
++	return ret;
++}
++
++struct ethosu_inference *ethosu_inference_get_from_fd(int fd)
++{
++	struct ethosu_inference *inf;
++	struct file *file;
++
++	file = fget(fd);
++	if (!file)
++		return ERR_PTR(-EINVAL);
++
++	if (!ethosu_inference_verify(file)) {
++		fput(file);
++
++		return ERR_PTR(-EINVAL);
++	}
++
++	inf = file->private_data;
++	ethosu_inference_get(inf);
++	fput(file);
++
++	return inf;
++}
++
++void ethosu_inference_get(struct ethosu_inference *inf)
++{
++	kref_get(&inf->kref);
++}
++
++int ethosu_inference_put(struct ethosu_inference *inf)
++{
++	return kref_put(&inf->kref, &ethosu_inference_kref_destroy);
++}
++
++void ethosu_inference_rsp(struct ethosu_device *edev,
++			  struct ethosu_core_inference_rsp *rsp)
++{
++	int id = (int)rsp->user_arg;
++	struct ethosu_rpmsg_msg *msg;
++	struct ethosu_inference *inf;
++	int ret;
++	int i;
++
++	msg = ethosu_rpmsg_find(&edev->erp, id);
++	if (IS_ERR(msg)) {
++		dev_warn(edev->dev,
++			 "Id for inference msg not found. Id=%d\n",
++			 id);
++
++		return;
++	}
++
++	inf = container_of(msg, typeof(*inf), msg);
++
++	if (rsp->status == ETHOSU_CORE_STATUS_OK &&
++	    inf->ofm_count <= ETHOSU_CORE_BUFFER_MAX) {
++		uint32_t i;
++
++		inf->status = ETHOSU_UAPI_STATUS_OK;
++
++		for (i = 0; i < inf->ofm_count; i++) {
++			struct ethosu_buffer *ofm = inf->ofm[i];
++
++			ret = ethosu_buffer_resize(
++				ofm, ofm->size + rsp->ofm_size[i],
++				ofm->offset);
++			if (ret)
++				inf->status = ETHOSU_UAPI_STATUS_ERROR;
++		}
++	} else if (rsp->status == ETHOSU_CORE_STATUS_REJECTED) {
++		inf->status = ETHOSU_UAPI_STATUS_REJECTED;
++	} else if (rsp->status == ETHOSU_CORE_STATUS_ABORTED) {
++		inf->status = ETHOSU_UAPI_STATUS_ABORTED;
++	} else {
++		inf->status = ETHOSU_UAPI_STATUS_ERROR;
++	}
++
++	if (inf->status == ETHOSU_UAPI_STATUS_OK) {
++		for (i = 0; i < ETHOSU_CORE_PMU_MAX; i++) {
++			inf->pmu_event_config[i] = rsp->pmu_event_config[i];
++			inf->pmu_event_count[i] = rsp->pmu_event_count[i];
++		}
++
++		inf->pmu_cycle_counter_enable = rsp->pmu_cycle_counter_enable;
++		inf->pmu_cycle_counter_count = rsp->pmu_cycle_counter_count;
++
++		dev_dbg(edev->dev,
++			"PMU events. config=[%u, %u, %u, %u], count=[%u, %u, %u, %u]\n",
++			inf->pmu_event_config[0], inf->pmu_event_config[1],
++			inf->pmu_event_config[2], inf->pmu_event_config[3],
++			inf->pmu_event_count[0], inf->pmu_event_count[1],
++			inf->pmu_event_count[2], inf->pmu_event_count[3]);
++
++		dev_dbg(edev->dev,
++			"PMU cycle counter. enable=%u, count=%llu\n",
++			inf->pmu_cycle_counter_enable,
++			inf->pmu_cycle_counter_count);
++	}
++
++	inf->done = true;
++	wake_up_interruptible(&inf->waitq);
++
++	ethosu_inference_put(inf);
++}
+diff --git a/drivers/staging/ethosu/ethosu_inference.h b/drivers/staging/ethosu/ethosu_inference.h
+new file mode 100644
+index 000000000..311c727b2
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_inference.h
+@@ -0,0 +1,125 @@
++/*
++ * Copyright (c) 2020,2022 ARM Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef ETHOSU_INFERENCE_H
++#define ETHOSU_INFERENCE_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_rpmsg.h"
++#include "uapi/ethosu.h"
++
++#include <linux/kref.h>
++#include <linux/types.h>
++#include <linux/wait.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_buffer;
++struct ethosu_core_inference_rsp;
++struct ethosu_device;
++struct ethosu_network;
++struct ethosu_uapi_inference_create;
++struct file;
++
++/**
++ * struct ethosu_inference - Inference struct
++ * @edev:			Arm Ethos-U device
++ * @file:			File handle
++ * @kref:			Reference counter
++ * @waitq:			Wait queue
++ * @done:			Wait condition is done
++ * @ifm:			Pointer to IFM buffer
++ * @ofm:			Pointer to OFM buffer
++ * @net:			Pointer to network
++ * @status:			Inference status
++ * @pmu_event_config:		PMU event configuration
++ * @pmu_event_count:		PMU event count after inference
++ * @pmu_cycle_counter_enable:	PMU cycle counter config
++ * @pmu_cycle_counter_count:	PMU cycle counter count after inference
++ * @msg:			Rpmsg message
++ */
++struct ethosu_inference {
++	struct ethosu_device    *edev;
++	struct file             *file;
++	struct kref             kref;
++	wait_queue_head_t       waitq;
++	bool                    done;
++	uint32_t                ifm_count;
++	struct ethosu_buffer    *ifm[ETHOSU_FD_MAX];
++	uint32_t                ofm_count;
++	struct ethosu_buffer    *ofm[ETHOSU_FD_MAX];
++	struct ethosu_network   *net;
++	enum ethosu_uapi_status status;
++	uint8_t                 pmu_event_config[ETHOSU_PMU_EVENT_MAX];
++	uint32_t                pmu_event_count[ETHOSU_PMU_EVENT_MAX];
++	uint32_t                pmu_cycle_counter_enable;
++	uint64_t                pmu_cycle_counter_count;
++	uint32_t                inference_type;
++	struct ethosu_rpmsg_msg msg;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_inference_create() - Create inference
++ *
++ * This function must be called in the context of a user space process.
++ *
++ * Return: fd on success, else error code.
++ */
++int ethosu_inference_create(struct ethosu_device *edev,
++			    struct ethosu_network *net,
++			    struct ethosu_uapi_inference_create *uapi);
++
++/**
++ * ethosu_inference_get_from_fd() - Get inference handle from fd
++ *
++ * This function must be called from a user space context.
++ *
++ * Return: Pointer on success, else ERR_PTR.
++ */
++struct ethosu_inference *ethosu_inference_get_from_fd(int fd);
++
++/**
++ * ethosu_inference_get() - Get inference
++ */
++void ethosu_inference_get(struct ethosu_inference *inf);
++
++/**
++ * ethosu_inference_put() - Put inference
++ *
++ * Return: 1 if object was removed, else 0.
++ */
++int ethosu_inference_put(struct ethosu_inference *inf);
++
++/**
++ * ethosu_inference_rsp() - Handle inference response
++ */
++void ethosu_inference_rsp(struct ethosu_device *edev,
++			  struct ethosu_core_inference_rsp *rsp);
++
++#endif /* ETHOSU_INFERENCE_H */
+diff --git a/drivers/staging/ethosu/ethosu_network.c b/drivers/staging/ethosu/ethosu_network.c
+new file mode 100644
+index 000000000..e85e79073
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_network.c
+@@ -0,0 +1,229 @@
++/*
++ * Copyright (c) 2020,2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_network.h"
++
++#include "ethosu_buffer.h"
++#include "ethosu_device.h"
++#include "ethosu_inference.h"
++#include "ethosu_network_info.h"
++#include "uapi/ethosu.h"
++
++#include <linux/anon_inodes.h>
++#include <linux/file.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++/****************************************************************************
++ * Variables
++ ****************************************************************************/
++
++static int ethosu_network_release(struct inode *inode,
++				  struct file *file);
++
++static long ethosu_network_ioctl(struct file *file,
++				 unsigned int cmd,
++				 unsigned long arg);
++
++static const struct file_operations ethosu_network_fops = {
++	.release        = &ethosu_network_release,
++	.unlocked_ioctl = &ethosu_network_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl   = &ethosu_network_ioctl,
++#endif
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++static bool ethosu_network_verify(struct file *file)
++{
++	return file->f_op == &ethosu_network_fops;
++}
++
++static void ethosu_network_destroy(struct kref *kref)
++{
++	struct ethosu_network *net =
++		container_of(kref, struct ethosu_network, kref);
++
++	dev_dbg(net->edev->dev, "Network destroy. net=0x%pK\n", net);
++
++	if (net->buf)
++		ethosu_buffer_put(net->buf);
++
++	devm_kfree(net->edev->dev, net);
++}
++
++static int ethosu_network_release(struct inode *inode,
++				  struct file *file)
++{
++	struct ethosu_network *net = file->private_data;
++
++	dev_dbg(net->edev->dev, "Network release. file=0x%pK, net=0x%pK\n",
++		file, net);
++
++	ethosu_network_put(net);
++
++	return 0;
++}
++
++static long ethosu_network_ioctl(struct file *file,
++				 unsigned int cmd,
++				 unsigned long arg)
++{
++	struct ethosu_network *net = file->private_data;
++	void __user *udata = (void __user *)arg;
++	int ret = -EINVAL;
++
++	ret = mutex_lock_interruptible(&net->edev->mutex);
++	if (ret)
++		return ret;
++
++	dev_dbg(net->edev->dev,
++		"Network ioctl: file=0x%pK, net=0x%pK, cmd=0x%x, arg=0x%lx\n",
++		file, net, cmd, arg);
++
++	switch (cmd) {
++	case ETHOSU_IOCTL_NETWORK_INFO: {
++		struct ethosu_uapi_network_info uapi;
++
++		if (copy_from_user(&uapi, udata, sizeof(uapi)))
++			break;
++
++		dev_dbg(net->edev->dev,
++			 "Network ioctl: Network info. net=0x%pK\n",
++			 net);
++
++		ret = ethosu_network_info_request(net, &uapi);
++		if (ret)
++			break;
++
++		ret = copy_to_user(udata, &uapi, sizeof(uapi)) ? -EFAULT : 0;
++		break;
++	}
++	case ETHOSU_IOCTL_INFERENCE_CREATE: {
++		struct ethosu_uapi_inference_create uapi;
++
++		if (copy_from_user(&uapi, udata, sizeof(uapi)))
++			break;
++
++		dev_dbg(net->edev->dev,
++			"Network ioctl: Inference. ifm_fd=%u, ofm_fd=%u\n",
++			uapi.ifm_fd[0], uapi.ofm_fd[0]);
++
++		ret = ethosu_inference_create(net->edev, net, &uapi);
++		break;
++	}
++	default: {
++		dev_err(net->edev->dev, "Invalid ioctl. cmd=%u, arg=%lu",
++			cmd, arg);
++		break;
++	}
++	}
++
++	mutex_unlock(&net->edev->mutex);
++
++	return ret;
++}
++
++int ethosu_network_create(struct ethosu_device *edev,
++			  struct ethosu_uapi_network_create *uapi)
++{
++	struct ethosu_network *net;
++	int ret = -ENOMEM;
++
++	net = devm_kzalloc(edev->dev, sizeof(*net), GFP_KERNEL);
++	if (!net)
++		return -ENOMEM;
++
++	net->edev = edev;
++	net->buf = NULL;
++	kref_init(&net->kref);
++
++	if (uapi->type == ETHOSU_UAPI_NETWORK_BUFFER) {
++		net->buf = ethosu_buffer_get_from_fd(uapi->fd);
++		if (IS_ERR(net->buf)) {
++			ret = PTR_ERR(net->buf);
++			goto free_net;
++		}
++	} else {
++		net->index = uapi->index;
++	}
++
++	ret = anon_inode_getfd("ethosu-network", &ethosu_network_fops, net,
++			       O_RDWR | O_CLOEXEC);
++	if (ret < 0)
++		goto put_buf;
++
++	net->file = fget(ret);
++	fput(net->file);
++
++	dev_dbg(edev->dev,
++		"Network create. file=0x%pK, fd=%d, net=0x%pK, buf=0x%pK, index=%u",
++		net->file, ret, net, net->buf, net->index);
++
++	return ret;
++
++put_buf:
++	if (net->buf)
++		ethosu_buffer_put(net->buf);
++
++free_net:
++	devm_kfree(edev->dev, net);
++
++	return ret;
++}
++
++struct ethosu_network *ethosu_network_get_from_fd(int fd)
++{
++	struct ethosu_network *net;
++	struct file *file;
++
++	file = fget(fd);
++	if (!file)
++		return ERR_PTR(-EINVAL);
++
++	if (!ethosu_network_verify(file)) {
++		fput(file);
++
++		return ERR_PTR(-EINVAL);
++	}
++
++	net = file->private_data;
++	ethosu_network_get(net);
++	fput(file);
++
++	return net;
++}
++
++void ethosu_network_get(struct ethosu_network *net)
++{
++	kref_get(&net->kref);
++}
++
++int ethosu_network_put(struct ethosu_network *net)
++{
++	return kref_put(&net->kref, ethosu_network_destroy);
++}
+diff --git a/drivers/staging/ethosu/ethosu_network.h b/drivers/staging/ethosu/ethosu_network.h
+new file mode 100644
+index 000000000..8ca2dd618
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_network.h
+@@ -0,0 +1,84 @@
++/*
++ * Copyright (c) 2020,2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef ETHOSU_NETWORK_H
++#define ETHOSU_NETWORK_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include <linux/kref.h>
++#include <linux/types.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_buffer;
++struct ethosu_device;
++struct ethosu_uapi_network_create;
++struct device;
++struct file;
++
++struct ethosu_network {
++	struct ethosu_device *edev;
++	struct file          *file;
++	struct kref          kref;
++	struct ethosu_buffer *buf;
++	u32                  index;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_network_create() - Create network
++ *
++ * This function must be called in the context of a user space process.
++ *
++ * Return: fd on success, else error code.
++ */
++int ethosu_network_create(struct ethosu_device *edev,
++			  struct ethosu_uapi_network_create *uapi);
++
++/**
++ * ethosu_network_get_from_fd() - Get network handle from fd
++ *
++ * This function must be called from a user space context.
++ *
++ * Return: Pointer on success, else ERR_PTR.
++ */
++struct ethosu_network *ethosu_network_get_from_fd(int fd);
++
++/**
++ * ethosu_network_get() - Get network
++ */
++void ethosu_network_get(struct ethosu_network *net);
++
++/**
++ * ethosu_network_put() - Put network
++ *
++ * Return: 1 if object was removed, else 0.
++ */
++int ethosu_network_put(struct ethosu_network *net);
++
++#endif /* ETHOSU_NETWORK_H */
+diff --git a/drivers/staging/ethosu/ethosu_network_info.c b/drivers/staging/ethosu/ethosu_network_info.c
+new file mode 100644
+index 000000000..3b8ad9355
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_network_info.c
+@@ -0,0 +1,184 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_network_info.h"
++
++#include "ethosu_device.h"
++#include "ethosu_network.h"
++#include "ethosu_rpmsg.h"
++#include "uapi/ethosu.h"
++
++#define NETWORK_INFO_RESP_TIMEOUT_MS 30000
++
++static inline int ethosu_network_info_send(struct ethosu_network_info *info)
++{
++	/* Send network info request to firmware */
++	return ethosu_rpmsg_network_info_request(&info->edev->erp,
++						 &info->msg,
++						 info->net->buf,
++						 info->net->index);
++}
++
++static void ethosu_network_info_fail(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_network_info *info =
++		container_of(msg, typeof(*info), msg);
++
++	if (completion_done(&info->done))
++		return;
++
++	info->errno = -EFAULT;
++	complete(&info->done);
++}
++
++static int ethosu_network_info_resend(struct ethosu_rpmsg_msg *msg)
++{
++	struct ethosu_network_info *info =
++		container_of(msg, typeof(*info), msg);
++	int ret;
++
++	/* Don't resend request if response has already been received */
++	if (completion_done(&info->done))
++		return 0;
++
++	/* Resend request */
++	ret = ethosu_network_info_send(info);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++int ethosu_network_info_request(struct ethosu_network *net,
++				struct ethosu_uapi_network_info *uapi)
++{
++	struct ethosu_network_info *info;
++	int ret;
++	int timeout;
++
++	info = devm_kzalloc(net->edev->dev, sizeof(*info), GFP_KERNEL);
++	if (!info)
++		return -ENOMEM;
++
++	info->edev = net->edev;
++	info->net = net;
++	info->uapi = uapi;
++	init_completion(&info->done);
++	info->msg.fail = ethosu_network_info_fail;
++	info->msg.resend = ethosu_network_info_resend;
++
++	ret = ethosu_rpmsg_register(&info->edev->erp, &info->msg);
++	if (ret < 0)
++		goto kfree;
++
++	/* Get reference to network */
++	ethosu_network_get(info->net);
++
++	ret = ethosu_network_info_send(info);
++	if (ret)
++		goto deregister;
++
++	dev_dbg(info->edev->dev,
++		"Network info create. info=0x%pK, net=0x%pK, msg.id=0x%x\n",
++		info, info->net, info->msg.id);
++
++	/* Unlock the device mutex and wait for completion */
++	mutex_unlock(&info->edev->mutex);
++	timeout = wait_for_completion_timeout(&info->done,
++					      msecs_to_jiffies(NETWORK_INFO_RESP_TIMEOUT_MS));
++	mutex_lock(&info->edev->mutex);
++
++	if (timeout == 0) {
++		dev_warn(info->edev->dev, "Network info timed out. info=0x%pK",
++			 info);
++
++		ret = -ETIME;
++		goto deregister;
++	}
++
++	ret = info->errno;
++
++deregister:
++	ethosu_rpmsg_deregister(&info->edev->erp, &info->msg);
++	ethosu_network_put(info->net);
++
++kfree:
++	dev_dbg(info->edev->dev,
++		"Network info destroy. info=0x%pK, msg.id=0x%x\n",
++		info, info->msg.id);
++	devm_kfree(info->edev->dev, info);
++
++	return ret;
++}
++
++void ethosu_network_info_rsp(struct ethosu_device *edev,
++			     struct ethosu_core_network_info_rsp *rsp)
++{
++	int ret;
++	int id = (int)rsp->user_arg;
++	struct ethosu_rpmsg_msg *msg;
++	struct ethosu_network_info *info;
++	u32 i, j;
++
++	msg = ethosu_rpmsg_find(&edev->erp, id);
++	if (IS_ERR(msg)) {
++		dev_warn(edev->dev,
++			 "Id for network info msg not found. msg.id=0x%x\n",
++			 id);
++
++		return;
++	}
++
++	info = container_of(msg, typeof(*info), msg);
++
++	if (completion_done(&info->done))
++		return;
++
++	info->errno = 0;
++
++	if (rsp->status != ETHOSU_CORE_STATUS_OK) {
++		info->errno = -EBADF;
++		goto signal_complete;
++	}
++
++	if (rsp->ifm_count > ETHOSU_CORE_BUFFER_MAX || rsp->ofm_count > ETHOSU_CORE_BUFFER_MAX) {
++		info->errno = -ENFILE;
++		goto signal_complete;
++	}
++
++	ret = strscpy(info->uapi->desc, rsp->desc, sizeof(info->uapi->desc));
++	if (ret < 0) {
++		info->errno = ret;
++		goto signal_complete;
++	}
++
++	info->uapi->is_vela = rsp->is_vela;
++	info->uapi->ifm_count = rsp->ifm_count;
++	for (i = 0; i < rsp->ifm_count; i++) {
++		info->uapi->ifm_size[i] = rsp->ifm_size[i];
++		info->uapi->ifm_types[i] = rsp->ifm_types[i];
++		info->uapi->ifm_offset[i] = rsp->ifm_offset[i];
++		info->uapi->ifm_dims[i] = rsp->ifm_dims[i];
++		for (j = 0; j < rsp->ifm_dims[i]; j++)
++			info->uapi->ifm_shapes[i][j] = rsp->ifm_shapes[i][j];
++        }
++
++	info->uapi->ofm_count = rsp->ofm_count;
++	for (i = 0; i < rsp->ofm_count; i++) {
++		info->uapi->ofm_size[i] = rsp->ofm_size[i];
++		info->uapi->ofm_types[i] = rsp->ofm_types[i];
++		info->uapi->ofm_offset[i] = rsp->ofm_offset[i];
++		info->uapi->ofm_dims[i] = rsp->ofm_dims[i];
++		for (j = 0; j < rsp->ofm_dims[i]; j++)
++			info->uapi->ofm_shapes[i][j] = rsp->ofm_shapes[i][j];
++	}
++
++signal_complete:
++	complete(&info->done);
++}
+diff --git a/drivers/staging/ethosu/ethosu_network_info.h b/drivers/staging/ethosu/ethosu_network_info.h
+new file mode 100644
+index 000000000..b5bc00f8e
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_network_info.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2022 Arm Limited.
++ */
++
++#ifndef ETHOSU_NETWORK_INFO_H
++#define ETHOSU_NETWORK_INFO_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include "ethosu_core_interface.h"
++#include "ethosu_rpmsg.h"
++
++#include <linux/types.h>
++#include <linux/completion.h>
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++struct ethosu_device;
++struct ethosu_network;
++struct ethosu_uapi_network_info;
++
++struct ethosu_network_info {
++	struct ethosu_device            *edev;
++	struct ethosu_network           *net;
++	struct ethosu_uapi_network_info *uapi;
++	struct completion               done;
++	int                             errno;
++	struct ethosu_rpmsg_msg         msg;
++};
++
++/****************************************************************************
++ * Functions
++ ****************************************************************************/
++
++/**
++ * ethosu_network_info_request() - Send a network info request
++ *
++ * This function must be called in the context of a user space process.
++ *
++ * Return: 0 on success, .
++ */
++int ethosu_network_info_request(struct ethosu_network *net,
++				struct ethosu_uapi_network_info *uapi);
++
++/**
++ * ethosu_network_info_rsp() - Handle network info response.
++ */
++void ethosu_network_info_rsp(struct ethosu_device *edev,
++			     struct ethosu_core_network_info_rsp *rsp);
++
++#endif /* ETHOSU_NETWORK_INFO_H */
+diff --git a/drivers/staging/ethosu/ethosu_rpmsg.c b/drivers/staging/ethosu/ethosu_rpmsg.c
+new file mode 100644
+index 000000000..351a1046e
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_rpmsg.c
+@@ -0,0 +1,406 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2020-2022 NXP
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/resource.h>
++#include <linux/rpmsg.h>
++#include <linux/uio.h>
++#include <linux/virtio.h>
++
++#include "ethosu_buffer.h"
++#include "ethosu_core_interface.h"
++#include "ethosu_device.h"
++
++struct ethosu_rpmsg *grp;
++
++#define MSG "ethosu say hello!"
++
++static void ethosu_core_set_size(struct ethosu_buffer *buf,
++				 struct ethosu_core_buffer *cbuf)
++{
++	cbuf->ptr = (uint32_t)buf->dma_addr + buf->offset;
++	cbuf->size = (uint32_t)buf->size;
++}
++
++static void ethosu_core_set_capacity(struct ethosu_buffer *buf,
++				     struct ethosu_core_buffer *cbuf)
++{
++	cbuf->ptr = (uint32_t)buf->dma_addr + buf->offset + buf->size;
++	cbuf->size = (uint32_t)buf->capacity - buf->offset - buf->size;
++}
++
++int ethosu_rpmsg_register(struct ethosu_rpmsg *erp,
++			  struct ethosu_rpmsg_msg *msg)
++{
++	msg->id = idr_alloc_cyclic(&erp->msg_idr, msg, 0, INT_MAX, GFP_KERNEL);
++	if (msg->id < 0)
++		return msg->id;
++
++	return 0;
++}
++
++void ethosu_rpmsg_deregister(struct ethosu_rpmsg *erp,
++			     struct ethosu_rpmsg_msg *msg)
++{
++	idr_remove(&erp->msg_idr, msg->id);
++}
++
++struct ethosu_rpmsg_msg *ethosu_rpmsg_find(struct ethosu_rpmsg *erp,
++					   int msg_id)
++{
++	struct ethosu_rpmsg_msg *ptr =
++		(struct ethosu_rpmsg_msg *)idr_find(&erp->msg_idr, msg_id);
++
++	if (!ptr)
++		return ERR_PTR(-EINVAL);
++
++	return ptr;
++}
++
++void ethosu_rpmsg_fail(struct ethosu_rpmsg *erp)
++{
++	struct ethosu_rpmsg_msg *cur;
++	int id;
++
++	idr_for_each_entry(&erp->msg_idr, cur, id) {
++		cur->fail(cur);
++	}
++}
++
++void ethosu_rpmsg_resend(struct ethosu_rpmsg *erp)
++{
++	struct ethosu_rpmsg_msg *cur;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	int id;
++	int ret;
++
++	idr_for_each_entry(&erp->msg_idr, cur, id) {
++		ret = cur->resend(cur);
++		if (ret) {
++			dev_warn(&rpdev->dev, "Failed to resend msg. ret=%d",
++				 ret);
++			cur->fail(cur);
++		}
++	}
++}
++
++static int ethosu_rpmsg_send(struct ethosu_rpmsg *erp, uint32_t type)
++{
++	struct ethosu_core_msg msg;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	int ret;
++
++	msg.magic = ETHOSU_CORE_MSG_MAGIC;
++	msg.type = type;
++	msg.length = 0;
++
++	print_hex_dump(KERN_DEBUG, __func__, DUMP_PREFIX_NONE, 16, 1,
++			(void *)&msg, sizeof(msg),  true);
++
++	ret = rpmsg_send(rpdev->ept, (void *)&msg, sizeof(msg));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++int ethosu_rpmsg_ping(struct ethosu_rpmsg *erp)
++{
++	return ethosu_rpmsg_send(erp, ETHOSU_CORE_MSG_PING);
++}
++
++int ethosu_rpmsg_pong(struct ethosu_rpmsg *erp)
++{
++	return ethosu_rpmsg_send(erp, ETHOSU_CORE_MSG_PONG);
++}
++
++int ethosu_rpmsg_version_request(struct ethosu_rpmsg *erp)
++{
++	return ethosu_rpmsg_send(erp, ETHOSU_CORE_MSG_VERSION_REQ);
++}
++
++int ethosu_rpmsg_capabilities_request(struct ethosu_rpmsg *erp,
++				      struct ethosu_rpmsg_msg *rpmsg)
++{
++	struct ethosu_core_msg msg = {
++		.magic  = ETHOSU_CORE_MSG_MAGIC,
++		.type   = ETHOSU_CORE_MSG_CAPABILITIES_REQ,
++		.length = sizeof(struct ethosu_core_capabilities_req)
++	};
++	struct ethosu_core_capabilities_req req = {
++		.user_arg = rpmsg->id
++	};
++	struct rpmsg_device *rpdev = erp->rpdev;
++	uint8_t data[sizeof(struct ethosu_core_msg) +
++		sizeof(struct ethosu_core_capabilities_req)];
++	int ret;
++
++	memcpy(data, &msg, sizeof(struct ethosu_core_msg));
++	memcpy(data + sizeof(struct ethosu_core_msg), &req,
++	       sizeof(struct ethosu_core_capabilities_req));
++
++	ret = rpmsg_send(rpdev->ept, (void *)&data,
++			 sizeof(struct ethosu_core_msg) +
++			 sizeof(struct ethosu_core_capabilities_req));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++	return 0;
++}
++
++int ethosu_rpmsg_power_request(struct ethosu_rpmsg *erp,
++			       enum ethosu_core_power_req_type power_type)
++{
++	struct ethosu_core_msg msg = {
++		.magic  = ETHOSU_CORE_MSG_MAGIC,
++		.type   = ETHOSU_CORE_MSG_POWER_REQ,
++		.length = sizeof(struct ethosu_core_power_req)
++	};
++	struct ethosu_core_power_req req;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	uint8_t data[sizeof(struct ethosu_core_msg) +
++		sizeof(struct ethosu_core_power_req)];
++	int ret;
++
++	req.type = power_type;
++	memcpy(data, &msg, sizeof(struct ethosu_core_msg));
++	memcpy(data + sizeof(struct ethosu_core_msg), &req,
++	       sizeof(struct ethosu_core_power_req));
++
++	ret = rpmsg_send(rpdev->ept, (void *)&data,
++			 sizeof(struct ethosu_core_msg) +
++			 sizeof(struct ethosu_core_power_req));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++	return 0;
++}
++
++int ethosu_rpmsg_inference(struct ethosu_rpmsg *erp,
++			   struct ethosu_rpmsg_msg *rpmsg,
++			   uint32_t ifm_count,
++			   struct ethosu_buffer **ifm,
++			   uint32_t ofm_count,
++			   struct ethosu_buffer **ofm,
++			   struct ethosu_buffer *network,
++			   u32 network_index,
++			   uint8_t *pmu_event_config,
++			   uint8_t pmu_event_config_count,
++			   uint8_t pmu_cycle_counter_enable,
++			   uint32_t inference_type)
++{
++	struct ethosu_core_msg msg = {
++		.magic  = ETHOSU_CORE_MSG_MAGIC,
++		.type   = ETHOSU_CORE_MSG_INFERENCE_REQ,
++		.length = sizeof(struct ethosu_core_inference_req)
++	};
++	struct ethosu_core_inference_req req;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	uint8_t data[sizeof(struct ethosu_core_msg) +
++		sizeof(struct ethosu_core_inference_req)];
++	int ret;
++	uint32_t i;
++
++	/* Verify that the uapi and core has the same number of pmus */
++	if (pmu_event_config_count != ETHOSU_CORE_PMU_MAX) {
++		dev_err(&rpdev->dev, "PMU count misconfigured.\n");
++
++		return -EINVAL;
++	}
++
++	req.user_arg = rpmsg->id;
++	req.ifm_count = ifm_count;
++	req.ofm_count = ofm_count;
++	req.pmu_cycle_counter_enable = pmu_cycle_counter_enable;
++	req.inference_type = inference_type;
++
++	for (i = 0; i < ifm_count; i++)
++		ethosu_core_set_size(ifm[i], &req.ifm[i]);
++
++	for (i = 0; i < ofm_count; i++)
++		ethosu_core_set_capacity(ofm[i], &req.ofm[i]);
++
++	for (i = 0; i < ETHOSU_CORE_PMU_MAX; i++)
++		req.pmu_event_config[i] = pmu_event_config[i];
++
++	if (network) {
++		req.network.type = ETHOSU_CORE_NETWORK_BUFFER;
++		ethosu_core_set_size(network, &req.network.buffer);
++	} else {
++		req.network.type = ETHOSU_CORE_NETWORK_INDEX;
++		req.network.index = network_index;
++	}
++
++	memcpy(data, &msg, sizeof(struct ethosu_core_msg));
++	memcpy(data + sizeof(struct ethosu_core_msg), &req,
++	       sizeof(struct ethosu_core_inference_req));
++
++	ret = rpmsg_send(rpdev->ept, (void *)&data,
++			 sizeof(struct ethosu_core_msg) +
++			 sizeof(struct ethosu_core_inference_req));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++int ethosu_rpmsg_network_info_request(struct ethosu_rpmsg *erp,
++				      struct ethosu_rpmsg_msg *rpmsg,
++				      struct ethosu_buffer *network,
++				      uint32_t network_index)
++{
++	struct ethosu_core_msg msg = {
++		.magic  = ETHOSU_CORE_MSG_MAGIC,
++		.type   = ETHOSU_CORE_MSG_NETWORK_INFO_REQ,
++		.length = sizeof(struct ethosu_core_network_info_req)
++	};
++	struct ethosu_core_network_info_req req;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	u8 data[sizeof(struct ethosu_core_msg) +
++		sizeof(struct ethosu_core_network_info_req)];
++	int ret;
++
++	req.user_arg = rpmsg->id;
++
++	if (network) {
++		req.network.type = ETHOSU_CORE_NETWORK_BUFFER;
++		ethosu_core_set_size(network, &req.network.buffer);
++	} else {
++		req.network.type = ETHOSU_CORE_NETWORK_INDEX;
++		req.network.index = network_index;
++	}
++
++	memcpy(data, &msg, sizeof(struct ethosu_core_msg));
++	memcpy(data + sizeof(struct ethosu_core_msg), &req,
++	       sizeof(struct ethosu_core_network_info_req));
++
++	ret = rpmsg_send(rpdev->ept, (void *)&data,
++			 sizeof(struct ethosu_core_msg) +
++			 sizeof(struct ethosu_core_network_info_req));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++int ethosu_rpmsg_cancel_inference(struct ethosu_rpmsg *erp,
++				  struct ethosu_rpmsg_msg *rpmsg,
++				  int inference_handle)
++{
++	struct ethosu_core_msg msg = {
++		.magic  = ETHOSU_CORE_MSG_MAGIC,
++		.type   = ETHOSU_CORE_MSG_CAPABILITIES_REQ,
++		.length = sizeof(struct ethosu_core_cancel_inference_req)
++	};
++	struct ethosu_core_cancel_inference_req req;
++	struct rpmsg_device *rpdev = erp->rpdev;
++	u8 data[sizeof(struct ethosu_core_msg) +
++		sizeof(struct ethosu_core_cancel_inference_req)];
++	int ret;
++
++	req.user_arg = rpmsg->id;
++	req.inference_handle = inference_handle;
++
++	memcpy(data, &msg, sizeof(struct ethosu_core_msg));
++	memcpy(data + sizeof(struct ethosu_core_msg), &req,
++	       sizeof(struct ethosu_core_cancel_inference_req));
++
++	ret = rpmsg_send(rpdev->ept, (void *)&data,
++			 sizeof(struct ethosu_core_msg) +
++			 sizeof(struct ethosu_core_cancel_inference_req));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int rpmsg_ethosu_cb(struct rpmsg_device *rpdev,
++		void *data, int len, void *priv, u32 src)
++{
++	struct ethosu_rpmsg *rpmsg = dev_get_drvdata(&rpdev->dev);
++
++	if (len == 0)
++		return 0;
++
++	dev_dbg(&rpdev->dev, "msg(<- src 0x%x) len %d\n", src, len);
++
++	print_hex_dump(KERN_DEBUG, __func__, DUMP_PREFIX_NONE, 16, 1,
++			data, len,  true);
++
++	rpmsg->callback(rpmsg->user_arg, data);
++
++	return 0;
++}
++
++static int ethosu_rpmsg_probe(struct rpmsg_device *rpdev)
++{
++	int ret;
++
++	grp->rpdev = rpdev;
++	dev_set_drvdata(&rpdev->dev, grp);
++
++	dev_dbg(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n",
++		rpdev->src, rpdev->dst);
++
++	ret = rpmsg_send(rpdev->ept, MSG, strlen(MSG));
++	if (ret) {
++		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
++	}
++	complete(&grp->rpmsg_ready);
++
++	return 0;
++}
++
++static void ethosu_rpmsg_remove(struct rpmsg_device *rpdev)
++{
++	dev_dbg(&rpdev->dev, "rpmsg ethosu driver is removed\n");
++}
++
++static struct rpmsg_device_id rpmsg_driver_ethosu_id_table[] = {
++	{ .name = "rpmsg-ethosu-channel" },
++	{ },
++};
++
++static struct rpmsg_driver ethosu_rpmsg_driver = {
++	.drv.name       = KBUILD_MODNAME,
++	.drv.owner      = THIS_MODULE,
++	.id_table       = rpmsg_driver_ethosu_id_table,
++	.probe          = ethosu_rpmsg_probe,
++	.callback	= rpmsg_ethosu_cb,
++	.remove         = ethosu_rpmsg_remove,
++};
++
++int ethosu_rpmsg_init(struct ethosu_rpmsg *erp,
++		ethosu_rpmsg_cb callback, void *user_arg)
++{
++	grp = erp;
++	erp->callback = callback;
++	erp->user_arg = user_arg;
++	erp->ping_count = 0;
++	idr_init(&erp->msg_idr);
++
++	return register_rpmsg_driver(&ethosu_rpmsg_driver);
++}
++
++int ethosu_rpmsg_deinit(struct ethosu_rpmsg *erp)
++{
++	erp->callback = NULL;
++	erp->user_arg = NULL;
++	erp->rpdev = NULL;
++
++	unregister_rpmsg_driver(&ethosu_rpmsg_driver);
++	return 0;
++}
+diff --git a/drivers/staging/ethosu/ethosu_rpmsg.h b/drivers/staging/ethosu/ethosu_rpmsg.h
+new file mode 100644
+index 000000000..283d401a0
+--- /dev/null
++++ b/drivers/staging/ethosu/ethosu_rpmsg.h
+@@ -0,0 +1,154 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2020-2022 NXP
++ */
++
++#ifndef ETHOSU_RPMSG_H
++#define ETHOSU_RPMSG_H
++
++#include <linux/idr.h>
++#include <linux/types.h>
++#include <linux/completion.h>
++#include <linux/workqueue.h>
++
++#include "ethosu_core_interface.h"
++
++struct device;
++struct ethosu_buffer;
++struct ethosu_device;
++struct ethosu_core_msg;
++
++typedef void (*ethosu_rpmsg_cb)(void *user_arg, void *data);
++
++struct ethosu_rpmsg {
++	struct rpmsg_device	*rpdev;
++	ethosu_rpmsg_cb		callback;
++	void			*user_arg;
++	struct completion       rpmsg_ready;
++	struct idr              msg_idr;
++	unsigned int            ping_count;
++};
++
++struct ethosu_rpmsg_msg {
++	int  id;
++	void (*fail)(struct ethosu_rpmsg_msg *msg);
++	int  (*resend)(struct ethosu_rpmsg_msg *msg);
++};
++
++/**
++ * ethosu_rpmsg_ping() - Send ping message
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_ping(struct ethosu_rpmsg *erp);
++
++/**
++ * ethosu_rpmsg_pong() - Send pong message
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_pong(struct ethosu_rpmsg *erp);
++
++/**
++ * ethosu_rpmsg_version_response - Send version request
++ *
++ * Return: 0 on success, else error code
++ */
++int ethosu_rpmsg_version_request(struct ethosu_rpmsg *erp);
++
++/**
++ * ethosu_rpmsg_capabilities_request - Send capabilities request
++ *
++ * Return: 0 on success, else error code
++ */
++int ethosu_rpmsg_capabilities_request(struct ethosu_rpmsg *erp,
++				      struct ethosu_rpmsg_msg *rpmsg);
++
++/**
++ * ethosu_rpmsg_power_request - Send power request
++ *
++ * Return: 0 on success, else error code
++ */
++int ethosu_rpmsg_power_request(struct ethosu_rpmsg *erp,
++			       enum ethosu_core_power_req_type power_type);
++
++/**
++ * ethosu_rpmsg_inference() - Send inference
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_inference(struct ethosu_rpmsg *erp,
++			   struct ethosu_rpmsg_msg *rpmsg,
++			   uint32_t ifm_count,
++			   struct ethosu_buffer **ifm,
++			   uint32_t ofm_count,
++			   struct ethosu_buffer **ofm,
++			   struct ethosu_buffer *network,
++			   u32 network_index,
++			   uint8_t *pmu_event_config,
++			   uint8_t pmu_event_config_count,
++			   uint8_t pmu_cycle_counter_enable,
++			   uint32_t inference_type
++			   );
++
++/**
++ * ethosu_rpmsg_network_info_request() - Send network info request
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_network_info_request(struct ethosu_rpmsg *erp,
++				      struct ethosu_rpmsg_msg *rpmsg,
++				      struct ethosu_buffer *network,
++				      uint32_t network_index);
++
++/**
++ * ethosu_rpmsg_cancel_inference() - Send inference cancellation
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_cancel_inference(struct ethosu_rpmsg *erp,
++				  struct ethosu_rpmsg_msg *rpmsg,
++				  int inference_handle);
++
++int ethosu_rpmsg_init(struct ethosu_rpmsg *erp,
++		      ethosu_rpmsg_cb callback, void *user_arg);
++
++int ethosu_rpmsg_deinit(struct ethosu_rpmsg *erp);
++
++/**
++ * ethosu_rpmsg_register() - Register the ethosu_rpmsg_msg in ethosu_rpmsg
++ *
++ * Return: 0 on success, else error code.
++ */
++int ethosu_rpmsg_register(struct ethosu_rpmsg *erp,
++			  struct ethosu_rpmsg_msg *msg);
++
++/**
++ * ethosu_rpmsg_free_id() - Free the id of the ethosu_rpmsg_msg
++ */
++void ethosu_rpmsg_deregister(struct ethosu_rpmsg *erp,
++			     struct ethosu_rpmsg_msg *msg);
++
++/**
++ * ethosu_rpmsg_find() - Find rpmsg message
++ *
++ * Return: a valid pointer on success, otherwise an error ptr.
++ */
++struct ethosu_rpmsg_msg *ethosu_rpmsg_find(struct ethosu_rpmsg *erq,
++					   int msg_id);
++
++/**
++ * ethosu_rpmsg_fail() - Fail rpmsg messages
++ *
++ * Call fail() callback on all messages in pending list.
++ */
++void ethosu_rpmsg_fail(struct ethosu_rpmsg *erp);
++
++/**
++ * ethosu_rpmsg_resend() - Resend rpmsg messages
++ *
++ * Call resend() callback on all messages in pending list.
++ */
++void ethosu_rpmsg_resend(struct ethosu_rpmsg *erp);
++
++#endif /* ETHOSU_RPMSG_H */
+diff --git a/drivers/staging/ethosu/uapi/ethosu.h b/drivers/staging/ethosu/uapi/ethosu.h
+new file mode 100644
+index 000000000..3375b1d83
+--- /dev/null
++++ b/drivers/staging/ethosu/uapi/ethosu.h
+@@ -0,0 +1,285 @@
++/*
++ * Copyright (c) 2020-2022 Arm Limited.
++ *
++ * This program is free software and is provided to you under the terms of the
++ * GNU General Public License version 2 as published by the Free Software
++ * Foundation, and any use by you of this program is subject to the terms
++ * of such GNU licence.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, you can access it online at
++ * http://www.gnu.org/licenses/gpl-2.0.html.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef ETHOSU_H
++#define ETHOSU_H
++
++/****************************************************************************
++ * Includes
++ ****************************************************************************/
++
++#include <linux/ioctl.h>
++#include <linux/types.h>
++
++#ifdef __cplusplus
++namespace EthosU {
++#endif
++
++/****************************************************************************
++ * Defines
++ ****************************************************************************/
++
++#define ETHOSU_IOCTL_BASE               0x01
++#define ETHOSU_IO(nr)                   _IO(ETHOSU_IOCTL_BASE, nr)
++#define ETHOSU_IOR(nr, type)            _IOR(ETHOSU_IOCTL_BASE, nr, type)
++#define ETHOSU_IOW(nr, type)            _IOW(ETHOSU_IOCTL_BASE, nr, type)
++#define ETHOSU_IOWR(nr, type)           _IOWR(ETHOSU_IOCTL_BASE, nr, type)
++
++#define ETHOSU_IOCTL_PING               ETHOSU_IO(0x00)
++#define ETHOSU_IOCTL_VERSION_REQ        ETHOSU_IO(0x01)
++#define ETHOSU_IOCTL_CAPABILITIES_REQ   ETHOSU_IOR(0x02, \
++						   struct ethosu_uapi_device_capabilities)
++#define ETHOSU_IOCTL_BUFFER_CREATE      ETHOSU_IOR(0x10, \
++						   struct ethosu_uapi_buffer_create)
++#define ETHOSU_IOCTL_BUFFER_SET         ETHOSU_IOR(0x11, \
++						   struct ethosu_uapi_buffer)
++#define ETHOSU_IOCTL_BUFFER_GET         ETHOSU_IOW(0x12, \
++						   struct ethosu_uapi_buffer)
++#define ETHOSU_IOCTL_NETWORK_CREATE     ETHOSU_IOR(0x20, \
++						   struct ethosu_uapi_network_create)
++#define ETHOSU_IOCTL_NETWORK_INFO       ETHOSU_IOR(0x21, \
++						   struct ethosu_uapi_network_info)
++#define ETHOSU_IOCTL_INFERENCE_CREATE   ETHOSU_IOR(0x30, \
++						   struct ethosu_uapi_inference_create)
++#define ETHOSU_IOCTL_INFERENCE_STATUS   ETHOSU_IOR(0x31, \
++						   struct ethosu_uapi_result_status)
++#define ETHOSU_IOCTL_INFERENCE_CANCEL   ETHOSU_IOR(0x32, \
++						   struct ethosu_uapi_cancel_inference_status)
++
++/* Maximum number of IFM/OFM file descriptors per network */
++#define ETHOSU_FD_MAX                   16
++
++/* Maximum number of dimensions for input and output */
++#define ETHOSU_DIM_MAX                   8
++
++/* Maximum number of PMUs available */
++#define ETHOSU_PMU_EVENT_MAX             4
++
++/****************************************************************************
++ * Types
++ ****************************************************************************/
++
++/**
++ * enum ethosu_uapi_status - Status
++ */
++enum ethosu_uapi_status {
++	ETHOSU_UAPI_STATUS_OK,
++	ETHOSU_UAPI_STATUS_ERROR,
++	ETHOSU_UAPI_STATUS_RUNNING,
++	ETHOSU_UAPI_STATUS_REJECTED,
++	ETHOSU_UAPI_STATUS_ABORTED,
++	ETHOSU_UAPI_STATUS_ABORTING,
++};
++
++/**
++ * struct ethosu_uapi_buffer_create - Create buffer request
++ * @capacity:	Maximum capacity of the buffer
++ */
++struct ethosu_uapi_buffer_create {
++	__u32 capacity;
++};
++
++/**
++ * struct ethosu_uapi_buffer - Buffer descriptor
++ * @offset:	Offset to where the data starts
++ * @size:	Size of the data
++ *
++ * 'offset + size' must not exceed the capacity of the buffer.
++ */
++struct ethosu_uapi_buffer {
++	__u32 offset;
++	__u32 size;
++};
++
++/**
++ * enum ethosu_uapi_network_create - Network buffer type.
++ * @ETHOSU_UAPI_NETWORK_BUFFER:	Network is stored in a buffer handle.
++ * @ETHOSU_UAPI_NETWORK_INDEX:	Network is built into firmware and referenced by
++ *                              index.
++ */
++enum ethosu_uapi_network_type {
++	ETHOSU_UAPI_NETWORK_BUFFER = 1,
++	ETHOSU_UAPI_NETWORK_INDEX
++};
++
++/**
++ * struct ethosu_uapi_network_create - Create network request
++ * @type:	Buffer type. See @ethosu_uapi_network_type.
++ * @fd:		Buffer file descriptor
++ * @index:	Buffer index compiled into firmware binary.
++ */
++struct ethosu_uapi_network_create {
++	u32 type;
++	union {
++		__u32 fd;
++		__u32 index;
++	};
++};
++
++/**
++ * struct ethosu_uapi_network_info - Network info
++ * @desc:		Network description
++ * @ifm_count:		Number of IFM buffers
++ * @ifm_size:		IFM buffer sizes
++ * @ifm_types:          IFM data types
++ * @ifm_offset:         IFM data offset in arena
++ * @ifm_dims:           IFM buffer dimensions
++ * @ifm_shapes:         IFM buffer shapes
++ * @ofm_count:		Number of OFM buffers
++ * @ofm_size:		OFM buffer sizes
++ * @ofm_offset:         OFM data offset in arena
++ * @ofm_dims:           OFM buffer dimensions
++ * @ofm_shapes:         OFM buffer shapes
++ */
++struct ethosu_uapi_network_info {
++	char  desc[32];
++	__u32 is_vela;
++	__u32 ifm_count;
++	__u32 ifm_size[ETHOSU_FD_MAX];
++	__u32 ifm_types[ETHOSU_FD_MAX];
++	__u32 ifm_offset[ETHOSU_FD_MAX];
++	__u32 ifm_dims[ETHOSU_FD_MAX];
++	__u32 ifm_shapes[ETHOSU_FD_MAX][ETHOSU_DIM_MAX];
++	__u32 ofm_count;
++	__u32 ofm_size[ETHOSU_FD_MAX];
++	__u32 ofm_types[ETHOSU_FD_MAX];
++	__u32 ofm_offset[ETHOSU_FD_MAX];
++	__u32 ofm_dims[ETHOSU_FD_MAX];
++	__u32 ofm_shapes[ETHOSU_FD_MAX][ETHOSU_DIM_MAX];
++};
++
++/**
++ * struct ethosu_uapi_pmu_config - Configure performance counters
++ * @events:             Array of counters to configure, set to non-zero for
++ *                      each counter to enable corresponding event.
++ * @cycle_count:        Set to enable the cycle counter.
++ */
++struct ethosu_uapi_pmu_config {
++	__u32 events[ETHOSU_PMU_EVENT_MAX];
++	__u32 cycle_count;
++};
++
++/**
++ * struct ethosu_uapi_pmu_counts - Status of performance counters
++ * @events:             Count for respective configured events.
++ * @cycle_count:        Count for cycle counter.
++ */
++struct ethosu_uapi_pmu_counts {
++	__u32 events[ETHOSU_PMU_EVENT_MAX];
++	__u64 cycle_count;
++};
++
++/**
++ * struct ethosu_uapi_device_hw_id - Device hardware identification
++ * @version_status:            Version status
++ * @version_minor:             Version minor
++ * @version_major:             Version major
++ * @product_major:             Product major
++ * @arch_patch_rev:            Architecture version patch
++ * @arch_minor_rev:            Architecture version minor
++ * @arch_major_rev:            Architecture version major
++ */
++struct ethosu_uapi_device_hw_id {
++	__u32 version_status;
++	__u32 version_minor;
++	__u32 version_major;
++	__u32 product_major;
++	__u32 arch_patch_rev;
++	__u32 arch_minor_rev;
++	__u32 arch_major_rev;
++};
++
++/**
++ * struct ethosu_uapi_device_hw_cfg - Device hardware configuration
++ * @macs_per_cc:               MACs per clock cycle
++ * @cmd_stream_version:        NPU command stream version
++ * @custom_dma:                Custom DMA enabled
++ */
++struct ethosu_uapi_device_hw_cfg {
++	__u32 macs_per_cc;
++	__u32 cmd_stream_version;
++	__u32 custom_dma;
++};
++
++/**
++ * struct ethosu_uapi_device_capabilities - Device capabilities
++ * @hw_id:                     Hardware identification
++ * @hw_cfg:                    Hardware configuration
++ * @driver_patch_rev:          Driver version patch
++ * @driver_minor_rev:          Driver version minor
++ * @driver_major_rev:          Driver version major
++ */
++struct ethosu_uapi_device_capabilities {
++	struct ethosu_uapi_device_hw_id  hw_id;
++	struct ethosu_uapi_device_hw_cfg hw_cfg;
++	__u32                            driver_patch_rev;
++	__u32                            driver_minor_rev;
++	__u32                            driver_major_rev;
++};
++
++/**
++ * enum ethosu_uapi_inference_type - Inference type
++ */
++enum ethosu_uapi_inference_type {
++	ETHOSU_UAPI_INFERENCE_MODEL = 0,
++	ETHOSU_UAPI_INFERENCE_OP
++};
++
++/**
++ * struct ethosu_uapi_inference_create - Create network request
++ * @ifm_count:		Number of IFM file descriptors
++ * @ifm_fd:		IFM buffer file descriptors
++ * @ofm_count:		Number of OFM file descriptors
++ * @ofm_fd:		OFM buffer file descriptors
++ */
++struct ethosu_uapi_inference_create {
++	__u32                         ifm_count;
++	__u32                         ifm_fd[ETHOSU_FD_MAX];
++	__u32                         ofm_count;
++	__u32                         ofm_fd[ETHOSU_FD_MAX];
++	enum ethosu_uapi_inference_type inference_type;
++	struct ethosu_uapi_pmu_config pmu_config;
++};
++
++/**
++ * struct ethosu_uapi_result_status - Status of inference
++ * @status	Status of run inference.
++ * @pmu_config	Configured performance counters.
++ * @pmu_count	Perfomance counters values, when status is
++ *              ETHOSU_UAPI_STATUS_OK.
++ */
++struct ethosu_uapi_result_status {
++	enum ethosu_uapi_status       status;
++	struct ethosu_uapi_pmu_config pmu_config;
++	struct ethosu_uapi_pmu_counts pmu_count;
++};
++
++/**
++ * struct ethosu_uapi_cancel_status - Status of inference cancellation.
++ * @status	OK if inference cancellation was performed, ERROR otherwise.
++ */
++struct ethosu_uapi_cancel_inference_status {
++	enum ethosu_uapi_status status;
++};
++
++#ifdef __cplusplus
++} /* namespace EthosU */
++#endif
++#endif
+-- 
+2.25.1
+

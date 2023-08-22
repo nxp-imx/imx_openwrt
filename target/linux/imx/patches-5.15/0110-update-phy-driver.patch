@@ -1,0 +1,3372 @@
+From bf78f6dd384b0350f48bc70dfc65134558dd8508 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 16:57:34 +0800
+Subject: [PATCH 10/24] update phy driver
+
+---
+ drivers/phy/freescale/Kconfig                 |   45 +
+ drivers/phy/freescale/Makefile                |    5 +
+ .../phy/freescale/phy-fsl-imx8-mipi-dphy.c    |  166 ++-
+ drivers/phy/freescale/phy-fsl-imx8-pcie.c     |  292 +++++
+ drivers/phy/freescale/phy-fsl-imx8mp-lvds.c   |  305 +++++
+ .../phy/freescale/phy-fsl-imx93-mipi-dphy.c   |  583 +++++++++
+ drivers/phy/freescale/phy-fsl-lynx-28g.c      |  624 +++++++++
+ drivers/phy/freescale/phy-fsl-samsung-hdmi.c  | 1162 +++++++++++++++++
+ 8 files changed, 3146 insertions(+), 36 deletions(-)
+ create mode 100644 drivers/phy/freescale/phy-fsl-imx8-pcie.c
+ create mode 100644 drivers/phy/freescale/phy-fsl-imx8mp-lvds.c
+ create mode 100644 drivers/phy/freescale/phy-fsl-imx93-mipi-dphy.c
+ create mode 100644 drivers/phy/freescale/phy-fsl-lynx-28g.c
+ create mode 100644 drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+
+diff --git a/drivers/phy/freescale/Kconfig b/drivers/phy/freescale/Kconfig
+index 320630ffe..f002b2934 100644
+--- a/drivers/phy/freescale/Kconfig
++++ b/drivers/phy/freescale/Kconfig
+@@ -1,10 +1,29 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++config PHY_FSL_IMX8MP_LVDS
++	tristate "Freescale i.MX8MP LVDS PHY"
++	depends on OF && HAS_IOMEM
++	select GENERIC_PHY
++	select REGMAP
++	help
++	  Enable this to add support for the LVDS PHY as found
++	  on NXP's i.MX8MP SoC.
++
+ config PHY_FSL_IMX8MQ_USB
+ 	tristate "Freescale i.MX8M USB3 PHY"
+ 	depends on OF && HAS_IOMEM
+ 	select GENERIC_PHY
+ 	default ARCH_MXC && ARM64
+ 
++config PHY_FSL_IMX93_MIPI_DPHY
++	tristate "Freescale i.MX93 MIPI DPHY"
++	depends on OF && HAS_IOMEM
++	select GENERIC_PHY
++	select GENERIC_PHY_MIPI_DPHY
++	select REGMAP_MMIO
++	help
++	  Enable this to add support for the Synopsys DW MIPI DPHY as found
++	  on NXP's i.MX93 SoC.
++
+ config PHY_MIXEL_MIPI_DPHY
+ 	tristate "Mixel MIPI DSI PHY support"
+ 	depends on OF && HAS_IOMEM
+@@ -14,3 +33,29 @@ config PHY_MIXEL_MIPI_DPHY
+ 	help
+ 	  Enable this to add support for the Mixel DSI PHY as found
+ 	  on NXP's i.MX8 family of SOCs.
++
++config PHY_SAMSUNG_HDMI_PHY
++	tristate "Samsung HDMI PHY support"
++	depends on OF && HAS_IOMEM
++	select GENERIC_PHY
++	help
++	  Enable this to add support for the Samsung HDMI PHY in iMX8MP.
++
++config PHY_FSL_IMX_PCIE
++	tristate "Freescale i.MX PCIE PHY"
++	depends on OF && HAS_IOMEM
++	select GENERIC_PHY
++	default ARCH_MXC
++	help
++	  Enable this to add support for the PCIE PHY as found on i.MX
++	  family of SOCs.
++
++config PHY_FSL_LYNX_28G
++	tristate "Freescale Layerscape Lynx 28G SerDes PHY support"
++	depends on OF
++	select GENERIC_PHY
++	help
++	  Enable this to add support for the Lynx SerDes 28G PHY as
++	  found on NXP's Layerscape platforms such as LX2160A.
++	  Used to change the protocol running on SerDes lanes at runtime.
++	  Only useful for a restricted set of Ethernet protocols.
+diff --git a/drivers/phy/freescale/Makefile b/drivers/phy/freescale/Makefile
+index 1d02e3869..6587e6870 100644
+--- a/drivers/phy/freescale/Makefile
++++ b/drivers/phy/freescale/Makefile
+@@ -1,3 +1,8 @@
+ # SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_PHY_FSL_IMX8MP_LVDS)	+= phy-fsl-imx8mp-lvds.o
+ obj-$(CONFIG_PHY_FSL_IMX8MQ_USB)	+= phy-fsl-imx8mq-usb.o
++obj-$(CONFIG_PHY_FSL_IMX93_MIPI_DPHY)	+= phy-fsl-imx93-mipi-dphy.o
+ obj-$(CONFIG_PHY_MIXEL_MIPI_DPHY)	+= phy-fsl-imx8-mipi-dphy.o
++obj-$(CONFIG_PHY_SAMSUNG_HDMI_PHY)	+= phy-fsl-samsung-hdmi.o
++obj-$(CONFIG_PHY_FSL_IMX_PCIE)		+= phy-fsl-imx8-pcie.o
++obj-$(CONFIG_PHY_FSL_LYNX_28G)		+= phy-fsl-lynx-28g.o
+diff --git a/drivers/phy/freescale/phy-fsl-imx8-mipi-dphy.c b/drivers/phy/freescale/phy-fsl-imx8-mipi-dphy.c
+index a95572b39..969c3f854 100644
+--- a/drivers/phy/freescale/phy-fsl-imx8-mipi-dphy.c
++++ b/drivers/phy/freescale/phy-fsl-imx8-mipi-dphy.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Copyright 2017,2018 NXP
++ * Copyright 2017,2018,2021 NXP
+  * Copyright 2019 Purism SPC
+  */
+ 
+@@ -24,13 +24,6 @@
+ #define DPHY_MC_PRG_HS_ZERO		0x10
+ #define DPHY_M_PRG_HS_TRAIL		0x14
+ #define DPHY_MC_PRG_HS_TRAIL		0x18
+-#define DPHY_PD_PLL			0x1c
+-#define DPHY_TST			0x20
+-#define DPHY_CN				0x24
+-#define DPHY_CM				0x28
+-#define DPHY_CO				0x2c
+-#define DPHY_LOCK			0x30
+-#define DPHY_LOCK_BYP			0x34
+ #define DPHY_REG_BYPASS_PLL		0x4C
+ 
+ #define MBPS(x) ((x) * 1000000)
+@@ -55,11 +48,26 @@
+ #define PWR_ON	0
+ #define PWR_OFF	1
+ 
++/* not available register */
++#define REG_NA	0xff
++
+ enum mixel_dphy_devtype {
+ 	MIXEL_IMX8MQ,
++	MIXEL_IMX8QM,
++	MIXEL_IMX8QX,
++	MIXEL_IMX8ULP,
+ };
+ 
+ struct mixel_dphy_devdata {
++	u8 reg_mc_prg_rxhs_settle;
++	u8 reg_m_prg_rxhs_settle;
++	u8 reg_pd_pll;
++	u8 reg_tst;
++	u8 reg_cn;
++	u8 reg_cm;
++	u8 reg_co;
++	u8 reg_lock;
++	u8 reg_lock_byp;
+ 	u8 reg_tx_rcal;
+ 	u8 reg_auto_pd_en;
+ 	u8 reg_rxlprp;
+@@ -69,12 +77,69 @@ struct mixel_dphy_devdata {
+ 
+ static const struct mixel_dphy_devdata mixel_dphy_devdata[] = {
+ 	[MIXEL_IMX8MQ] = {
++		.reg_mc_prg_rxhs_settle = REG_NA,
++		.reg_m_prg_rxhs_settle = REG_NA,
++		.reg_pd_pll = 0x1c,
++		.reg_tst = 0x20,
++		.reg_cn = 0x24,
++		.reg_cm = 0x28,
++		.reg_co = 0x2c,
++		.reg_lock = 0x30,
++		.reg_lock_byp = 0x34,
+ 		.reg_tx_rcal = 0x38,
+ 		.reg_auto_pd_en = 0x3c,
+ 		.reg_rxlprp = 0x40,
+ 		.reg_rxcdrp = 0x44,
+ 		.reg_rxhs_settle = 0x48,
+ 	},
++	[MIXEL_IMX8QM] = {
++		.reg_mc_prg_rxhs_settle = REG_NA,
++		.reg_m_prg_rxhs_settle = REG_NA,
++		.reg_pd_pll = 0x1c,
++		.reg_tst = 0x20,
++		.reg_cn = 0x24,
++		.reg_cm = 0x28,
++		.reg_co = 0x2c,
++		.reg_lock = 0x30,
++		.reg_lock_byp = 0x34,
++		.reg_tx_rcal = 0x00,
++		.reg_auto_pd_en = 0x38,
++		.reg_rxlprp = 0x3c,
++		.reg_rxcdrp = 0x40,
++		.reg_rxhs_settle = 0x44,
++	},
++	[MIXEL_IMX8QX] = {
++		.reg_mc_prg_rxhs_settle = REG_NA,
++		.reg_m_prg_rxhs_settle = REG_NA,
++		.reg_pd_pll = 0x1c,
++		.reg_tst = 0x20,
++		.reg_cn = 0x24,
++		.reg_cm = 0x28,
++		.reg_co = 0x2c,
++		.reg_lock = 0x30,
++		.reg_lock_byp = 0x34,
++		.reg_tx_rcal = 0x00,
++		.reg_auto_pd_en = 0x38,
++		.reg_rxlprp = 0x3c,
++		.reg_rxcdrp = 0x40,
++		.reg_rxhs_settle = 0x44,
++	},
++	[MIXEL_IMX8ULP] = {
++		.reg_mc_prg_rxhs_settle = 0x1c,
++		.reg_m_prg_rxhs_settle = 0x20,
++		.reg_pd_pll = 0x24,
++		.reg_tst = 0x28,
++		.reg_cn = 0x2c,
++		.reg_cm = 0x30,
++		.reg_co = 0x34,
++		.reg_lock = 0x38,
++		.reg_lock_byp = 0x3c,
++		.reg_tx_rcal = 0x00,
++		.reg_auto_pd_en = 0x40,
++		.reg_rxlprp = 0x44,
++		.reg_rxcdrp = 0x48,
++		.reg_rxhs_settle = REG_NA,
++	},
+ };
+ 
+ struct mixel_dphy_cfg {
+@@ -261,20 +326,31 @@ static int mixel_dphy_config_from_opts(struct phy *phy,
+ 	cfg->mc_prg_hs_trail = n;
+ 
+ 	/* rxhs_settle: formula from NXP BSP */
+-	if (dphy_opts->hs_clk_rate < MBPS(80))
+-		cfg->rxhs_settle = 0x0d;
+-	else if (dphy_opts->hs_clk_rate < MBPS(90))
+-		cfg->rxhs_settle = 0x0c;
+-	else if (dphy_opts->hs_clk_rate < MBPS(125))
+-		cfg->rxhs_settle = 0x0b;
+-	else if (dphy_opts->hs_clk_rate < MBPS(150))
+-		cfg->rxhs_settle = 0x0a;
+-	else if (dphy_opts->hs_clk_rate < MBPS(225))
+-		cfg->rxhs_settle = 0x09;
+-	else if (dphy_opts->hs_clk_rate < MBPS(500))
+-		cfg->rxhs_settle = 0x08;
+-	else
+-		cfg->rxhs_settle = 0x07;
++	if (priv->devdata->reg_rxhs_settle != REG_NA) {
++		if (dphy_opts->hs_clk_rate < MBPS(80))
++			cfg->rxhs_settle = 0x0d;
++		else if (dphy_opts->hs_clk_rate < MBPS(90))
++			cfg->rxhs_settle = 0x0c;
++		else if (dphy_opts->hs_clk_rate < MBPS(125))
++			cfg->rxhs_settle = 0x0b;
++		else if (dphy_opts->hs_clk_rate < MBPS(150))
++			cfg->rxhs_settle = 0x0a;
++		else if (dphy_opts->hs_clk_rate < MBPS(225))
++			cfg->rxhs_settle = 0x09;
++		else if (dphy_opts->hs_clk_rate < MBPS(500))
++			cfg->rxhs_settle = 0x08;
++		else
++			cfg->rxhs_settle = 0x07;
++	} else if (priv->devdata->reg_m_prg_rxhs_settle != REG_NA) {
++		if (dphy_opts->hs_clk_rate < MBPS(80))
++			cfg->rxhs_settle = 0x01;
++		else if (dphy_opts->hs_clk_rate < MBPS(250))
++			cfg->rxhs_settle = 0x06;
++		else if (dphy_opts->hs_clk_rate < MBPS(500))
++			cfg->rxhs_settle = 0x08;
++		else
++			cfg->rxhs_settle = 0x0a;
++	}
+ 
+ 	dev_dbg(&phy->dev, "phy_config: %u %u %u %u %u %u %u\n",
+ 		cfg->m_prg_hs_prepare, cfg->mc_prg_hs_prepare,
+@@ -295,7 +371,15 @@ static void mixel_phy_set_hs_timings(struct phy *phy)
+ 	phy_write(phy, priv->cfg.mc_prg_hs_zero, DPHY_MC_PRG_HS_ZERO);
+ 	phy_write(phy, priv->cfg.m_prg_hs_trail, DPHY_M_PRG_HS_TRAIL);
+ 	phy_write(phy, priv->cfg.mc_prg_hs_trail, DPHY_MC_PRG_HS_TRAIL);
+-	phy_write(phy, priv->cfg.rxhs_settle, priv->devdata->reg_rxhs_settle);
++	if (priv->devdata->reg_rxhs_settle != REG_NA)
++		phy_write(phy, priv->cfg.rxhs_settle,
++			  priv->devdata->reg_rxhs_settle);
++	else if (priv->devdata->reg_m_prg_rxhs_settle != REG_NA)
++		phy_write(phy, priv->cfg.rxhs_settle,
++			  priv->devdata->reg_m_prg_rxhs_settle);
++
++	if (priv->devdata->reg_mc_prg_rxhs_settle != REG_NA)
++		phy_write(phy, 0x10, priv->devdata->reg_mc_prg_rxhs_settle);
+ }
+ 
+ static int mixel_dphy_set_pll_params(struct phy *phy)
+@@ -311,9 +395,9 @@ static int mixel_dphy_set_pll_params(struct phy *phy)
+ 	}
+ 	dev_dbg(&phy->dev, "Using CM:%u CN:%u CO:%u\n",
+ 		priv->cfg.cm, priv->cfg.cn, priv->cfg.co);
+-	phy_write(phy, CM(priv->cfg.cm), DPHY_CM);
+-	phy_write(phy, CN(priv->cfg.cn), DPHY_CN);
+-	phy_write(phy, CO(priv->cfg.co), DPHY_CO);
++	phy_write(phy, CM(priv->cfg.cm), priv->devdata->reg_cm);
++	phy_write(phy, CN(priv->cfg.cn), priv->devdata->reg_cn);
++	phy_write(phy, CO(priv->cfg.co), priv->devdata->reg_co);
+ 	return 0;
+ }
+ 
+@@ -330,12 +414,12 @@ static int mixel_dphy_configure(struct phy *phy, union phy_configure_opts *opts)
+ 	/* Update the configuration */
+ 	memcpy(&priv->cfg, &cfg, sizeof(struct mixel_dphy_cfg));
+ 
+-	phy_write(phy, 0x00, DPHY_LOCK_BYP);
++	phy_write(phy, 0x00, priv->devdata->reg_lock_byp);
+ 	phy_write(phy, 0x01, priv->devdata->reg_tx_rcal);
+ 	phy_write(phy, 0x00, priv->devdata->reg_auto_pd_en);
+ 	phy_write(phy, 0x02, priv->devdata->reg_rxlprp);
+ 	phy_write(phy, 0x02, priv->devdata->reg_rxcdrp);
+-	phy_write(phy, 0x25, DPHY_TST);
++	phy_write(phy, 0x25, priv->devdata->reg_tst);
+ 
+ 	mixel_phy_set_hs_timings(phy);
+ 	ret = mixel_dphy_set_pll_params(phy);
+@@ -358,7 +442,9 @@ static int mixel_dphy_validate(struct phy *phy, enum phy_mode mode, int submode,
+ 
+ static int mixel_dphy_init(struct phy *phy)
+ {
+-	phy_write(phy, PWR_OFF, DPHY_PD_PLL);
++	struct mixel_dphy_priv *priv = phy_get_drvdata(phy);
++
++	phy_write(phy, PWR_OFF, priv->devdata->reg_pd_pll);
+ 	phy_write(phy, PWR_OFF, DPHY_PD_DPHY);
+ 
+ 	return 0;
+@@ -366,9 +452,11 @@ static int mixel_dphy_init(struct phy *phy)
+ 
+ static int mixel_dphy_exit(struct phy *phy)
+ {
+-	phy_write(phy, 0, DPHY_CM);
+-	phy_write(phy, 0, DPHY_CN);
+-	phy_write(phy, 0, DPHY_CO);
++	struct mixel_dphy_priv *priv = phy_get_drvdata(phy);
++
++	phy_write(phy, 0, priv->devdata->reg_cm);
++	phy_write(phy, 0, priv->devdata->reg_cn);
++	phy_write(phy, 0, priv->devdata->reg_co);
+ 
+ 	return 0;
+ }
+@@ -383,9 +471,9 @@ static int mixel_dphy_power_on(struct phy *phy)
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	phy_write(phy, PWR_ON, DPHY_PD_PLL);
+-	ret = regmap_read_poll_timeout(priv->regmap, DPHY_LOCK, locked,
+-				       locked, PLL_LOCK_SLEEP,
++	phy_write(phy, PWR_ON, priv->devdata->reg_pd_pll);
++	ret = regmap_read_poll_timeout(priv->regmap, priv->devdata->reg_lock,
++				       locked, locked, PLL_LOCK_SLEEP,
+ 				       PLL_LOCK_TIMEOUT);
+ 	if (ret < 0) {
+ 		dev_err(&phy->dev, "Could not get DPHY lock (%d)!\n", ret);
+@@ -403,7 +491,7 @@ static int mixel_dphy_power_off(struct phy *phy)
+ {
+ 	struct mixel_dphy_priv *priv = phy_get_drvdata(phy);
+ 
+-	phy_write(phy, PWR_OFF, DPHY_PD_PLL);
++	phy_write(phy, PWR_OFF, priv->devdata->reg_pd_pll);
+ 	phy_write(phy, PWR_OFF, DPHY_PD_DPHY);
+ 
+ 	clk_disable_unprepare(priv->phy_ref_clk);
+@@ -424,6 +512,12 @@ static const struct phy_ops mixel_dphy_phy_ops = {
+ static const struct of_device_id mixel_dphy_of_match[] = {
+ 	{ .compatible = "fsl,imx8mq-mipi-dphy",
+ 	  .data = &mixel_dphy_devdata[MIXEL_IMX8MQ] },
++	{ .compatible = "fsl,imx8qm-mipi-dphy",
++	  .data = &mixel_dphy_devdata[MIXEL_IMX8QM] },
++	{ .compatible = "fsl,imx8qx-mipi-dphy",
++	  .data = &mixel_dphy_devdata[MIXEL_IMX8QX] },
++	{ .compatible = "fsl,imx8ulp-mipi-dphy",
++	  .data = &mixel_dphy_devdata[MIXEL_IMX8ULP] },
+ 	{ /* sentinel */ },
+ };
+ MODULE_DEVICE_TABLE(of, mixel_dphy_of_match);
+diff --git a/drivers/phy/freescale/phy-fsl-imx8-pcie.c b/drivers/phy/freescale/phy-fsl-imx8-pcie.c
+new file mode 100644
+index 000000000..00fb8a7f0
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-imx8-pcie.c
+@@ -0,0 +1,292 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2020 NXP
++ */
++
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/delay.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++
++#define PHY_PLL_LOCK_WAIT_MAX_RETRIES	2000
++#define IMX8MP_PCIE_PHY_FLAG_EXT_OSC	BIT(0)
++
++#define IMX8MP_PCIE_PHY_CMN_REG020	0x80
++#define  PLL_ANA_LPF_R_SEL_FINE_0_4	0x04
++#define IMX8MP_PCIE_PHY_CMN_REG061	0x184
++#define  ANA_PLL_CLK_OUT_TO_EXT_IO_EN	BIT(0)
++#define IMX8MP_PCIE_PHY_CMN_REG062	0x188
++#define  ANA_PLL_CLK_OUT_TO_EXT_IO_SEL	BIT(3)
++#define IMX8MP_PCIE_PHY_CMN_REG063	0x18C
++#define  AUX_PLL_REFCLK_SEL_SYS_PLL	GENMASK(7, 6)
++#define IMX8MP_PCIE_PHY_CMN_REG064	0x190
++#define  ANA_AUX_RX_TX_SEL_TX		BIT(7)
++#define  ANA_AUX_RX_TERM_GND_EN		BIT(3)
++#define  ANA_AUX_TX_TERM		BIT(2)
++#define IMX8MP_PCIE_PHY_CMN_REG065	0x194
++#define  ANA_AUX_RX_TERM		(BIT(7) | BIT(4))
++#define  ANA_AUX_TX_LVL			GENMASK(3, 0)
++#define IMX8MP_PCIE_PHY_CMN_REG076	0x200
++#define  LANE_RESET_MUX_SEL		0x00
++#define IMX8MP_PCIE_PHY_CMN_REG078	0x208
++#define  LANE_TX_DATA_CLK_MUX_SEL	0x00
++
++#define IMX8MP_PCIE_PHY_TRSV_REG001	0x404
++#define  LN0_OVRD_TX_DRV_LVL_G1		0x3F
++#define IMX8MP_PCIE_PHY_TRSV_REG002	0x408
++#define  LN0_OVRD_TX_DRV_LVL_G2		0x1F
++#define IMX8MP_PCIE_PHY_TRSV_REG003	0x40C
++#define  LN0_OVRD_TX_DRV_LVL_G3		0x1F
++#define IMX8MP_PCIE_PHY_TRSV_REG005	0x414
++#define  LN0_OVRD_TX_DRV_PST_LVL_G1	0x2B
++#define IMX8MP_PCIE_PHY_TRSV_REG006	0x418
++#define  LN0_OVRD_TX_DRV_PST_LVL_G2	0xB
++#define IMX8MP_PCIE_PHY_TRSV_REG007	0x41C
++#define  LN0_OVRD_TX_DRV_PST_LVL_G3	0xB
++#define IMX8MP_PCIE_PHY_TRSV_REG009	0x424
++#define  LN0_OVRD_TX_DRV_PRE_LVL_G1	0x15
++#define IMX8MP_PCIE_PHY_TRSV_REG00A	0x428
++#define  LN0_OVRD_TX_DRV_PRE_LVL_G23	0x55
++#define IMX8MP_PCIE_PHY_TRSV_REG059	0x4EC
++#define  LN0_OVRD_RX_CTLE_RS1_G1	0x13
++#define IMX8MP_PCIE_PHY_TRSV_REG060	0x4F0
++#define  LN0_OVRD_RX_CTLE_RS1_G2_G3	0x25
++#define IMX8MP_PCIE_PHY_TRSV_REG069	0x514
++#define  LN0_ANA_RX_CTLE_IBLEED		0x7
++#define IMX8MP_PCIE_PHY_TRSV_REG107	0x5AC
++#define  LN0_OVRD_RX_RTERM_VCM_EN	0xB8
++#define IMX8MP_PCIE_PHY_TRSV_REG109	0x5B4
++#define  LN0_ANA_OVRD_RX_SQHS_DIFN_OC	0xD4
++#define IMX8MP_PCIE_PHY_TRSV_REG110	0x5B8
++#define  LN0_ANA_OVRD_RX_SQHS_DIFP_OC	0x6A
++#define IMX8MP_PCIE_PHY_TRSV_REG158	0x678
++#define  LN0_RX_CDR_FBB_FINE_G1_G2	0x55
++#define IMX8MP_PCIE_PHY_TRSV_REG159	0x67C
++#define  LN0_RX_CDR_FBB_FINE_G3_G4	0x53
++#define IMX8MP_PCIE_PHY_TRSV_REG206	0x738
++#define  LN0_TG_RX_SIGVAL_LBF_DELAY	0x4
++
++static int imx8_pcie_phy_tuned;
++struct imx8_pcie_phy {
++	struct phy *phy;
++	struct clk *clk;
++	void __iomem *base;
++	u32 flags;
++};
++
++static int imx8_pcie_phy_init(struct phy *phy)
++{
++	u32 value, retries = 0;
++	struct imx8_pcie_phy *imx8_phy = phy_get_drvdata(phy);
++
++	/*
++	 * SW workaround for ERR050442 of the iMX865 PCIe.
++	 * Description:
++	 * PCIE PHY can't support GEN3. GEN 1/2 are supported. Some
++	 * buffer structures within the digital implementation in the
++	 * PHY required for GEN3 operation are incorrect. This logic can
++	 * be bypassed (optionally) in GEN 1/2 operation. This same
++	 * implementation bug prevents SW form reading some status bits
++	 * in all PCIe modes.
++	 *
++	 * Workaround:
++	 * SW driver doesn't need to read the PHY status bits for proper
++	 * PCIe operation. The buffer structure can be bypassed to
++	 * completely support GEN1/2 operation. With some SW driver
++	 * workarounds to read status from the PCIe PCS instead of the
++	 * PHY, proper operation can be achieved for GEN1/2. Proper
++	 * operation for GEN3 cannot be achieved with the SW workaround
++	 * since the buffer structure cannot be bypassed in GEN3 mode.
++	 */
++
++	/* wait for pipe0_clk locked by checking status from PCS. */
++	for (retries = 0; retries < PHY_PLL_LOCK_WAIT_MAX_RETRIES;
++	     retries++) {
++		value = readl(imx8_phy->base + 0x8188);
++		if (value == BIT(1))
++			break;
++		udelay(10);
++	}
++
++	if (retries >= PHY_PLL_LOCK_WAIT_MAX_RETRIES) {
++		pr_info("pcie phy pipe clk is not ready\n");
++		return -ETIMEDOUT;
++	}
++
++	return 0;
++}
++
++static int imx8_pcie_phy_cal(struct phy *phy)
++{
++	u32 value;
++	struct imx8_pcie_phy *imx8_phy = phy_get_drvdata(phy);
++
++	/* export clock to ep when internal clock is used as PHY REF clock */
++	if ((imx8_phy->flags & IMX8MP_PCIE_PHY_FLAG_EXT_OSC) == 0) {
++		writel(ANA_PLL_CLK_OUT_TO_EXT_IO_EN,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG061);
++		writel(ANA_PLL_CLK_OUT_TO_EXT_IO_SEL,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG062);
++		writel(AUX_PLL_REFCLK_SEL_SYS_PLL,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG063);
++		value = ANA_AUX_RX_TX_SEL_TX | ANA_AUX_TX_TERM;
++		writel(value | ANA_AUX_RX_TERM_GND_EN,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG064);
++		writel(ANA_AUX_RX_TERM | ANA_AUX_TX_LVL,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG065);
++	}
++
++	/*
++	 * Fine tune the parameters of the PHY, let PCIe link up to GEN3
++	 * between two EVK boards in the EP/RC validation system.
++	 */
++	if (imx8_pcie_phy_tuned) {
++		writel(LN0_OVRD_TX_DRV_LVL_G1,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG001);
++		writel(LN0_OVRD_TX_DRV_LVL_G2,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG002);
++		writel(LN0_OVRD_TX_DRV_LVL_G3,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG003);
++		writel(LN0_OVRD_TX_DRV_PST_LVL_G1,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG005);
++		writel(LN0_OVRD_TX_DRV_PST_LVL_G2,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG006);
++		writel(LN0_OVRD_TX_DRV_PST_LVL_G3,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG007);
++		writel(LN0_OVRD_TX_DRV_PRE_LVL_G1,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG009);
++		writel(LN0_OVRD_TX_DRV_PRE_LVL_G23,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG00A);
++		writel(LN0_OVRD_RX_CTLE_RS1_G1,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG059);
++		writel(LN0_OVRD_RX_CTLE_RS1_G2_G3,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG060);
++		writel(LN0_ANA_RX_CTLE_IBLEED,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG069);
++		writel(LN0_OVRD_RX_RTERM_VCM_EN,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG107);
++		writel(LN0_ANA_OVRD_RX_SQHS_DIFN_OC,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG109);
++		writel(LN0_ANA_OVRD_RX_SQHS_DIFP_OC,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG110);
++		writel(LN0_RX_CDR_FBB_FINE_G1_G2,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG158);
++		writel(LN0_RX_CDR_FBB_FINE_G3_G4,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG159);
++		writel(LN0_TG_RX_SIGVAL_LBF_DELAY,
++		       imx8_phy->base + IMX8MP_PCIE_PHY_TRSV_REG206);
++	}
++
++	writel(PLL_ANA_LPF_R_SEL_FINE_0_4,
++	       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG020);
++	writel(LANE_RESET_MUX_SEL,
++	       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG076);
++	writel(LANE_TX_DATA_CLK_MUX_SEL,
++	       imx8_phy->base + IMX8MP_PCIE_PHY_CMN_REG078);
++
++	return 0;
++}
++
++static int imx8_pcie_phy_power_on(struct phy *phy)
++{
++	struct imx8_pcie_phy *imx8_phy = phy_get_drvdata(phy);
++
++	return clk_prepare_enable(imx8_phy->clk);
++}
++
++static int imx8_pcie_phy_power_off(struct phy *phy)
++{
++	struct imx8_pcie_phy *imx8_phy = phy_get_drvdata(phy);
++
++	clk_disable_unprepare(imx8_phy->clk);
++
++	return 0;
++}
++
++static struct phy_ops imx8_pcie_phy_ops = {
++	.init		= imx8_pcie_phy_init,
++	.calibrate	= imx8_pcie_phy_cal,
++	.power_on	= imx8_pcie_phy_power_on,
++	.power_off	= imx8_pcie_phy_power_off,
++	.owner		= THIS_MODULE,
++};
++
++static int __init imx8_pcie_phy_fine_tune(char *str)
++{
++	if (!strcmp(str, "yes")) {
++		pr_info("i.MX PCIe PHY is fine tuned in EP/RC SYS.\n");
++		imx8_pcie_phy_tuned = 1;
++	}
++	return 1;
++}
++
++__setup("pcie_phy_tuned=", imx8_pcie_phy_fine_tune);
++
++static int imx8_pcie_phy_probe(struct platform_device *pdev)
++{
++	u32 val = 0;
++	struct phy_provider *phy_provider;
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct imx8_pcie_phy *imx8_phy;
++	struct resource *res;
++
++	imx8_phy = devm_kzalloc(dev, sizeof(*imx8_phy), GFP_KERNEL);
++	if (!imx8_phy)
++		return -ENOMEM;
++
++	imx8_phy->flags &= ~IMX8MP_PCIE_PHY_FLAG_EXT_OSC;
++	if (of_property_read_u32(np, "ext_osc", &val) < 0)
++		/*
++		 * Not specify ext_osc, use the external OSC as default
++		 * CLK mode.
++		 */
++		imx8_phy->flags |= IMX8MP_PCIE_PHY_FLAG_EXT_OSC;
++	if (val == 0)
++		imx8_phy->flags &= ~IMX8MP_PCIE_PHY_FLAG_EXT_OSC;
++	else if (val == 1)
++		imx8_phy->flags |= IMX8MP_PCIE_PHY_FLAG_EXT_OSC;
++	else
++		dev_info(dev, "invalid clk mode %d.\n", val);
++
++	imx8_phy->clk = devm_clk_get(dev, "phy");
++	if (IS_ERR(imx8_phy->clk)) {
++		dev_err(dev, "failed to get imx pcie phy clock\n");
++		return PTR_ERR(imx8_phy->clk);
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	imx8_phy->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(imx8_phy->base))
++		return PTR_ERR(imx8_phy->base);
++
++	imx8_phy->phy = devm_phy_create(dev, NULL, &imx8_pcie_phy_ops);
++	if (IS_ERR(imx8_phy->phy))
++		return PTR_ERR(imx8_phy->phy);
++
++	phy_set_drvdata(imx8_phy->phy, imx8_phy);
++
++	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
++
++	return PTR_ERR_OR_ZERO(phy_provider);
++}
++
++static const struct of_device_id imx8_pcie_phy_of_match[] = {
++	{.compatible = "fsl,imx8mp-pcie-phy",},
++	{ },
++};
++MODULE_DEVICE_TABLE(of, imx8_pcie_phy_of_match);
++
++static struct platform_driver imx8_pcie_phy_driver = {
++	.probe	= imx8_pcie_phy_probe,
++	.driver = {
++		.name	= "imx8-pcie-phy",
++		.of_match_table	= imx8_pcie_phy_of_match,
++	}
++};
++module_platform_driver(imx8_pcie_phy_driver);
++
++MODULE_DESCRIPTION("FSL IMX8 PCIE PHY driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/phy/freescale/phy-fsl-imx8mp-lvds.c b/drivers/phy/freescale/phy-fsl-imx8mp-lvds.c
+new file mode 100644
+index 000000000..a2a2c10f2
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-imx8mp-lvds.c
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-2.0+
++
++/*
++ * Copyright 2020,2022 NXP
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++
++#define SPARE_IN(n)		(((n) & 0x7) << 25)
++#define SPARE_IN_MASK		0xe000000
++#define TEST_RANDOM_NUM_EN	BIT(24)
++#define TEST_MUX_SRC(n)		(((n) & 0x3) << 22)
++#define TEST_MUX_SRC_MASK	0xc00000
++#define TEST_EN			BIT(21)
++#define TEST_DIV4_EN		BIT(20)
++#define VBG_ADJ(n)		(((n) & 0x7) << 17)
++#define VBG_ADJ_MASK		0xe0000
++#define SLEW_ADJ(n)		(((n) & 0x7) << 14)
++#define SLEW_ADJ_MASK		0x1c000
++#define CC_ADJ(n)		(((n) & 0x7) << 11)
++#define CC_ADJ_MASK		0x3800
++#define CM_ADJ(n)		(((n) & 0x7) << 8)
++#define CM_ADJ_MASK		0x700
++#define PRE_EMPH_ADJ(n)		(((n) & 0x7) << 5)
++#define PRE_EMPH_ADJ_MASK	0xe0
++#define PRE_EMPH_EN		BIT(4)
++#define HS_EN			BIT(3)
++#define BG_EN			BIT(2)
++#define DISABLE_LVDS		BIT(1)
++#define CH_EN(id)		BIT(id)
++
++enum imx8mp_lvds_phy_devtype {
++	FSL_LVDS_PHY_IMX8MP,
++	FSL_LVDS_PHY_IMX93,
++};
++
++struct imx8mp_lvds_phy_devdata {
++	u32 lvds_ctrl;
++	bool has_disable;
++};
++
++static const struct imx8mp_lvds_phy_devdata imx8mp_lvds_phy_devdata[] = {
++	[FSL_LVDS_PHY_IMX8MP] = {
++		.lvds_ctrl = 0x128,
++		.has_disable = false,
++	},
++	[FSL_LVDS_PHY_IMX93] = {
++		.lvds_ctrl = 0x24,
++		.has_disable = true,
++	},
++};
++
++struct imx8mp_lvds_phy {
++	struct phy *phy;
++	unsigned int id;
++};
++
++struct imx8mp_lvds_phy_priv {
++	struct device *dev;
++	struct regmap *regmap;
++	struct mutex lock;
++	struct clk *apb_clk;
++	struct imx8mp_lvds_phy *phys[2];
++	const struct imx8mp_lvds_phy_devdata *devdata;
++};
++
++static inline unsigned int phy_read(struct phy *phy, unsigned int reg)
++{
++	struct imx8mp_lvds_phy_priv *priv = dev_get_drvdata(phy->dev.parent);
++	unsigned int val;
++
++	regmap_read(priv->regmap, reg, &val);
++
++	return val;
++}
++
++static inline void
++phy_write(struct phy *phy, unsigned int reg, unsigned int value)
++{
++	struct imx8mp_lvds_phy_priv *priv = dev_get_drvdata(phy->dev.parent);
++
++	regmap_write(priv->regmap, reg, value);
++}
++
++static int imx8mp_lvds_phy_init(struct phy *phy)
++{
++	struct imx8mp_lvds_phy_priv *priv = dev_get_drvdata(phy->dev.parent);
++
++	clk_prepare_enable(priv->apb_clk);
++
++	mutex_lock(&priv->lock);
++	phy_write(phy, priv->devdata->lvds_ctrl,
++			CC_ADJ(0x2) | PRE_EMPH_EN | PRE_EMPH_ADJ(0x3));
++	mutex_unlock(&priv->lock);
++
++	clk_disable_unprepare(priv->apb_clk);
++
++	return 0;
++}
++
++static int imx8mp_lvds_phy_power_on(struct phy *phy)
++{
++	struct imx8mp_lvds_phy_priv *priv = dev_get_drvdata(phy->dev.parent);
++	struct imx8mp_lvds_phy *lvds_phy = phy_get_drvdata(phy);
++	unsigned int id = lvds_phy->id;
++	unsigned int val;
++	bool bg_en;
++
++	clk_prepare_enable(priv->apb_clk);
++
++	mutex_lock(&priv->lock);
++	val = phy_read(phy, priv->devdata->lvds_ctrl);
++	bg_en = !!(val & BG_EN);
++	val |= BG_EN;
++	if (priv->devdata->has_disable)
++		val &= ~DISABLE_LVDS;
++	phy_write(phy, priv->devdata->lvds_ctrl, val);
++	mutex_unlock(&priv->lock);
++
++	/* Wait 15us to make sure the bandgap to be stable. */
++	if (!bg_en)
++		usleep_range(15, 20);
++
++	mutex_lock(&priv->lock);
++	val = phy_read(phy, priv->devdata->lvds_ctrl);
++	val |= CH_EN(id);
++	phy_write(phy, priv->devdata->lvds_ctrl, val);
++	mutex_unlock(&priv->lock);
++
++	clk_disable_unprepare(priv->apb_clk);
++
++	/* Wait 5us to ensure the phy be settling. */
++	usleep_range(5, 10);
++
++	return 0;
++}
++
++static int imx8mp_lvds_phy_power_off(struct phy *phy)
++{
++	struct imx8mp_lvds_phy_priv *priv = dev_get_drvdata(phy->dev.parent);
++	struct imx8mp_lvds_phy *lvds_phy = phy_get_drvdata(phy);
++	unsigned int id = lvds_phy->id;
++	unsigned int val;
++
++	clk_prepare_enable(priv->apb_clk);
++
++	mutex_lock(&priv->lock);
++	val = phy_read(phy, priv->devdata->lvds_ctrl);
++	val &= ~BG_EN;
++	phy_write(phy, priv->devdata->lvds_ctrl, val);
++
++	val = phy_read(phy, priv->devdata->lvds_ctrl);
++	val &= ~CH_EN(id);
++	if (priv->devdata->has_disable)
++		val |= DISABLE_LVDS;
++	phy_write(phy, priv->devdata->lvds_ctrl, val);
++	mutex_unlock(&priv->lock);
++
++	clk_disable_unprepare(priv->apb_clk);
++
++	return 0;
++}
++
++static const struct phy_ops imx8mp_lvds_phy_ops = {
++	.init = imx8mp_lvds_phy_init,
++	.power_on = imx8mp_lvds_phy_power_on,
++	.power_off = imx8mp_lvds_phy_power_off,
++	.owner = THIS_MODULE,
++};
++
++static int imx8mp_lvds_phy_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct device_node *child;
++	struct phy_provider *phy_provider;
++	struct imx8mp_lvds_phy_priv *priv;
++	struct imx8mp_lvds_phy *lvds_phy;
++	struct phy *phy;
++	u32 phy_id;
++	int ret;
++
++	if (!np)
++		return -ENODEV;
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	priv->devdata = of_device_get_match_data(dev);
++	if (!priv->devdata)
++		return -EINVAL;
++
++	priv->regmap = syscon_regmap_lookup_by_phandle(np, "gpr");
++	if (IS_ERR(priv->regmap)) {
++		dev_err(dev, "failed to get regmap\n");
++		return PTR_ERR(priv->regmap);
++	}
++
++	priv->dev = dev;
++
++	priv->apb_clk = devm_clk_get(dev, "apb");
++	if (IS_ERR(priv->apb_clk)) {
++		dev_err(dev, "cannot get apb clock\n");
++		return PTR_ERR(priv->apb_clk);
++	}
++
++	mutex_init(&priv->lock);
++	dev_set_drvdata(dev, priv);
++
++	pm_runtime_enable(dev);
++
++	for_each_available_child_of_node(np, child) {
++		if (of_property_read_u32(child, "reg", &phy_id)) {
++			dev_err(dev, "missing reg property in node %s\n",
++				child->name);
++			ret = -EINVAL;
++			goto put_child;
++		}
++
++		if (phy_id >= ARRAY_SIZE(priv->phys)) {
++			dev_err(dev, "invalid reg in node %s\n", child->name);
++			ret = -EINVAL;
++			goto put_child;
++		}
++
++		if (priv->phys[phy_id]) {
++			dev_err(dev, "duplicated phy id: %u\n", phy_id);
++			ret = -EINVAL;
++			goto put_child;
++		}
++
++		lvds_phy = devm_kzalloc(dev, sizeof(*lvds_phy), GFP_KERNEL);
++		if (!lvds_phy) {
++			ret = -ENOMEM;
++			goto put_child;
++		}
++
++		phy = devm_phy_create(dev, child, &imx8mp_lvds_phy_ops);
++		if (IS_ERR(phy)) {
++			dev_err(dev, "failed to create phy\n");
++			ret = PTR_ERR(phy);
++			goto put_child;
++		}
++
++		lvds_phy->phy = phy;
++		lvds_phy->id = phy_id;
++		priv->phys[phy_id] = lvds_phy;
++
++		phy_set_drvdata(phy, lvds_phy);
++	}
++
++	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
++	if (IS_ERR(phy_provider)) {
++		pm_runtime_disable(dev);
++		return PTR_ERR(phy_provider);
++	}
++
++	return 0;
++
++put_child:
++	of_node_put(child);
++	pm_runtime_disable(dev);
++	return ret;
++}
++
++static int imx8mp_lvds_phy_remove(struct platform_device *pdev)
++{
++	pm_runtime_disable(&pdev->dev);
++
++	return 0;
++}
++
++static const struct of_device_id imx8mp_lvds_phy_of_match[] = {
++	{ .compatible = "fsl,imx8mp-lvds-phy",
++	  .data = &imx8mp_lvds_phy_devdata[FSL_LVDS_PHY_IMX8MP] },
++	{ .compatible = "fsl,imx93-lvds-phy",
++	  .data = &imx8mp_lvds_phy_devdata[FSL_LVDS_PHY_IMX93] },
++	{}
++};
++MODULE_DEVICE_TABLE(of, imx8mp_lvds_phy_of_match);
++
++static struct platform_driver imx8mp_lvds_phy_driver = {
++	.probe	= imx8mp_lvds_phy_probe,
++	.remove = imx8mp_lvds_phy_remove,
++	.driver = {
++		.name = "imx8mp-lvds-phy",
++		.of_match_table	= imx8mp_lvds_phy_of_match,
++	}
++};
++module_platform_driver(imx8mp_lvds_phy_driver);
++
++MODULE_AUTHOR("NXP Semiconductor");
++MODULE_DESCRIPTION("i.MX8MP LVDS PHY driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/phy/freescale/phy-fsl-imx93-mipi-dphy.c b/drivers/phy/freescale/phy-fsl-imx93-mipi-dphy.c
+new file mode 100644
+index 000000000..7e517bd25
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-imx93-mipi-dphy.c
+@@ -0,0 +1,583 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2022 NXP
++ */
++
++#include <linux/bitfield.h>
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/math.h>
++#include <linux/mfd/syscon.h>
++#include <linux/minmax.h>
++#include <linux/module.h>
++#include <linux/of_platform.h>
++#include <linux/phy/phy.h>
++#include <linux/phy/phy-mipi-dphy.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++
++/* DPHY registers */
++#define DSI_REG			0x4c
++#define  CFGCLKFREQRANGE_MASK	GENMASK(5, 0)
++#define  CFGCLKFREQRANGE(x)	FIELD_PREP(CFGCLKFREQRANGE_MASK, (x))
++#define  CLKSEL_MASK		GENMASK(7, 6)
++#define  CLKSEL_STOP		FIELD_PREP(CLKSEL_MASK, 0)
++#define  CLKSEL_GEN		FIELD_PREP(CLKSEL_MASK, 1)
++#define  CLKSEL_EXT		FIELD_PREP(CLKSEL_MASK, 2)
++#define  HSFREQRANGE_MASK	GENMASK(14, 8)
++#define  HSFREQRANGE(x)		FIELD_PREP(HSFREQRANGE_MASK, (x))
++#define  UPDATE_PLL		BIT(17)
++#define  SHADOW_CLR		BIT(18)
++#define  CLK_EXT		BIT(19)
++
++#define DSI_WRITE_REG0		0x50
++#define  M_MASK			GENMASK(9, 0)
++#define  M(x)			FIELD_PREP(M_MASK, ((x) - 2))
++#define  N_MASK			GENMASK(13, 10)
++#define  N(x)			FIELD_PREP(N_MASK, ((x) - 1))
++#define  VCO_CTRL_MASK		GENMASK(19, 14)
++#define  VCO_CTRL(x)		FIELD_PREP(VCO_CTRL_MASK, (x))
++#define  PROP_CTRL_MASK		GENMASK(25, 20)
++#define  PROP_CTRL(x)		FIELD_PREP(PROP_CTRL_MASK, (x))
++#define  INT_CTRL_MASK		GENMASK(31, 26)
++#define  INT_CTRL(x)		FIELD_PREP(INT_CTRL_MASK, (x))
++
++#define DSI_WRITE_REG1		0x54
++#define  GMP_CTRL_MASK		GENMASK(1, 0)
++#define  GMP_CTRL(x)		FIELD_PREP(GMP_CTRL_MASK, (x))
++#define  CPBIAS_CTRL_MASK	GENMASK(8, 2)
++#define  CPBIAS_CTRL(x)		FIELD_PREP(CPBIAS_CTRL_MASK, (x))
++#define  PLL_SHADOW_CTRL	BIT(9)
++
++#define MHZ(x)			((x) * 1000000UL)
++
++#define REF_CLK_RATE_MAX	MHZ(64)
++#define REF_CLK_RATE_MIN	MHZ(2)
++#define FOUT_MAX		MHZ(1250)
++#define FOUT_MIN		MHZ(40)
++#define FVCO_DIV_FACTOR		MHZ(80)
++
++#define MBPS(x)			((x) * 1000000UL)
++
++#define DATA_RATE_MAX_SPEED	MBPS(2500)
++#define DATA_RATE_MIN_SPEED	MBPS(80)
++
++#define M_MAX			625UL
++#define M_MIN			64UL
++
++#define N_MAX			16U
++#define N_MIN			1U
++
++struct dw_dphy_cfg {
++	u32 m;	/* PLL Feedback Multiplication Ratio */
++	u32 n;	/* PLL Input Frequency Division Ratio */
++};
++
++struct dw_dphy_priv {
++	struct regmap *regmap;
++	struct clk *ref_clk;
++	struct clk *cfg_clk;
++	unsigned long ref_clk_rate;
++};
++
++struct dw_dphy_vco_prop {
++	unsigned int max_fout;
++	u8 vco_cntl;
++	u8 prop_cntl;
++};
++
++struct dw_dphy_hsfreqrange {
++	unsigned int max_mbps;
++	u8 hsfreqrange;
++};
++
++/* Databook Table 3-13 Charge-pump Programmability */
++static const struct dw_dphy_vco_prop vco_prop_map[] = {
++	{   55, 0x3f, 0x0d },
++	{   82, 0x37, 0x0d },
++	{  110, 0x2f, 0x0d },
++	{  165, 0x27, 0x0d },
++	{  220, 0x1f, 0x0d },
++	{  330, 0x17, 0x0d },
++	{  440, 0x0f, 0x0d },
++	{  660, 0x07, 0x0d },
++	{ 1149, 0x03, 0x0d },
++	{ 1152, 0x01, 0x0d },
++	{ 1250, 0x01, 0x0e },
++};
++
++/* Databook Table 5-7 Frequency Ranges and Defaults */
++static const struct dw_dphy_hsfreqrange hsfreqrange_map[] = {
++	{   89, 0x00 },
++	{   99, 0x10 },
++	{  109, 0x20 },
++	{  119, 0x30 },
++	{  129, 0x01 },
++	{  139, 0x11 },
++	{  149, 0x21 },
++	{  159, 0x31 },
++	{  169, 0x02 },
++	{  179, 0x12 },
++	{  189, 0x22 },
++	{  204, 0x32 },
++	{  219, 0x03 },
++	{  234, 0x13 },
++	{  249, 0x23 },
++	{  274, 0x33 },
++	{  299, 0x04 },
++	{  324, 0x14 },
++	{  349, 0x25 },
++	{  399, 0x35 },
++	{  449, 0x05 },
++	{  499, 0x16 },
++	{  549, 0x26 },
++	{  599, 0x37 },
++	{  649, 0x07 },
++	{  699, 0x18 },
++	{  749, 0x28 },
++	{  799, 0x39 },
++	{  849, 0x09 },
++	{  899, 0x19 },
++	{  949, 0x29 },
++	{  999, 0x3a },
++	{ 1049, 0x0a },
++	{ 1099, 0x1a },
++	{ 1149, 0x2a },
++	{ 1199, 0x3b },
++	{ 1249, 0x0b },
++	{ 1299, 0x1b },
++	{ 1349, 0x2b },
++	{ 1399, 0x3c },
++	{ 1449, 0x0c },
++	{ 1499, 0x1c },
++	{ 1549, 0x2c },
++	{ 1599, 0x3d },
++	{ 1649, 0x0d },
++	{ 1699, 0x1d },
++	{ 1749, 0x2e },
++	{ 1799, 0x3e },
++	{ 1849, 0x0e },
++	{ 1899, 0x1e },
++	{ 1949, 0x2f },
++	{ 1999, 0x3f },
++	{ 2049, 0x0f },
++	{ 2099, 0x40 },
++	{ 2149, 0x41 },
++	{ 2199, 0x42 },
++	{ 2249, 0x43 },
++	{ 2299, 0x44 },
++	{ 2349, 0x45 },
++	{ 2399, 0x46 },
++	{ 2449, 0x47 },
++	{ 2499, 0x48 },
++	{ 2500, 0x49 },
++};
++
++static int phy_write(struct phy *phy, u32 value, unsigned int reg)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++	int ret;
++
++	ret = regmap_write(priv->regmap, reg, value);
++	if (ret < 0)
++		dev_err(&phy->dev, "failed to write reg %u: %d\n", reg, ret);
++	return ret;
++}
++
++static inline unsigned long data_rate_to_fout(unsigned long data_rate)
++{
++	/* Fout is half of data rate */
++	return data_rate / 2;
++}
++
++static int
++dw_dphy_config_from_opts(struct phy *phy,
++			 struct phy_configure_opts_mipi_dphy *dphy_opts,
++			 struct dw_dphy_cfg *cfg)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++	unsigned long fin = priv->ref_clk_rate;
++	unsigned long fout;
++	unsigned long best_fout = 0;
++	unsigned int fvco_div;
++	unsigned int min_n, max_n, n, best_n;
++	unsigned long m, best_m;
++	unsigned long min_delta = ULONG_MAX;
++	unsigned long tmp, delta;
++
++	if (dphy_opts->hs_clk_rate < DATA_RATE_MIN_SPEED ||
++	    dphy_opts->hs_clk_rate > DATA_RATE_MAX_SPEED) {
++		dev_dbg(&phy->dev, "invalid data rate per lane: %lu\n",
++			dphy_opts->hs_clk_rate);
++		return -EINVAL;
++	}
++
++	fout = data_rate_to_fout(dphy_opts->hs_clk_rate);
++
++	/* Fout = Fvco / Fvco_div = (Fin * M) / (Fvco_div * N) */
++	fvco_div = 8UL / min(DIV_ROUND_UP(fout, FVCO_DIV_FACTOR), 8UL);
++
++	/* limitation: 2MHz <= Fin / N <= 8MHz */
++	min_n = DIV_ROUND_UP(fin, MHZ(8));
++	max_n = DIV_ROUND_DOWN_ULL(fin, MHZ(2));
++
++	/* clamp possible N(s) */
++	min_n = clamp(min_n, N_MIN, N_MAX);
++	max_n = clamp(max_n, N_MIN, N_MAX);
++
++	dev_dbg(&phy->dev, "Fout = %lu, Fvco_div = %u, n_range = [%u, %u]\n",
++		fout, fvco_div, min_n, max_n);
++
++	for (n = min_n; n <= max_n; n++) {
++		/* M = (Fout * N * Fvco_div) / Fin */
++		tmp = fout * n * fvco_div;
++		m = DIV_ROUND_CLOSEST(tmp, fin);
++
++		/* check M range */
++		if (m < M_MIN || m > M_MAX)
++			continue;
++
++		/* calculate temporary Fout */
++		tmp = m * fin;
++		do_div(tmp, n * fvco_div);
++		if (tmp < FOUT_MIN || tmp > FOUT_MAX)
++			continue;
++
++		delta = abs(fout - tmp);
++		if (delta < min_delta) {
++			best_n = n;
++			best_m = m;
++			min_delta = delta;
++			best_fout = tmp;
++		}
++	}
++
++	if (best_fout) {
++		cfg->m = best_m;
++		cfg->n = best_n;
++		dphy_opts->hs_clk_rate = best_fout * 2;
++		dev_dbg(&phy->dev, "best Fout = %lu, m = %u, n = %u\n",
++			best_fout, cfg->m, cfg->n);
++	} else {
++		dev_dbg(&phy->dev, "failed to find best Fout\n");
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static void dw_dphy_clear_shadow(struct phy *phy)
++{
++	/* Select clock generation first. */
++	phy_write(phy, CLKSEL_GEN, DSI_REG);
++
++	/* Clear shadow after clock selection is done a while. */
++	usleep_range(1, 2);
++	phy_write(phy, CLKSEL_GEN | SHADOW_CLR, DSI_REG);
++
++	/*
++	 * A minimum pulse of 5ns on shadow_clear signal,
++	 * according to Databook Figure 3-3 Initialization Timing Diagram.
++	 */
++	usleep_range(1, 2);
++	phy_write(phy, CLKSEL_GEN, DSI_REG);
++}
++
++static u32 dw_dphy_get_cfgclkrange(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++
++	return (clk_get_rate(priv->cfg_clk) / MHZ(1) - 17) * 4;
++}
++
++static u8
++dw_dphy_get_hsfreqrange(struct phy_configure_opts_mipi_dphy *dphy_opts)
++{
++	unsigned int mbps = dphy_opts->hs_clk_rate / MHZ(1);
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(hsfreqrange_map); i++)
++		if (mbps <= hsfreqrange_map[i].max_mbps)
++			return hsfreqrange_map[i].hsfreqrange;
++
++	return 0;
++}
++
++static u8 dw_dphy_get_vco(struct phy_configure_opts_mipi_dphy *dphy_opts)
++{
++	unsigned int fout = data_rate_to_fout(dphy_opts->hs_clk_rate) / MHZ(1);
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(vco_prop_map); i++)
++		if (fout <= vco_prop_map[i].max_fout)
++			return vco_prop_map[i].vco_cntl;
++
++	return 0;
++}
++
++static u8 dw_dphy_get_prop(struct phy_configure_opts_mipi_dphy *dphy_opts)
++{
++	unsigned int fout = data_rate_to_fout(dphy_opts->hs_clk_rate) / MHZ(1);
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(vco_prop_map); i++)
++		if (fout <= vco_prop_map[i].max_fout)
++			return vco_prop_map[i].prop_cntl;
++
++	return 0;
++}
++
++static int dw_dphy_configure(struct phy *phy, union phy_configure_opts *opts)
++{
++	struct dw_dphy_cfg cfg = { 0 };
++	u32 val;
++	int ret;
++
++	ret = dw_dphy_config_from_opts(phy, &opts->mipi_dphy, &cfg);
++	if (ret)
++		return ret;
++
++	dw_dphy_clear_shadow(phy);
++
++	/* reg */
++	val = CLKSEL_GEN |
++	      CFGCLKFREQRANGE(dw_dphy_get_cfgclkrange(phy)) |
++	      HSFREQRANGE(dw_dphy_get_hsfreqrange(&opts->mipi_dphy));
++	phy_write(phy, val, DSI_REG);
++
++	/* w_reg0 */
++	val = M(cfg.m) | N(cfg.n) | INT_CTRL(0) |
++	      VCO_CTRL(dw_dphy_get_vco(&opts->mipi_dphy)) |
++	      PROP_CTRL(dw_dphy_get_prop(&opts->mipi_dphy));
++	phy_write(phy, val, DSI_WRITE_REG0);
++
++	/* w_reg1 */
++	phy_write(phy, GMP_CTRL(1) | CPBIAS_CTRL(0x10), DSI_WRITE_REG1);
++
++	return 0;
++}
++
++static int dw_dphy_validate(struct phy *phy, enum phy_mode mode, int submode,
++			    union phy_configure_opts *opts)
++{
++	struct dw_dphy_cfg cfg = { 0 };
++
++	if (mode != PHY_MODE_MIPI_DPHY)
++		return -EINVAL;
++
++	return dw_dphy_config_from_opts(phy, &opts->mipi_dphy, &cfg);
++}
++
++static void dw_dphy_clear_reg(struct phy *phy)
++{
++	phy_write(phy, 0, DSI_REG);
++	phy_write(phy, 0, DSI_WRITE_REG0);
++	phy_write(phy, 0, DSI_WRITE_REG1);
++}
++
++static int dw_dphy_init(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++	int ret;
++
++	ret = pm_runtime_get_sync(&phy->dev);
++	if (ret < 0) {
++		dev_err(&phy->dev, "failed to get PM runtime: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(priv->cfg_clk);
++	if (ret < 0) {
++		pm_runtime_put(&phy->dev);
++		dev_err(&phy->dev, "failed to enable config clock: %d\n", ret);
++		return ret;
++	}
++
++	dw_dphy_clear_reg(phy);
++
++	return 0;
++}
++
++static int dw_dphy_exit(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++
++	dw_dphy_clear_reg(phy);
++	clk_disable_unprepare(priv->cfg_clk);
++	pm_runtime_put(&phy->dev);
++
++	return 0;
++}
++
++static int dw_dphy_update_pll(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++	int ret;
++
++	ret = regmap_update_bits(priv->regmap, DSI_REG, UPDATE_PLL, UPDATE_PLL);
++	if (ret < 0) {
++		dev_err(&phy->dev, "failed to set UPDATE_PLL: %d\n", ret);
++		return ret;
++	}
++
++	/*
++	 * The updatepll signal should be asserted for a minimum of four clkin
++	 * cycles, according to Databook Figure 3-3 Initialization Timing
++	 * Diagram.
++	 */
++	usleep_range(3, 10);
++
++	ret = regmap_update_bits(priv->regmap, DSI_REG, UPDATE_PLL, 0);
++	if (ret < 0) {
++		dev_err(&phy->dev, "failed to clear UPDATE_PLL: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int dw_dphy_power_on(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++	struct device *dev = &phy->dev;
++	int ret;
++
++	ret = clk_prepare_enable(priv->ref_clk);
++	if (ret < 0) {
++		dev_err(dev, "failed to enable ref clock: %d\n", ret);
++		return ret;
++	}
++
++	/*
++	 * At least 10 refclk cycles are required before updatePLL assertion,
++	 * according to Databook Figure 3-3 Initialization Timing Diagram.
++	 */
++	usleep_range(5, 10);
++
++	ret = dw_dphy_update_pll(phy);
++	if (ret < 0) {
++		clk_disable_unprepare(priv->ref_clk);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int dw_dphy_power_off(struct phy *phy)
++{
++	struct dw_dphy_priv *priv = phy_get_drvdata(phy);
++
++	dw_dphy_clear_reg(phy);
++	clk_disable_unprepare(priv->ref_clk);
++
++	return 0;
++}
++
++static const struct phy_ops dw_dphy_phy_ops = {
++	.init = dw_dphy_init,
++	.exit = dw_dphy_exit,
++	.power_on = dw_dphy_power_on,
++	.power_off = dw_dphy_power_off,
++	.configure = dw_dphy_configure,
++	.validate = dw_dphy_validate,
++	.owner = THIS_MODULE,
++};
++
++static const struct of_device_id dw_dphy_of_match[] = {
++	{ .compatible = "fsl,imx93-mipi-dphy" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, dw_dphy_of_match);
++
++static int dw_dphy_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct phy_provider *phy_provider;
++	struct dw_dphy_priv *priv;
++	struct phy *phy;
++	int ret;
++
++	if (!np)
++		return -ENODEV;
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	priv->regmap = syscon_node_to_regmap(np->parent);
++	if (IS_ERR(priv->regmap)) {
++		ret = PTR_ERR(priv->regmap);
++		dev_err_probe(dev, ret, "failed to get regmap\n");
++		return ret;
++	}
++
++	priv->cfg_clk = devm_clk_get(dev, "phy_cfg");
++	if (IS_ERR(priv->cfg_clk)) {
++		ret = PTR_ERR(priv->cfg_clk);
++		dev_err_probe(dev, ret, "failed to get config clock\n");
++		return ret;
++	}
++
++	priv->ref_clk = devm_clk_get(dev, "phy_ref");
++	if (IS_ERR(priv->ref_clk)) {
++		ret = PTR_ERR(priv->ref_clk);
++		dev_err_probe(dev, ret, "failed to get ref clock\n");
++		return ret;
++	}
++
++	priv->ref_clk_rate = clk_get_rate(priv->ref_clk);
++	if (priv->ref_clk_rate < REF_CLK_RATE_MIN ||
++	    priv->ref_clk_rate > REF_CLK_RATE_MAX) {
++		dev_err(dev, "invalid ref clock rate %lu\n",
++			priv->ref_clk_rate);
++		return -EINVAL;
++	}
++	dev_dbg(dev, "ref clock rate: %lu\n", priv->ref_clk_rate);
++
++	dev_set_drvdata(dev, priv);
++
++	pm_runtime_enable(dev);
++
++	phy = devm_phy_create(dev, np, &dw_dphy_phy_ops);
++	if (IS_ERR(phy)) {
++		ret = PTR_ERR(phy);
++		dev_err(dev, "failed to create PHY %ld\n", PTR_ERR(phy));
++		goto err;
++	}
++	phy_set_drvdata(phy, priv);
++
++	phy_provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
++	if (IS_ERR(phy_provider)) {
++		ret = PTR_ERR(phy_provider);
++		dev_err(dev, "failed to register PHY provider: %d\n", ret);
++		goto err;
++	}
++
++	return 0;
++err:
++	pm_runtime_disable(dev);
++	return ret;
++}
++
++static int dw_dphy_remove(struct platform_device *pdev)
++{
++	pm_runtime_disable(&pdev->dev);
++
++	return 0;
++}
++
++static struct platform_driver dw_dphy_driver = {
++	.probe	= dw_dphy_probe,
++	.remove	= dw_dphy_remove,
++	.driver = {
++		.name = "dw-mipi-dphy",
++		.of_match_table	= dw_dphy_of_match,
++	}
++};
++module_platform_driver(dw_dphy_driver);
++
++MODULE_DESCRIPTION("Freescale i.MX93 Synopsys DesignWare MIPI DPHY driver");
++MODULE_AUTHOR("NXP Semiconductor");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/phy/freescale/phy-fsl-lynx-28g.c b/drivers/phy/freescale/phy-fsl-lynx-28g.c
+new file mode 100644
+index 000000000..a2b060e9e
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-lynx-28g.c
+@@ -0,0 +1,624 @@
++// SPDX-License-Identifier: GPL-2.0+
++/* Copyright (c) 2021-2022 NXP. */
++
++#include <linux/module.h>
++#include <linux/phy.h>
++#include <linux/phy/phy.h>
++#include <linux/platform_device.h>
++#include <linux/workqueue.h>
++#include <linux/workqueue.h>
++
++#define LYNX_28G_NUM_LANE			8
++#define LYNX_28G_NUM_PLL			2
++
++/* General registers per SerDes block */
++#define LYNX_28G_PCC8				0x10a0
++#define LYNX_28G_PCC8_SGMII			0x1
++#define LYNX_28G_PCC8_SGMII_DIS			0x0
++
++#define LYNX_28G_PCCC				0x10b0
++#define LYNX_28G_PCCC_10GBASER			0x9
++#define LYNX_28G_PCCC_USXGMII			0x1
++#define LYNX_28G_PCCC_SXGMII_DIS		0x0
++
++#define LYNX_28G_LNa_PCC_OFFSET(lane)		(4 * (LYNX_28G_NUM_LANE - (lane->id) - 1))
++
++/* Per PLL registers */
++#define LYNX_28G_PLLnRSTCTL(pll)		(0x400 + (pll) * 0x100 + 0x0)
++#define LYNX_28G_PLLnRSTCTL_DIS(rstctl)		(((rstctl) & BIT(24)) >> 24)
++#define LYNX_28G_PLLnRSTCTL_LOCK(rstctl)	(((rstctl) & BIT(23)) >> 23)
++
++#define LYNX_28G_PLLnCR0(pll)			(0x400 + (pll) * 0x100 + 0x4)
++#define LYNX_28G_PLLnCR0_REFCLK_SEL(cr0)	(((cr0) & GENMASK(20, 16)))
++#define LYNX_28G_PLLnCR0_REFCLK_SEL_100MHZ	0x0
++#define LYNX_28G_PLLnCR0_REFCLK_SEL_125MHZ	0x10000
++#define LYNX_28G_PLLnCR0_REFCLK_SEL_156MHZ	0x20000
++#define LYNX_28G_PLLnCR0_REFCLK_SEL_150MHZ	0x30000
++#define LYNX_28G_PLLnCR0_REFCLK_SEL_161MHZ	0x40000
++
++#define LYNX_28G_PLLnCR1(pll)			(0x400 + (pll) * 0x100 + 0x8)
++#define LYNX_28G_PLLnCR1_FRATE_SEL(cr1)		(((cr1) & GENMASK(28, 24)))
++#define LYNX_28G_PLLnCR1_FRATE_5G_10GVCO	0x0
++#define LYNX_28G_PLLnCR1_FRATE_5G_25GVCO	0x10000000
++#define LYNX_28G_PLLnCR1_FRATE_10G_20GVCO	0x6000000
++
++/* Per SerDes lane registers */
++/* Lane a General Control Register */
++#define LYNX_28G_LNaGCR0(lane)			(0x800 + (lane) * 0x100 + 0x0)
++#define LYNX_28G_LNaGCR0_PROTO_SEL_MSK		GENMASK(7, 3)
++#define LYNX_28G_LNaGCR0_PROTO_SEL_SGMII	0x8
++#define LYNX_28G_LNaGCR0_PROTO_SEL_XFI		0x50
++#define LYNX_28G_LNaGCR0_IF_WIDTH_MSK		GENMASK(2, 0)
++#define LYNX_28G_LNaGCR0_IF_WIDTH_10_BIT	0x0
++#define LYNX_28G_LNaGCR0_IF_WIDTH_20_BIT	0x2
++
++/* Lane a Tx Reset Control Register */
++#define LYNX_28G_LNaTRSTCTL(lane)		(0x800 + (lane) * 0x100 + 0x20)
++#define LYNX_28G_LNaTRSTCTL_HLT_REQ		BIT(27)
++#define LYNX_28G_LNaTRSTCTL_RST_DONE		BIT(30)
++#define LYNX_28G_LNaTRSTCTL_RST_REQ		BIT(31)
++
++/* Lane a Tx General Control Register */
++#define LYNX_28G_LNaTGCR0(lane)			(0x800 + (lane) * 0x100 + 0x24)
++#define LYNX_28G_LNaTGCR0_USE_PLLF		0x0
++#define LYNX_28G_LNaTGCR0_USE_PLLS		BIT(28)
++#define LYNX_28G_LNaTGCR0_USE_PLL_MSK		BIT(28)
++#define LYNX_28G_LNaTGCR0_N_RATE_FULL		0x0
++#define LYNX_28G_LNaTGCR0_N_RATE_HALF		0x1000000
++#define LYNX_28G_LNaTGCR0_N_RATE_QUARTER	0x2000000
++#define LYNX_28G_LNaTGCR0_N_RATE_MSK		GENMASK(26, 24)
++
++#define LYNX_28G_LNaTECR0(lane)			(0x800 + (lane) * 0x100 + 0x30)
++
++/* Lane a Rx Reset Control Register */
++#define LYNX_28G_LNaRRSTCTL(lane)		(0x800 + (lane) * 0x100 + 0x40)
++#define LYNX_28G_LNaRRSTCTL_HLT_REQ		BIT(27)
++#define LYNX_28G_LNaRRSTCTL_RST_DONE		BIT(30)
++#define LYNX_28G_LNaRRSTCTL_RST_REQ		BIT(31)
++#define LYNX_28G_LNaRRSTCTL_CDR_LOCK		BIT(12)
++
++/* Lane a Rx General Control Register */
++#define LYNX_28G_LNaRGCR0(lane)			(0x800 + (lane) * 0x100 + 0x44)
++#define LYNX_28G_LNaRGCR0_USE_PLLF		0x0
++#define LYNX_28G_LNaRGCR0_USE_PLLS		BIT(28)
++#define LYNX_28G_LNaRGCR0_USE_PLL_MSK		BIT(28)
++#define LYNX_28G_LNaRGCR0_N_RATE_MSK		GENMASK(26, 24)
++#define LYNX_28G_LNaRGCR0_N_RATE_FULL		0x0
++#define LYNX_28G_LNaRGCR0_N_RATE_HALF		0x1000000
++#define LYNX_28G_LNaRGCR0_N_RATE_QUARTER	0x2000000
++#define LYNX_28G_LNaRGCR0_N_RATE_MSK		GENMASK(26, 24)
++
++#define LYNX_28G_LNaRGCR1(lane)			(0x800 + (lane) * 0x100 + 0x48)
++
++#define LYNX_28G_LNaRECR0(lane)			(0x800 + (lane) * 0x100 + 0x50)
++#define LYNX_28G_LNaRECR1(lane)			(0x800 + (lane) * 0x100 + 0x54)
++#define LYNX_28G_LNaRECR2(lane)			(0x800 + (lane) * 0x100 + 0x58)
++
++#define LYNX_28G_LNaRSCCR0(lane)		(0x800 + (lane) * 0x100 + 0x74)
++
++#define LYNX_28G_LNaPSS(lane)			(0x1000 + (lane) * 0x4)
++#define LYNX_28G_LNaPSS_TYPE(pss)		(((pss) & GENMASK(30, 24)) >> 24)
++#define LYNX_28G_LNaPSS_TYPE_SGMII		0x4
++#define LYNX_28G_LNaPSS_TYPE_XFI		0x28
++
++#define LYNX_28G_SGMIIaCR1(lane)		(0x1804 + (lane) * 0x10)
++#define LYNX_28G_SGMIIaCR1_SGPCS_EN		BIT(11)
++#define LYNX_28G_SGMIIaCR1_SGPCS_DIS		0x0
++#define LYNX_28G_SGMIIaCR1_SGPCS_MSK		BIT(11)
++
++struct lynx_28g_priv;
++
++struct lynx_28g_pll {
++	struct lynx_28g_priv *priv;
++	u32 rstctl, cr0, cr1;
++	int id;
++	DECLARE_PHY_INTERFACE_MASK(supported);
++};
++
++struct lynx_28g_lane {
++	struct lynx_28g_priv *priv;
++	struct phy *phy;
++	bool powered_up;
++	bool init;
++	unsigned int id;
++	phy_interface_t interface;
++};
++
++struct lynx_28g_priv {
++	void __iomem *base;
++	struct device *dev;
++	struct lynx_28g_pll pll[LYNX_28G_NUM_PLL];
++	struct lynx_28g_lane lane[LYNX_28G_NUM_LANE];
++
++	struct delayed_work cdr_check;
++};
++
++static void lynx_28g_rmw(struct lynx_28g_priv *priv, unsigned long off,
++			 u32 val, u32 mask)
++{
++	void __iomem *reg = priv->base + off;
++	u32 orig, tmp;
++
++	orig = ioread32(reg);
++	tmp = orig & ~mask;
++	tmp |= val;
++	iowrite32(tmp, reg);
++}
++
++#define lynx_28g_lane_rmw(lane, reg, val, mask)	\
++	lynx_28g_rmw((lane)->priv, LYNX_28G_##reg(lane->id), \
++		     LYNX_28G_##reg##_##val, LYNX_28G_##reg##_##mask)
++#define lynx_28g_lane_read(lane, reg)			\
++	ioread32((lane)->priv->base + LYNX_28G_##reg((lane)->id))
++#define lynx_28g_pll_read(pll, reg)			\
++	ioread32((pll)->priv->base + LYNX_28G_##reg((pll)->id))
++
++static bool lynx_28g_supports_interface(struct lynx_28g_priv *priv, int intf)
++{
++	int i;
++
++	for (i = 0; i < LYNX_28G_NUM_PLL; i++) {
++		if (LYNX_28G_PLLnRSTCTL_DIS(priv->pll[i].rstctl))
++			continue;
++
++		if (test_bit(intf, priv->pll[i].supported))
++			return true;
++	}
++
++	return false;
++}
++
++static struct lynx_28g_pll *lynx_28g_pll_get(struct lynx_28g_priv *priv,
++					     phy_interface_t intf)
++{
++	struct lynx_28g_pll *pll;
++	int i;
++
++	for (i = 0; i < LYNX_28G_NUM_PLL; i++) {
++		pll = &priv->pll[i];
++
++		if (LYNX_28G_PLLnRSTCTL_DIS(pll->rstctl))
++			continue;
++
++		if (test_bit(intf, pll->supported))
++			return pll;
++	}
++
++	return NULL;
++}
++
++static void lynx_28g_lane_set_nrate(struct lynx_28g_lane *lane,
++				    struct lynx_28g_pll *pll,
++				    phy_interface_t intf)
++{
++	switch (LYNX_28G_PLLnCR1_FRATE_SEL(pll->cr1)) {
++	case LYNX_28G_PLLnCR1_FRATE_5G_10GVCO:
++	case LYNX_28G_PLLnCR1_FRATE_5G_25GVCO:
++		switch (intf) {
++		case PHY_INTERFACE_MODE_SGMII:
++		case PHY_INTERFACE_MODE_1000BASEX:
++			lynx_28g_lane_rmw(lane, LNaTGCR0, N_RATE_QUARTER, N_RATE_MSK);
++			lynx_28g_lane_rmw(lane, LNaRGCR0, N_RATE_QUARTER, N_RATE_MSK);
++			break;
++		default:
++			break;
++		}
++		break;
++	case LYNX_28G_PLLnCR1_FRATE_10G_20GVCO:
++		switch (intf) {
++		case PHY_INTERFACE_MODE_10GBASER:
++		case PHY_INTERFACE_MODE_USXGMII:
++			lynx_28g_lane_rmw(lane, LNaTGCR0, N_RATE_FULL, N_RATE_MSK);
++			lynx_28g_lane_rmw(lane, LNaRGCR0, N_RATE_FULL, N_RATE_MSK);
++			break;
++		default:
++			break;
++		}
++		break;
++	default:
++		break;
++	}
++}
++
++static void lynx_28g_lane_set_pll(struct lynx_28g_lane *lane,
++				  struct lynx_28g_pll *pll)
++{
++	if (pll->id == 0) {
++		lynx_28g_lane_rmw(lane, LNaTGCR0, USE_PLLF, USE_PLL_MSK);
++		lynx_28g_lane_rmw(lane, LNaRGCR0, USE_PLLF, USE_PLL_MSK);
++	} else {
++		lynx_28g_lane_rmw(lane, LNaTGCR0, USE_PLLS, USE_PLL_MSK);
++		lynx_28g_lane_rmw(lane, LNaRGCR0, USE_PLLS, USE_PLL_MSK);
++	}
++}
++
++static void lynx_28g_cleanup_lane(struct lynx_28g_lane *lane)
++{
++	u32 lane_offset = LYNX_28G_LNa_PCC_OFFSET(lane);
++	struct lynx_28g_priv *priv = lane->priv;
++
++	/* Cleanup the protocol configuration registers of the current protocol */
++	switch (lane->interface) {
++	case PHY_INTERFACE_MODE_10GBASER:
++		lynx_28g_rmw(priv, LYNX_28G_PCCC,
++			     LYNX_28G_PCCC_SXGMII_DIS << lane_offset,
++			     GENMASK(3, 0) << lane_offset);
++		break;
++	case PHY_INTERFACE_MODE_SGMII:
++	case PHY_INTERFACE_MODE_1000BASEX:
++		lynx_28g_rmw(priv, LYNX_28G_PCC8,
++			     LYNX_28G_PCC8_SGMII_DIS << lane_offset,
++			     GENMASK(3, 0) << lane_offset);
++		break;
++	default:
++		break;
++	}
++}
++
++static void lynx_28g_lane_set_sgmii(struct lynx_28g_lane *lane)
++{
++	u32 lane_offset = LYNX_28G_LNa_PCC_OFFSET(lane);
++	struct lynx_28g_priv *priv = lane->priv;
++	struct lynx_28g_pll *pll;
++
++	lynx_28g_cleanup_lane(lane);
++
++	/* Setup the lane to run in SGMII */
++	lynx_28g_rmw(priv, LYNX_28G_PCC8,
++		     LYNX_28G_PCC8_SGMII << lane_offset,
++		     GENMASK(3, 0) << lane_offset);
++
++	/* Setup the protocol select and SerDes parallel interface width */
++	lynx_28g_lane_rmw(lane, LNaGCR0, PROTO_SEL_SGMII, PROTO_SEL_MSK);
++	lynx_28g_lane_rmw(lane, LNaGCR0, IF_WIDTH_10_BIT, IF_WIDTH_MSK);
++
++	/* Switch to the PLL that works with this interface type */
++	pll = lynx_28g_pll_get(priv, PHY_INTERFACE_MODE_SGMII);
++	lynx_28g_lane_set_pll(lane, pll);
++
++	/* Choose the portion of clock net to be used on this lane */
++	lynx_28g_lane_set_nrate(lane, pll, PHY_INTERFACE_MODE_SGMII);
++
++	/* Enable the SGMII PCS */
++	lynx_28g_lane_rmw(lane, SGMIIaCR1, SGPCS_EN, SGPCS_MSK);
++
++	/* Configure the appropriate equalization parameters for the protocol */
++	iowrite32(0x00808006, priv->base + LYNX_28G_LNaTECR0(lane->id));
++	iowrite32(0x04310000, priv->base + LYNX_28G_LNaRGCR1(lane->id));
++	iowrite32(0x9f800000, priv->base + LYNX_28G_LNaRECR0(lane->id));
++	iowrite32(0x001f0000, priv->base + LYNX_28G_LNaRECR1(lane->id));
++	iowrite32(0x00000000, priv->base + LYNX_28G_LNaRECR2(lane->id));
++	iowrite32(0x00000000, priv->base + LYNX_28G_LNaRSCCR0(lane->id));
++}
++
++static void lynx_28g_lane_set_10gbaser(struct lynx_28g_lane *lane)
++{
++	u32 lane_offset = LYNX_28G_LNa_PCC_OFFSET(lane);
++	struct lynx_28g_priv *priv = lane->priv;
++	struct lynx_28g_pll *pll;
++
++	lynx_28g_cleanup_lane(lane);
++
++	/* Enable the SXGMII lane */
++	lynx_28g_rmw(priv, LYNX_28G_PCCC,
++		     LYNX_28G_PCCC_10GBASER << lane_offset,
++		     GENMASK(3, 0) << lane_offset);
++
++	/* Setup the protocol select and SerDes parallel interface width */
++	lynx_28g_lane_rmw(lane, LNaGCR0, PROTO_SEL_XFI, PROTO_SEL_MSK);
++	lynx_28g_lane_rmw(lane, LNaGCR0, IF_WIDTH_20_BIT, IF_WIDTH_MSK);
++
++	/* Switch to the PLL that works with this interface type */
++	pll = lynx_28g_pll_get(priv, PHY_INTERFACE_MODE_10GBASER);
++	lynx_28g_lane_set_pll(lane, pll);
++
++	/* Choose the portion of clock net to be used on this lane */
++	lynx_28g_lane_set_nrate(lane, pll, PHY_INTERFACE_MODE_10GBASER);
++
++	/* Disable the SGMII PCS */
++	lynx_28g_lane_rmw(lane, SGMIIaCR1, SGPCS_DIS, SGPCS_MSK);
++
++	/* Configure the appropriate equalization parameters for the protocol */
++	iowrite32(0x10808307, priv->base + LYNX_28G_LNaTECR0(lane->id));
++	iowrite32(0x10000000, priv->base + LYNX_28G_LNaRGCR1(lane->id));
++	iowrite32(0x00000000, priv->base + LYNX_28G_LNaRECR0(lane->id));
++	iowrite32(0x001f0000, priv->base + LYNX_28G_LNaRECR1(lane->id));
++	iowrite32(0x81000020, priv->base + LYNX_28G_LNaRECR2(lane->id));
++	iowrite32(0x00002000, priv->base + LYNX_28G_LNaRSCCR0(lane->id));
++}
++
++static int lynx_28g_power_off(struct phy *phy)
++{
++	struct lynx_28g_lane *lane = phy_get_drvdata(phy);
++	u32 trstctl, rrstctl;
++
++	if (!lane->powered_up)
++		return 0;
++
++	/* Issue a halt request */
++	lynx_28g_lane_rmw(lane, LNaTRSTCTL, HLT_REQ, HLT_REQ);
++	lynx_28g_lane_rmw(lane, LNaRRSTCTL, HLT_REQ, HLT_REQ);
++
++	/* Wait until the halting process is complete */
++	do {
++		trstctl = lynx_28g_lane_read(lane, LNaTRSTCTL);
++		rrstctl = lynx_28g_lane_read(lane, LNaRRSTCTL);
++	} while ((trstctl & LYNX_28G_LNaTRSTCTL_HLT_REQ) ||
++		 (rrstctl & LYNX_28G_LNaRRSTCTL_HLT_REQ));
++
++	lane->powered_up = false;
++
++	return 0;
++}
++
++static int lynx_28g_power_on(struct phy *phy)
++{
++	struct lynx_28g_lane *lane = phy_get_drvdata(phy);
++	u32 trstctl, rrstctl;
++
++	if (lane->powered_up)
++		return 0;
++
++	/* Issue a reset request on the lane */
++	lynx_28g_lane_rmw(lane, LNaTRSTCTL, RST_REQ, RST_REQ);
++	lynx_28g_lane_rmw(lane, LNaRRSTCTL, RST_REQ, RST_REQ);
++
++	/* Wait until the reset sequence is completed */
++	do {
++		trstctl = lynx_28g_lane_read(lane, LNaTRSTCTL);
++		rrstctl = lynx_28g_lane_read(lane, LNaRRSTCTL);
++	} while (!(trstctl & LYNX_28G_LNaTRSTCTL_RST_DONE) ||
++		 !(rrstctl & LYNX_28G_LNaRRSTCTL_RST_DONE));
++
++	lane->powered_up = true;
++
++	return 0;
++}
++
++static int lynx_28g_set_mode(struct phy *phy, enum phy_mode mode, int submode)
++{
++	struct lynx_28g_lane *lane = phy_get_drvdata(phy);
++	struct lynx_28g_priv *priv = lane->priv;
++	int powered_up = lane->powered_up;
++	int err = 0;
++
++	if (mode != PHY_MODE_ETHERNET)
++		return -EOPNOTSUPP;
++
++	if (lane->interface == PHY_INTERFACE_MODE_NA)
++		return -EOPNOTSUPP;
++
++	if (!lynx_28g_supports_interface(priv, submode))
++		return -EOPNOTSUPP;
++
++	/* If the lane is powered up, put the lane into the halt state while
++	 * the reconfiguration is being done.
++	 */
++	if (powered_up)
++		lynx_28g_power_off(phy);
++
++	switch (submode) {
++	case PHY_INTERFACE_MODE_SGMII:
++	case PHY_INTERFACE_MODE_1000BASEX:
++		lynx_28g_lane_set_sgmii(lane);
++		break;
++	case PHY_INTERFACE_MODE_10GBASER:
++		lynx_28g_lane_set_10gbaser(lane);
++		break;
++	default:
++		err = -EOPNOTSUPP;
++		goto out;
++	}
++
++	lane->interface = submode;
++
++out:
++	/* Power up the lane if necessary */
++	if (powered_up)
++		lynx_28g_power_on(phy);
++
++	return err;
++}
++
++static int lynx_28g_validate(struct phy *phy, enum phy_mode mode, int submode,
++			     union phy_configure_opts *opts __always_unused)
++{
++	struct lynx_28g_lane *lane = phy_get_drvdata(phy);
++	struct lynx_28g_priv *priv = lane->priv;
++
++	if (mode != PHY_MODE_ETHERNET)
++		return -EOPNOTSUPP;
++
++	if (!lynx_28g_supports_interface(priv, submode))
++		return -EOPNOTSUPP;
++
++	return 0;
++}
++
++static int lynx_28g_init(struct phy *phy)
++{
++	struct lynx_28g_lane *lane = phy_get_drvdata(phy);
++
++	/* Mark the fact that the lane was init */
++	lane->init = true;
++
++	/* SerDes lanes are powered on at boot time.  Any lane that is managed
++	 * by this driver will get powered down at init time aka at dpaa2-eth
++	 * probe time.
++	 */
++	lane->powered_up = true;
++	lynx_28g_power_off(phy);
++
++	return 0;
++}
++
++static const struct phy_ops lynx_28g_ops = {
++	.init		= lynx_28g_init,
++	.power_on	= lynx_28g_power_on,
++	.power_off	= lynx_28g_power_off,
++	.set_mode	= lynx_28g_set_mode,
++	.validate	= lynx_28g_validate,
++	.owner		= THIS_MODULE,
++};
++
++static void lynx_28g_pll_read_configuration(struct lynx_28g_priv *priv)
++{
++	struct lynx_28g_pll *pll;
++	int i;
++
++	for (i = 0; i < LYNX_28G_NUM_PLL; i++) {
++		pll = &priv->pll[i];
++		pll->priv = priv;
++		pll->id = i;
++
++		pll->rstctl = lynx_28g_pll_read(pll, PLLnRSTCTL);
++		pll->cr0 = lynx_28g_pll_read(pll, PLLnCR0);
++		pll->cr1 = lynx_28g_pll_read(pll, PLLnCR1);
++
++		if (LYNX_28G_PLLnRSTCTL_DIS(pll->rstctl))
++			continue;
++
++		switch (LYNX_28G_PLLnCR1_FRATE_SEL(pll->cr1)) {
++		case LYNX_28G_PLLnCR1_FRATE_5G_10GVCO:
++		case LYNX_28G_PLLnCR1_FRATE_5G_25GVCO:
++			/* 5GHz clock net */
++			__set_bit(PHY_INTERFACE_MODE_1000BASEX, pll->supported);
++			__set_bit(PHY_INTERFACE_MODE_SGMII, pll->supported);
++			break;
++		case LYNX_28G_PLLnCR1_FRATE_10G_20GVCO:
++			/* 10.3125GHz clock net */
++			__set_bit(PHY_INTERFACE_MODE_10GBASER, pll->supported);
++			break;
++		default:
++			/* 6GHz, 12.890625GHz, 8GHz */
++			break;
++		}
++	}
++}
++
++#define work_to_lynx(w) container_of((w), struct lynx_28g_priv, cdr_check.work)
++
++static void lynx_28g_cdr_lock_check(struct work_struct *work)
++{
++	struct lynx_28g_priv *priv = work_to_lynx(work);
++	struct lynx_28g_lane *lane;
++	u32 rrstctl;
++	int i;
++
++	for (i = 0; i < LYNX_28G_NUM_LANE; i++) {
++		lane = &priv->lane[i];
++
++		if (!lane->init)
++			continue;
++
++		if (!lane->powered_up)
++			continue;
++
++		rrstctl = lynx_28g_lane_read(lane, LNaRRSTCTL);
++		if (!(rrstctl & LYNX_28G_LNaRRSTCTL_CDR_LOCK)) {
++			lynx_28g_lane_rmw(lane, LNaRRSTCTL, RST_REQ, RST_REQ);
++			do {
++				rrstctl = lynx_28g_lane_read(lane, LNaRRSTCTL);
++			} while (!(rrstctl & LYNX_28G_LNaRRSTCTL_RST_DONE));
++		}
++	}
++	queue_delayed_work(system_power_efficient_wq, &priv->cdr_check,
++			   msecs_to_jiffies(1000));
++}
++
++static void lynx_28g_lane_read_configuration(struct lynx_28g_lane *lane)
++{
++	u32 pss, protocol;
++
++	pss = lynx_28g_lane_read(lane, LNaPSS);
++	protocol = LYNX_28G_LNaPSS_TYPE(pss);
++	switch (protocol) {
++	case LYNX_28G_LNaPSS_TYPE_SGMII:
++		lane->interface = PHY_INTERFACE_MODE_SGMII;
++		break;
++	case LYNX_28G_LNaPSS_TYPE_XFI:
++		lane->interface = PHY_INTERFACE_MODE_10GBASER;
++		break;
++	default:
++		lane->interface = PHY_INTERFACE_MODE_NA;
++	}
++}
++
++static struct phy *lynx_28g_xlate(struct device *dev,
++				  struct of_phandle_args *args)
++{
++	struct lynx_28g_priv *priv = dev_get_drvdata(dev);
++	int idx = args->args[0];
++
++	if (WARN_ON(idx >= LYNX_28G_NUM_LANE))
++		return ERR_PTR(-EINVAL);
++
++	return priv->lane[idx].phy;
++}
++
++static int lynx_28g_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct phy_provider *provider;
++	struct lynx_28g_priv *priv;
++	int i;
++
++	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++	priv->dev = &pdev->dev;
++
++	priv->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(priv->base))
++		return PTR_ERR(priv->base);
++
++	lynx_28g_pll_read_configuration(priv);
++
++	for (i = 0; i < LYNX_28G_NUM_LANE; i++) {
++		struct lynx_28g_lane *lane = &priv->lane[i];
++		struct phy *phy;
++
++		memset(lane, 0, sizeof(*lane));
++
++		phy = devm_phy_create(&pdev->dev, NULL, &lynx_28g_ops);
++		if (IS_ERR(phy))
++			return PTR_ERR(phy);
++
++		lane->priv = priv;
++		lane->phy = phy;
++		lane->id = i;
++		phy_set_drvdata(phy, lane);
++		lynx_28g_lane_read_configuration(lane);
++	}
++
++	dev_set_drvdata(dev, priv);
++
++	INIT_DELAYED_WORK(&priv->cdr_check, lynx_28g_cdr_lock_check);
++
++	queue_delayed_work(system_power_efficient_wq, &priv->cdr_check,
++			   msecs_to_jiffies(1000));
++
++	dev_set_drvdata(&pdev->dev, priv);
++	provider = devm_of_phy_provider_register(&pdev->dev, lynx_28g_xlate);
++
++	return PTR_ERR_OR_ZERO(provider);
++}
++
++static const struct of_device_id lynx_28g_of_match_table[] = {
++	{ .compatible = "fsl,lynx-28g" },
++	{ },
++};
++MODULE_DEVICE_TABLE(of, lynx_28g_of_match_table);
++
++static struct platform_driver lynx_28g_driver = {
++	.probe	= lynx_28g_probe,
++	.driver	= {
++		.name = "lynx-28g",
++		.of_match_table = lynx_28g_of_match_table,
++	},
++};
++module_platform_driver(lynx_28g_driver);
++
++MODULE_AUTHOR("Ioana Ciornei <ioana.ciornei@nxp.com>");
++MODULE_DESCRIPTION("Lynx 28G SerDes PHY driver for Layerscape SoCs");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/phy/freescale/phy-fsl-samsung-hdmi.c b/drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+new file mode 100644
+index 000000000..532736aa2
+--- /dev/null
++++ b/drivers/phy/freescale/phy-fsl-samsung-hdmi.c
+@@ -0,0 +1,1162 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2020-2022 NXP
++ *
++ */
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/phy/phy.h>
++#include <linux/pm.h>
++#include <linux/reset.h>
++
++#define PHY_REGS_84 0x84
++
++#define FIX_DA 0x2
++#define MODE_SET_DONE 0x80
++
++#define PHY_PLL_REGS_NUM 48
++
++struct phy_config {
++	u32	clk_rate;
++	u8 regs[PHY_PLL_REGS_NUM];
++};
++
++const struct phy_config samsung_phy_pll_cfg[] = {
++	{	22250000, {
++			0x00, 0xD1, 0x4B, 0xF1, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x15, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		23750000, {
++			0x00, 0xD1, 0x50, 0xF1, 0x86, 0x85, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x03, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	},{
++		24000000, {
++			0x00, 0xD1, 0x50, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x01, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	},{
++		24024000, {
++			0x00, 0xD1, 0x50, 0xF1, 0x99, 0x02, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x00, 0x25, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		25175000, {
++			0x00, 0xD1, 0x54, 0xFC, 0xCC, 0x91, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		25200000, {
++			0x00, 0xD1, 0x54, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		26750000, {
++			0x00, 0xD1, 0x5A, 0xF2, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		27000000, {
++			0x00, 0xD1, 0x5A, 0xF0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		27027000, {
++			0x00, 0xD1, 0x5A, 0xF2, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		29500000, {
++			0x00, 0xD1, 0x62, 0xF4, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		30750000, {
++			0x00, 0xD1, 0x66, 0xF4, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		30888000, {
++			0x00, 0xD1, 0x66, 0xF4, 0x99, 0x18, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xC7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		33750000, {
++			0x00, 0xD1, 0x70, 0xF4, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8F, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		35000000, {
++			0x00, 0xD1, 0x58, 0xB8, 0x8B, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		36000000, {
++			0x00, 0xD1, 0x5A, 0xB0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		36036000, {
++			0x00, 0xD1, 0x5A, 0xB2, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		40000000, {
++			0x00, 0xD1, 0x64, 0xB0, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x8B, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		43200000, {
++			0x00, 0xD1, 0x5A, 0x90, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8F, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		43243200, {
++			0x00, 0xD1, 0x5A, 0x92, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8F, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		44500000, {
++			0x00, 0xD1, 0x5C, 0x92, 0x98, 0x11, 0x84, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x8B, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		47000000, {
++			0x00, 0xD1, 0x62, 0x94, 0x95, 0x82, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		47500000, {
++			0x00, 0xD1, 0x63, 0x96, 0xA1, 0x82, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x00, 0x82, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x89, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		50349650, {
++			0x00, 0xD1, 0x54, 0x7C, 0xC3, 0x8F, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		50400000, {
++			0x00, 0xD1, 0x54, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		53250000, {
++			0x00, 0xD1, 0x58, 0x72, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		53500000, {
++			0x00, 0xD1, 0x5A, 0x72, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		54000000, {
++			0x00, 0xD1, 0x5A, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		54054000, {
++			0x00, 0xD1, 0x5A, 0x72, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59000000, {
++			0x00, 0xD1, 0x62, 0x74, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59340659, {
++			0x00, 0xD1, 0x62, 0x74, 0xDB, 0x52, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xD0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		59400000, {
++			0x00, 0xD1, 0x63, 0x70, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		61500000, {
++			0x00, 0xD1, 0x66, 0x74, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		63500000, {
++			0x00, 0xD1, 0x69, 0x74, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x87, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		67500000, {
++			0x00, 0xD1, 0x54, 0x52, 0x87, 0x03, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		70000000, {
++			0x00, 0xD1, 0x58, 0x58, 0x8B, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		72000000, {
++			0x00, 0xD1, 0x5A, 0x50, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		72072000, {
++			0x00, 0xD1, 0x5A, 0x52, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		74176000, {
++			0x00, 0xD1, 0x5D, 0x58, 0xDB, 0xA2, 0x88, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		74250000, {
++			0x00, 0xD1, 0x5C, 0x52, 0x90, 0x0D, 0x84, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		78500000, {
++			0x00, 0xD1, 0x62, 0x54, 0x87, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x9D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		80000000, {
++			0x00, 0xD1, 0x64, 0x50, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		82000000, {
++			0x00, 0xD1, 0x66, 0x54, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x96, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		82500000, {
++			0x00, 0xD1, 0x67, 0x54, 0x88, 0x01, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		89000000, {
++			0x00, 0xD1, 0x70, 0x54, 0x84, 0x83, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x8B, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		90000000, {
++			0x00, 0xD1, 0x70, 0x54, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x85, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		94000000, {
++			0x00, 0xD1, 0x4E, 0x32, 0xA7, 0x10, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		95000000, {
++			0x00, 0xD1, 0x50, 0x31, 0x86, 0x85, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x82, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		98901099, {
++			0x00, 0xD1, 0x52, 0x3A, 0xDB, 0x4C, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		99000000, {
++			0x00, 0xD1, 0x52, 0x32, 0x82, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		100699300, {
++			0x00, 0xD1, 0x54, 0x3C, 0xC3, 0x8F, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF5, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		100800000, {
++			0x00, 0xD1, 0x54, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		102500000, {
++			0x00, 0xD1, 0x55, 0x32, 0x8C, 0x05, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xF0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		104750000, {
++			0x00, 0xD1, 0x57, 0x32, 0x98, 0x07, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xEB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		106500000, {
++			0x00, 0xD1, 0x58, 0x32, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		107000000, {
++			0x00, 0xD1, 0x5A, 0x32, 0x89, 0x88, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		108000000, {
++			0x00, 0xD1, 0x5A, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		108108000, {
++			0x00, 0xD1, 0x5A, 0x32, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		118000000, {
++			0x00, 0xD1, 0x62, 0x34, 0x95, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xD1, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		118800000, {
++			0x00, 0xD1, 0x63, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		123000000, {
++			0x00, 0xD1, 0x66, 0x34, 0x82, 0x01, 0x88, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xC8, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		127000000, {
++			0x00, 0xD1, 0x69, 0x34, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		135000000, {
++			0x00, 0xD1, 0x70, 0x34, 0x82, 0x01, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		135580000, {
++			0x00, 0xD1, 0x71, 0x39, 0xE9, 0x82, 0x9C, 0x5B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		137520000, {
++			0x00, 0xD1, 0x72, 0x38, 0x99, 0x10, 0x85, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB3, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		138750000, {
++			0x00, 0xD1, 0x73, 0x35, 0x88, 0x05, 0x90, 0x4D,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		140000000, {
++			0x00, 0xD1, 0x75, 0x36, 0xA7, 0x90, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xB0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		144000000, {
++			0x00, 0xD1, 0x78, 0x30, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		148352000, {
++			0x00, 0xD1, 0x7B, 0x35, 0xDB, 0x39, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		148500000, {
++			0x00, 0xD1, 0x7B, 0x35, 0x84, 0x03, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		154000000, {
++			0x00, 0xD1, 0x40, 0x18, 0x83, 0x01, 0x00, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0xA0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		157000000, {
++			0x00, 0xD1, 0x41, 0x11, 0xA7, 0x14, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x9D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		160000000, {
++			0x00, 0xD1, 0x42, 0x12, 0xA1, 0x20, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x9A, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		162000000, {
++			0x00, 0xD1, 0x43, 0x18, 0x8B, 0x08, 0x96, 0x55,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x98, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		164000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x83, 0x82, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x96, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		165000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x84, 0x81, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		180000000, {
++			0x00, 0xD1, 0x4B, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		185625000, {
++			0x00, 0xD1, 0x4E, 0x12, 0x9A, 0x95, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x85, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		188000000, {
++			0x00, 0xD1, 0x4E, 0x12, 0xA7, 0x10, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x83, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		198000000, {
++			0x00, 0xD1, 0x52, 0x12, 0x82, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		205000000, {
++			0x00, 0xD1, 0x55, 0x12, 0x8C, 0x05, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xF0, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		209500000, {
++			0x00, 0xD1, 0x57, 0x12, 0x98, 0x07, 0x90, 0x49,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xEB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		213000000, {
++			0x00, 0xD1, 0x58, 0x12, 0x84, 0x03, 0x82, 0x41,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE7, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		216000000, {
++			0x00, 0xD1, 0x5A, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		216216000, {
++			0x00, 0xD1, 0x5A, 0x12, 0xFD, 0x0C, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xE4, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		237600000, {
++			0x00, 0xD1, 0x63, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xCF, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		254000000, {
++			0x00, 0xD1, 0x69, 0x14, 0x89, 0x08, 0x80, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xC2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		277500000, {
++			0x00, 0xD1, 0x73, 0x15, 0x88, 0x05, 0x90, 0x4D,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xB2, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		288000000, {
++			0x00, 0xD1, 0x78, 0x10, 0x00, 0x00, 0x80, 0x00,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xAB, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		297000000, {
++			0x00, 0xD1, 0x7B, 0x15, 0x84, 0x03, 0x90, 0x45,
++			0x4F, 0x30, 0x33, 0x65, 0x30, 0xA6, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		165000000, {
++			0x00, 0xD1, 0x45, 0x11, 0x84, 0x81, 0x90, 0x4B,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x95, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		185625000, {
++			0x00, 0xD1, 0x4E, 0x12, 0xB4, 0x95, 0x88, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x85, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		198000000, {
++			0x00, 0xD1, 0x52, 0x12, 0x84, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x20, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x81, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		90000000, {
++			0x00, 0xD1, 0x4B, 0x32, 0x84, 0x00, 0x88, 0x40,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x89, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, {
++		99000000, {
++			0x00, 0xD1, 0x52, 0x32, 0x84, 0x01, 0x88, 0x47,
++			0x4F, 0x30, 0x33, 0x65, 0x10, 0x7D, 0x24, 0x80,
++			0x6C, 0xF2, 0x67, 0x00, 0x10, 0x83, 0x30, 0x32,
++			0x60, 0x8F, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
++			0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++			0x00, 0xE0, 0x83, 0x0F, 0x3E, 0xF8, 0x00, 0x00,
++		},
++	}, { /* sentinel */ },
++};
++
++
++struct samsung_hdmi_phy {
++	struct device *dev;
++	void __iomem *regs;
++
++	struct phy *phy;
++	struct clk *apbclk;
++	struct clk *refclk;
++
++	const struct phy_config *cur_cfg;
++
++	/* clk provider */
++	struct clk_hw hw;
++	struct clk *phyclk;
++};
++
++static inline struct samsung_hdmi_phy *to_samsung_hdmi_phy(struct clk_hw *hw)
++{
++	return container_of(hw, struct samsung_hdmi_phy, hw);
++}
++
++static int samsung_hdmi_phy_clk_prepare(struct clk_hw *hw)
++{
++	return 0;
++}
++
++static
++unsigned long samsung_hdmi_phy_clk_recalc_rate(struct clk_hw *hw,
++						   unsigned long parent_rate)
++{
++	struct samsung_hdmi_phy *samsung = to_samsung_hdmi_phy(hw);
++
++	/* Samsung hdmi phy couldn't recalculate the rate by querying hardware.
++	 * return the clock rate that setting in set_rate function. */
++	if (!samsung->cur_cfg)
++		return 0;
++	return samsung->cur_cfg->clk_rate;
++}
++
++static long samsung_hdmi_phy_clk_round_rate(struct clk_hw *hw,
++						unsigned long rate,
++						unsigned long *parent_rate)
++{
++	const struct phy_config *phy_cfg = samsung_phy_pll_cfg;
++
++	for (; phy_cfg->clk_rate != 0; phy_cfg++)
++		if (phy_cfg->clk_rate == rate)
++			break;
++
++	if (phy_cfg->clk_rate == 0)
++		return -EINVAL;
++
++	return phy_cfg->clk_rate;
++}
++
++static int samsung_hdmi_phy_clk_set_rate(struct clk_hw *hw,
++					     unsigned long rate,
++					     unsigned long parent_rate)
++{
++	struct samsung_hdmi_phy *samsung = to_samsung_hdmi_phy(hw);
++	const struct phy_config *phy_cfg = samsung_phy_pll_cfg;
++	int i;
++
++	dev_dbg(samsung->dev, "%s\n", __func__);
++
++	for (; phy_cfg->clk_rate != 0; phy_cfg++)
++		if (phy_cfg->clk_rate == rate)
++			break;
++
++	if (phy_cfg->clk_rate == 0)
++		return -EINVAL;
++
++	/* HDMI PHY init */
++	writeb(FIX_DA, samsung->regs + PHY_REGS_84);
++
++	for (i = 0; i < PHY_PLL_REGS_NUM; i++)
++		writeb(phy_cfg->regs[i], samsung->regs + i * 4);
++
++	writeb(FIX_DA | MODE_SET_DONE , samsung->regs + PHY_REGS_84);
++
++	samsung->cur_cfg = phy_cfg;
++
++	/* Wait for PHY PLL lock */
++	msleep(20);
++
++	return 0;
++}
++
++static const struct clk_ops phy_clk_ops = {
++	.prepare = samsung_hdmi_phy_clk_prepare,
++	.recalc_rate = samsung_hdmi_phy_clk_recalc_rate,
++	.round_rate = samsung_hdmi_phy_clk_round_rate,
++	.set_rate = samsung_hdmi_phy_clk_set_rate,
++};
++
++static int samsung_hdmi_phy_clk_register(struct samsung_hdmi_phy *samsung)
++{
++	struct device *dev = samsung->dev;
++	struct device_node *np = dev->of_node;
++	struct clk_init_data init;
++	const char *parent_name;
++	int ret;
++
++	parent_name = __clk_get_name(samsung->refclk);
++
++	init.parent_names = &parent_name;
++	init.num_parents = 1;
++	init.flags = 0;
++	init.name = "hdmi_pclk";
++	init.ops = &phy_clk_ops;
++
++	/* optional override of the clock name */
++	of_property_read_string(np, "clock-output-names", &init.name);
++
++	samsung->hw.init = &init;
++
++	samsung->phyclk = devm_clk_register(dev, &samsung->hw);
++	if (IS_ERR(samsung->phyclk)) {
++		ret = PTR_ERR(samsung->phyclk);
++		dev_err(dev, "failed to register clock: %d\n", ret);
++		return ret;
++	}
++
++	ret = of_clk_add_provider(np, of_clk_src_simple_get, samsung->phyclk);
++	if (ret) {
++		dev_err(dev, "failed to register clock provider: %d\n", ret);
++		return ret;
++	}
++
++	ret = device_reset(dev);
++	if (ret) {
++		dev_warn(dev, "failed to reset hdmi phy %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct phy_ops samsung_hdmi_phy_ops = {
++	.owner = THIS_MODULE,
++};
++
++static int samsung_hdmi_phy_probe(struct platform_device *pdev)
++{
++	struct samsung_hdmi_phy *samsung;
++	struct phy_provider *phy_provider;
++	struct resource *res;
++	void __iomem *regs;
++	int ret;
++
++	dev_dbg(&pdev->dev, "%s\n", __func__);
++
++	samsung = devm_kzalloc(&pdev->dev, sizeof(*samsung), GFP_KERNEL);
++	if (!samsung)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, samsung);
++	samsung->dev = &pdev->dev;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	regs = devm_ioremap_resource(samsung->dev, res);
++	if (IS_ERR(regs))
++		return PTR_ERR(regs);
++	samsung->regs = regs;
++
++	samsung->apbclk = devm_clk_get(samsung->dev, "apb");
++	if (IS_ERR(samsung->apbclk)) {
++		ret = PTR_ERR(samsung->apbclk);
++		dev_err(samsung->dev, "failed to get phy apb clk: %d\n", ret);
++		return ret;
++	}
++
++	samsung->refclk = devm_clk_get(samsung->dev, "ref");
++	if (IS_ERR(samsung->refclk)) {
++		ret =  PTR_ERR(samsung->refclk);
++		dev_err(samsung->dev, "failed to get phy refclk: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(samsung->apbclk);
++	if (ret) {
++		dev_err(samsung->dev, "failed to enable apbclk\n");
++		return ret;
++	}
++
++	samsung->phy = devm_phy_create(samsung->dev, NULL, &samsung_hdmi_phy_ops);
++	if (IS_ERR(samsung->phy)) {
++		ret =  PTR_ERR(samsung->phy);
++		dev_err(samsung->dev, "failed to create HDMI PHY: %d\n", ret);
++		goto phy_failed;
++	}
++
++	phy_set_drvdata(samsung->phy, samsung);
++	phy_set_bus_width(samsung->phy, 8);
++
++	ret = samsung_hdmi_phy_clk_register(samsung);
++	if (ret) {
++		dev_err(&pdev->dev, "register clk failed\n");
++		goto phy_failed;
++	}
++
++	phy_provider = devm_of_phy_provider_register(samsung->dev,
++						     of_phy_simple_xlate);
++	if (IS_ERR(phy_provider)) {
++		ret =  PTR_ERR(phy_provider);
++		dev_err(&pdev->dev, "failed to register PHY provider: %d\n", ret);
++		goto phy_failed;
++	}
++
++	return 0;
++
++phy_failed:
++	clk_disable_unprepare(samsung->apbclk);
++	return ret;
++}
++
++static int samsung_hdmi_phy_remove(struct platform_device *pdev)
++{
++	of_clk_del_provider(pdev->dev.of_node);
++
++	return 0;
++}
++
++#ifdef CONFIG_PM
++static int samsung_hdmi_phy_suspend(struct device *dev)
++{
++	struct samsung_hdmi_phy *samsung = dev_get_drvdata(dev);
++
++	clk_disable_unprepare(samsung->apbclk);
++
++	return 0;
++}
++
++static int samsung_hdmi_phy_resume(struct device *dev)
++{
++	struct samsung_hdmi_phy *samsung = dev_get_drvdata(dev);
++	int i, ret = 0;
++
++	ret = clk_prepare_enable(samsung->apbclk);
++	if (ret) {
++		dev_err(samsung->dev, "failed to enable apbclk\n");
++		return ret;
++	}
++
++	if (samsung->cur_cfg) {
++		writeb(FIX_DA, samsung->regs + PHY_REGS_84);
++
++		for (i = 0; i < PHY_PLL_REGS_NUM; i++)
++			writeb(samsung->cur_cfg->regs[i], samsung->regs + i * 4);
++
++		writeb(FIX_DA | MODE_SET_DONE, samsung->regs + PHY_REGS_84);
++	}
++
++	return ret;
++}
++#endif
++
++static const struct dev_pm_ops samsung_hdmi_phy_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(samsung_hdmi_phy_suspend,
++			   samsung_hdmi_phy_resume)
++};
++
++static const struct of_device_id samsung_hdmi_phy_of_match[] = {
++	{
++		.compatible = "fsl,samsung-hdmi-phy",
++	}, { /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, samsung_hdmi_phy_of_match);
++
++static struct platform_driver samsung_hdmi_phy_driver = {
++	.probe  = samsung_hdmi_phy_probe,
++	.remove = samsung_hdmi_phy_remove,
++	.driver = {
++		.name = "samsung-hdmi-phy",
++		.of_match_table = samsung_hdmi_phy_of_match,
++		.pm = &samsung_hdmi_phy_pm_ops,
++	},
++};
++module_platform_driver(samsung_hdmi_phy_driver);
++
++MODULE_AUTHOR("Sandor Yu <Sandor.yu@nxp.com>");
++MODULE_DESCRIPTION("SAMSUNG HDMI 2.0 Transmitter PHY Driver");
++MODULE_LICENSE("GPL v2");
+-- 
+2.25.1
+

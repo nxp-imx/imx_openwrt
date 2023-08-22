@@ -1,0 +1,1259 @@
+From 8f7bc45bcef59886aebfd170f7ef4f0bf2d043be Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 10:44:30 +0800
+Subject: [PATCH 13/24] update usb driver
+
+---
+ drivers/usb/dwc2/platform.c         |  16 +-
+ drivers/usb/dwc3/core.h             |   1 -
+ drivers/usb/dwc3/gadget.c           |  10 +-
+ drivers/usb/host/ehci-fsl.c         |   2 +-
+ drivers/usb/host/uhci-hcd.c         |   6 +-
+ drivers/usb/host/xhci-mvebu.c       |  42 +++
+ drivers/usb/host/xhci-mvebu.h       |   6 +
+ drivers/usb/host/xhci-plat.c        |  20 +-
+ drivers/usb/host/xhci-plat.h        |   1 +
+ drivers/usb/phy/Kconfig             |   2 +-
+ drivers/usb/phy/phy-mxs-usb.c       | 483 +++++++++++++++++++++++++---
+ drivers/usb/typec/bus.c             |   2 +-
+ drivers/usb/typec/class.c           |  43 ---
+ drivers/usb/typec/mux/Kconfig       |   6 +
+ drivers/usb/typec/mux/Makefile      |   1 +
+ drivers/usb/typec/mux/gpio-switch.c | 118 +++++++
+ 16 files changed, 657 insertions(+), 102 deletions(-)
+ create mode 100644 drivers/usb/typec/mux/gpio-switch.c
+
+diff --git a/drivers/usb/dwc2/platform.c b/drivers/usb/dwc2/platform.c
+index 7a09476e9..265d437ca 100644
+--- a/drivers/usb/dwc2/platform.c
++++ b/drivers/usb/dwc2/platform.c
+@@ -121,6 +121,13 @@ static int dwc2_get_dr_mode(struct dwc2_hsotg *hsotg)
+ 	return 0;
+ }
+ 
++static void __dwc2_disable_regulators(void *data)
++{
++	struct dwc2_hsotg *hsotg = data;
++
++	regulator_bulk_disable(ARRAY_SIZE(hsotg->supplies), hsotg->supplies);
++}
++
+ static int __dwc2_lowlevel_hw_enable(struct dwc2_hsotg *hsotg)
+ {
+ 	struct platform_device *pdev = to_platform_device(hsotg->dev);
+@@ -131,6 +138,11 @@ static int __dwc2_lowlevel_hw_enable(struct dwc2_hsotg *hsotg)
+ 	if (ret)
+ 		return ret;
+ 
++	ret = devm_add_action_or_reset(&pdev->dev,
++				       __dwc2_disable_regulators, hsotg);
++	if (ret)
++		return ret;
++
+ 	if (hsotg->clk) {
+ 		ret = clk_prepare_enable(hsotg->clk);
+ 		if (ret)
+@@ -186,7 +198,7 @@ static int __dwc2_lowlevel_hw_disable(struct dwc2_hsotg *hsotg)
+ 	if (hsotg->clk)
+ 		clk_disable_unprepare(hsotg->clk);
+ 
+-	return regulator_bulk_disable(ARRAY_SIZE(hsotg->supplies), hsotg->supplies);
++	return 0;
+ }
+ 
+ /**
+@@ -646,7 +658,7 @@ static int dwc2_driver_probe(struct platform_device *dev)
+ 	if (hsotg->params.activate_stm_id_vb_detection)
+ 		regulator_disable(hsotg->usb33d);
+ error:
+-	if (hsotg->ll_hw_enabled)
++	if (hsotg->dr_mode != USB_DR_MODE_PERIPHERAL)
+ 		dwc2_lowlevel_hw_disable(hsotg);
+ 	return retval;
+ }
+diff --git a/drivers/usb/dwc3/core.h b/drivers/usb/dwc3/core.h
+index 7e5bfcf0c..15391e5fe 100644
+--- a/drivers/usb/dwc3/core.h
++++ b/drivers/usb/dwc3/core.h
+@@ -1328,7 +1328,6 @@ struct dwc3 {
+ 
+ 	unsigned		dis_split_quirk:1;
+ 	unsigned		async_callbacks:1;
+-	unsigned        suspended:1;
+ 
+ 	u16			imod_interval;
+ 
+diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
+index 408e68f60..e558452d0 100644
+--- a/drivers/usb/dwc3/gadget.c
++++ b/drivers/usb/dwc3/gadget.c
+@@ -3678,8 +3678,6 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
+ {
+ 	int			reg;
+ 
+-	dwc->suspended = false;
+-
+ 	dwc3_gadget_set_link_state(dwc, DWC3_LINK_STATE_RX_DET);
+ 
+ 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+@@ -3700,8 +3698,6 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
+ {
+ 	u32			reg;
+ 
+-	dwc->suspended = false;
+-
+ 	/*
+ 	 * Ideally, dwc3_reset_gadget() would trigger the function
+ 	 * drivers to stop any active transfers through ep disable.
+@@ -3907,8 +3903,6 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
+ 
+ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
+ {
+-	dwc->suspended = false;
+-
+ 	/*
+ 	 * TODO take core out of low power mode when that's
+ 	 * implemented.
+@@ -4024,10 +4018,8 @@ static void dwc3_gadget_suspend_interrupt(struct dwc3 *dwc,
+ {
+ 	enum dwc3_link_state next = evtinfo & DWC3_LINK_STATE_MASK;
+ 
+-	if (!dwc->suspended && next == DWC3_LINK_STATE_U3) {
+-		dwc->suspended = true;
++	if (dwc->link_state != next && next == DWC3_LINK_STATE_U3)
+ 		dwc3_suspend_gadget(dwc);
+-	}
+ 
+ 	dwc->link_state = next;
+ }
+diff --git a/drivers/usb/host/ehci-fsl.c b/drivers/usb/host/ehci-fsl.c
+index e38dfbd0d..385be30ba 100644
+--- a/drivers/usb/host/ehci-fsl.c
++++ b/drivers/usb/host/ehci-fsl.c
+@@ -29,7 +29,7 @@
+ #include "ehci-fsl.h"
+ 
+ #define DRIVER_DESC "Freescale EHCI Host controller driver"
+-#define DRV_NAME "fsl-ehci"
++#define DRV_NAME "ehci-fsl"
+ 
+ static struct hc_driver __read_mostly fsl_ehci_hc_driver;
+ 
+diff --git a/drivers/usb/host/uhci-hcd.c b/drivers/usb/host/uhci-hcd.c
+index d138f62ce..d90b869f5 100644
+--- a/drivers/usb/host/uhci-hcd.c
++++ b/drivers/usb/host/uhci-hcd.c
+@@ -536,8 +536,8 @@ static void release_uhci(struct uhci_hcd *uhci)
+ 	uhci->is_initialized = 0;
+ 	spin_unlock_irq(&uhci->lock);
+ 
+-	debugfs_lookup_and_remove(uhci_to_hcd(uhci)->self.bus_name,
+-				  uhci_debugfs_root);
++	debugfs_remove(debugfs_lookup(uhci_to_hcd(uhci)->self.bus_name,
++				      uhci_debugfs_root));
+ 
+ 	for (i = 0; i < UHCI_NUM_SKELQH; i++)
+ 		uhci_free_qh(uhci, uhci->skelqh[i]);
+@@ -700,7 +700,7 @@ static int uhci_start(struct usb_hcd *hcd)
+ 			uhci->frame, uhci->frame_dma_handle);
+ 
+ err_alloc_frame:
+-	debugfs_lookup_and_remove(hcd->self.bus_name, uhci_debugfs_root);
++	debugfs_remove(debugfs_lookup(hcd->self.bus_name, uhci_debugfs_root));
+ 
+ 	return retval;
+ }
+diff --git a/drivers/usb/host/xhci-mvebu.c b/drivers/usb/host/xhci-mvebu.c
+index 60651a507..8ca1a235d 100644
+--- a/drivers/usb/host/xhci-mvebu.c
++++ b/drivers/usb/host/xhci-mvebu.c
+@@ -8,6 +8,7 @@
+ #include <linux/mbus.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/phy/phy.h>
+ 
+ #include <linux/usb.h>
+ #include <linux/usb/hcd.h>
+@@ -74,6 +75,47 @@ int xhci_mvebu_mbus_init_quirk(struct usb_hcd *hcd)
+ 	return 0;
+ }
+ 
++int xhci_mvebu_a3700_plat_setup(struct usb_hcd *hcd)
++{
++	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
++	struct device *dev = hcd->self.controller;
++	struct phy *phy;
++	int ret;
++
++	/* Old bindings miss the PHY handle */
++	phy = of_phy_get(dev->of_node, "usb3-phy");
++	if (IS_ERR(phy) && PTR_ERR(phy) == -EPROBE_DEFER)
++		return -EPROBE_DEFER;
++	else if (IS_ERR(phy))
++		goto phy_out;
++
++	ret = phy_init(phy);
++	if (ret)
++		goto phy_put;
++
++	ret = phy_set_mode(phy, PHY_MODE_USB_HOST_SS);
++	if (ret)
++		goto phy_exit;
++
++	ret = phy_power_on(phy);
++	if (ret == -EOPNOTSUPP) {
++		/* Skip initializatin of XHCI PHY when it is unsupported by firmware */
++		dev_warn(dev, "PHY unsupported by firmware\n");
++		xhci->quirks |= XHCI_SKIP_PHY_INIT;
++	}
++	if (ret)
++		goto phy_exit;
++
++	phy_power_off(phy);
++phy_exit:
++	phy_exit(phy);
++phy_put:
++	of_phy_put(phy);
++phy_out:
++
++	return 0;
++}
++
+ int xhci_mvebu_a3700_init_quirk(struct usb_hcd *hcd)
+ {
+ 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
+diff --git a/drivers/usb/host/xhci-mvebu.h b/drivers/usb/host/xhci-mvebu.h
+index 3be021793..01bf3fcb3 100644
+--- a/drivers/usb/host/xhci-mvebu.h
++++ b/drivers/usb/host/xhci-mvebu.h
+@@ -12,6 +12,7 @@ struct usb_hcd;
+ 
+ #if IS_ENABLED(CONFIG_USB_XHCI_MVEBU)
+ int xhci_mvebu_mbus_init_quirk(struct usb_hcd *hcd);
++int xhci_mvebu_a3700_plat_setup(struct usb_hcd *hcd);
+ int xhci_mvebu_a3700_init_quirk(struct usb_hcd *hcd);
+ #else
+ static inline int xhci_mvebu_mbus_init_quirk(struct usb_hcd *hcd)
+@@ -19,6 +20,11 @@ static inline int xhci_mvebu_mbus_init_quirk(struct usb_hcd *hcd)
+ 	return 0;
+ }
+ 
++static inline int xhci_mvebu_a3700_plat_setup(struct usb_hcd *hcd)
++{
++	return 0;
++}
++
+ static inline int xhci_mvebu_a3700_init_quirk(struct usb_hcd *hcd)
+ {
+ 	return 0;
+diff --git a/drivers/usb/host/xhci-plat.c b/drivers/usb/host/xhci-plat.c
+index 12e2ee3ab..7d2f66527 100644
+--- a/drivers/usb/host/xhci-plat.c
++++ b/drivers/usb/host/xhci-plat.c
+@@ -44,6 +44,16 @@ static void xhci_priv_plat_start(struct usb_hcd *hcd)
+ 		priv->plat_start(hcd);
+ }
+ 
++static int xhci_priv_plat_setup(struct usb_hcd *hcd)
++{
++	struct xhci_plat_priv *priv = hcd_to_xhci_priv(hcd);
++
++	if (!priv->plat_setup)
++		return 0;
++
++	return priv->plat_setup(hcd);
++}
++
+ static int xhci_priv_init_quirk(struct usb_hcd *hcd)
+ {
+ 	struct xhci_plat_priv *priv = hcd_to_xhci_priv(hcd);
+@@ -111,6 +121,7 @@ static const struct xhci_plat_priv xhci_plat_marvell_armada = {
+ };
+ 
+ static const struct xhci_plat_priv xhci_plat_marvell_armada3700 = {
++	.plat_setup = xhci_mvebu_a3700_plat_setup,
+ 	.init_quirk = xhci_mvebu_a3700_init_quirk,
+ };
+ 
+@@ -334,7 +345,14 @@ static int xhci_plat_probe(struct platform_device *pdev)
+ 
+ 	hcd->tpl_support = of_usb_host_tpl_support(sysdev->of_node);
+ 	xhci->shared_hcd->tpl_support = hcd->tpl_support;
+-	if (priv && (priv->quirks & XHCI_SKIP_PHY_INIT))
++
++	if (priv) {
++		ret = xhci_priv_plat_setup(hcd);
++		if (ret)
++			goto disable_usb_phy;
++	}
++
++	if ((xhci->quirks & XHCI_SKIP_PHY_INIT) || (priv && (priv->quirks & XHCI_SKIP_PHY_INIT)))
+ 		hcd->skip_phy_initialization = 1;
+ 
+ 	if (priv && (priv->quirks & XHCI_SG_TRB_CACHE_SIZE_QUIRK))
+diff --git a/drivers/usb/host/xhci-plat.h b/drivers/usb/host/xhci-plat.h
+index 1fb149d1f..561d0b7bc 100644
+--- a/drivers/usb/host/xhci-plat.h
++++ b/drivers/usb/host/xhci-plat.h
+@@ -13,6 +13,7 @@
+ struct xhci_plat_priv {
+ 	const char *firmware_name;
+ 	unsigned long long quirks;
++	int (*plat_setup)(struct usb_hcd *);
+ 	void (*plat_start)(struct usb_hcd *);
+ 	int (*init_quirk)(struct usb_hcd *);
+ 	int (*suspend_quirk)(struct usb_hcd *);
+diff --git a/drivers/usb/phy/Kconfig b/drivers/usb/phy/Kconfig
+index 52eebcb88..1d62bc321 100644
+--- a/drivers/usb/phy/Kconfig
++++ b/drivers/usb/phy/Kconfig
+@@ -152,7 +152,7 @@ config USB_MV_OTG
+ 
+ config USB_MXS_PHY
+ 	tristate "Freescale MXS USB PHY support"
+-	depends on ARCH_MXC || ARCH_MXS
++	depends on ARCH_MXC || ARCH_MXS || ARCH_MXC_ARM64
+ 	select STMP_DEVICE
+ 	select USB_PHY
+ 	help
+diff --git a/drivers/usb/phy/phy-mxs-usb.c b/drivers/usb/phy/phy-mxs-usb.c
+index 8a262c5a0..7095b3025 100644
+--- a/drivers/usb/phy/phy-mxs-usb.c
++++ b/drivers/usb/phy/phy-mxs-usb.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Copyright 2012-2014 Freescale Semiconductor, Inc.
++ * Copyright 2012-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017 NXP
+  * Copyright (C) 2012 Marek Vasut <marex@denx.de>
+  * on behalf of DENX Software Engineering GmbH
+  */
+@@ -18,6 +19,8 @@
+ #include <linux/regmap.h>
+ #include <linux/mfd/syscon.h>
+ #include <linux/iopoll.h>
++#include <linux/regulator/consumer.h>
++#include <linux/pm_runtime.h>
+ 
+ #define DRIVER_NAME "mxs_phy"
+ 
+@@ -70,6 +73,12 @@
+ #define BM_USBPHY_PLL_EN_USB_CLKS		BIT(6)
+ 
+ /* Anatop Registers */
++#define ANADIG_PLL_USB2				0x20
++#define ANADIG_PLL_USB2_SET			0x24
++#define ANADIG_PLL_USB2_CLR			0x28
++#define ANADIG_REG_1P1_SET			0x114
++#define ANADIG_REG_1P1_CLR			0x118
++
+ #define ANADIG_ANA_MISC0			0x150
+ #define ANADIG_ANA_MISC0_SET			0x154
+ #define ANADIG_ANA_MISC0_CLR			0x158
+@@ -117,6 +126,46 @@
+ #define BM_ANADIG_USB2_MISC_RX_VPIN_FS		BIT(29)
+ #define BM_ANADIG_USB2_MISC_RX_VMIN_FS		BIT(28)
+ 
++/* System Integration Module (SIM) Registers */
++#define SIM_GPR1				0x30
++
++#define USB_PHY_VLLS_WAKEUP_EN			BIT(0)
++
++#define BM_ANADIG_REG_1P1_ENABLE_WEAK_LINREG	BIT(18)
++#define BM_ANADIG_REG_1P1_TRACK_VDD_SOC_CAP	BIT(19)
++
++#define BM_ANADIG_PLL_USB2_HOLD_RING_OFF	BIT(11)
++
++/* DCD module, the offset is 0x800 */
++#define DCD_CONTROL				0x800
++#define DCD_CLOCK				(DCD_CONTROL + 0x4)
++#define DCD_STATUS				(DCD_CONTROL + 0x8)
++#define DCD_TIMER1				(DCD_CONTROL + 0x14)
++
++#define DCD_CONTROL_SR				BIT(25)
++#define DCD_CONTROL_START			BIT(24)
++#define DCD_CONTROL_BC12			BIT(17)
++#define DCD_CONTROL_IE				BIT(16)
++#define DCD_CONTROL_IF				BIT(8)
++#define DCD_CONTROL_IACK			BIT(0)
++
++#define DCD_CLOCK_MHZ				BIT(0)
++
++#define DCD_STATUS_ACTIVE			BIT(22)
++#define DCD_STATUS_TO				BIT(21)
++#define DCD_STATUS_ERR				BIT(20)
++#define DCD_STATUS_SEQ_STAT			(BIT(18) | BIT(19))
++#define DCD_CHG_PORT				BIT(19)
++#define DCD_CHG_DET				(BIT(18) | BIT(19))
++#define DCD_CHG_DPIN				BIT(18)
++#define DCD_STATUS_SEQ_RES			(BIT(16) | BIT(17))
++#define DCD_SDP_PORT				BIT(16)
++#define DCD_CDP_PORT				BIT(17)
++#define DCD_DCP_PORT				(BIT(16) | BIT(17))
++
++#define DCD_TVDPSRC_ON_MASK			GENMASK(9, 0)
++#define DCD_TVDPSRC_ON_VALUE			0xf0 /* 240ms */
++
+ #define to_mxs_phy(p) container_of((p), struct mxs_phy, phy)
+ 
+ /* Do disconnection between PHY and controller without vbus */
+@@ -149,6 +198,19 @@
+ #define MXS_PHY_TX_D_CAL_MIN			79
+ #define MXS_PHY_TX_D_CAL_MAX			119
+ 
++/*
++ * At some versions, the PHY2's clock is controlled by hardware directly,
++ * eg, according to PHY's suspend status. In these PHYs, we only need to
++ * open the clock at the initialization and close it at its shutdown routine.
++ * It will be benefit for remote wakeup case which needs to send resume
++ * signal as soon as possible, and in this case, the resume signal can be sent
++ * out without software interfere.
++ */
++#define MXS_PHY_HARDWARE_CONTROL_PHY2_CLK	BIT(4)
++
++/* The MXS PHYs which have DCD module for charger detection */
++#define MXS_PHY_HAS_DCD				BIT(5)
++
+ struct mxs_phy_data {
+ 	unsigned int flags;
+ };
+@@ -160,12 +222,14 @@ static const struct mxs_phy_data imx23_phy_data = {
+ static const struct mxs_phy_data imx6q_phy_data = {
+ 	.flags = MXS_PHY_SENDING_SOF_TOO_FAST |
+ 		MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS |
+-		MXS_PHY_NEED_IP_FIX,
++		MXS_PHY_NEED_IP_FIX |
++		MXS_PHY_HARDWARE_CONTROL_PHY2_CLK,
+ };
+ 
+ static const struct mxs_phy_data imx6sl_phy_data = {
+ 	.flags = MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS |
+-		MXS_PHY_NEED_IP_FIX,
++		MXS_PHY_NEED_IP_FIX |
++		MXS_PHY_HARDWARE_CONTROL_PHY2_CLK,
+ };
+ 
+ static const struct mxs_phy_data vf610_phy_data = {
+@@ -174,14 +238,21 @@ static const struct mxs_phy_data vf610_phy_data = {
+ };
+ 
+ static const struct mxs_phy_data imx6sx_phy_data = {
+-	.flags = MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS,
++	.flags = MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS |
++		MXS_PHY_HARDWARE_CONTROL_PHY2_CLK,
+ };
+ 
+ static const struct mxs_phy_data imx6ul_phy_data = {
+-	.flags = MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS,
++	.flags = MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS |
++		MXS_PHY_HARDWARE_CONTROL_PHY2_CLK,
+ };
+ 
+ static const struct mxs_phy_data imx7ulp_phy_data = {
++	.flags = MXS_PHY_HAS_DCD,
++};
++
++static const struct mxs_phy_data imx8ulp_phy_data = {
++	.flags = MXS_PHY_HAS_DCD,
+ };
+ 
+ static const struct of_device_id mxs_phy_dt_ids[] = {
+@@ -192,6 +263,7 @@ static const struct of_device_id mxs_phy_dt_ids[] = {
+ 	{ .compatible = "fsl,vf610-usbphy", .data = &vf610_phy_data, },
+ 	{ .compatible = "fsl,imx6ul-usbphy", .data = &imx6ul_phy_data, },
+ 	{ .compatible = "fsl,imx7ulp-usbphy", .data = &imx7ulp_phy_data, },
++	{ .compatible = "fsl,imx8ulp-usbphy", .data = &imx8ulp_phy_data, },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, mxs_phy_dt_ids);
+@@ -201,9 +273,14 @@ struct mxs_phy {
+ 	struct clk *clk;
+ 	const struct mxs_phy_data *data;
+ 	struct regmap *regmap_anatop;
++	struct regmap *regmap_sim;
+ 	int port_id;
+ 	u32 tx_reg_set;
+ 	u32 tx_reg_mask;
++	struct regulator *phy_3p0;
++	bool hardware_control_phy2_clk;
++	enum usb_current_mode mode;
++	unsigned long clk_rate;
+ };
+ 
+ static inline bool is_imx6q_phy(struct mxs_phy *mxs_phy)
+@@ -221,6 +298,16 @@ static inline bool is_imx7ulp_phy(struct mxs_phy *mxs_phy)
+ 	return mxs_phy->data == &imx7ulp_phy_data;
+ }
+ 
++static inline bool is_imx8ulp_phy(struct mxs_phy *mxs_phy)
++{
++	return mxs_phy->data == &imx8ulp_phy_data;
++}
++
++static inline bool is_imx6ul_phy(struct mxs_phy *mxs_phy)
++{
++	return mxs_phy->data == &imx6ul_phy_data;
++}
++
+ /*
+  * PHY needs some 32K cycles to switch from 32K clock to
+  * bus (such as AHB/AXI, etc) clock.
+@@ -273,12 +360,29 @@ static int mxs_phy_pll_enable(void __iomem *base, bool enable)
+ 	return ret;
+ }
+ 
++/*
++ * The imx8ulp phy registers are not properly reset after a warm
++ * reset (ERR051269). Using the following steps to reset DEBUG and
++ * PLL_SIC regs. CTRL and PWD regs are reset by "SFT" bit in
++ * stmp_reset_block().
++ */
++static void mxs_phy_regs_reset(void __iomem *base)
++{
++	writel(0x7f180000, base + HW_USBPHY_DEBUG_SET);
++	writel(~0x7f180000, base + HW_USBPHY_DEBUG_CLR);
++	writel(0x00d12000, base + HW_USBPHY_PLL_SIC_SET);
++	writel(~0x00d12000, base + HW_USBPHY_PLL_SIC_CLR);
++}
++
+ static int mxs_phy_hw_init(struct mxs_phy *mxs_phy)
+ {
+ 	int ret;
+ 	void __iomem *base = mxs_phy->phy.io_priv;
+ 
+-	if (is_imx7ulp_phy(mxs_phy)) {
++	if (is_imx8ulp_phy(mxs_phy))
++		mxs_phy_regs_reset(base);
++
++	if (is_imx7ulp_phy(mxs_phy) || is_imx8ulp_phy(mxs_phy)) {
+ 		ret = mxs_phy_pll_enable(base, true);
+ 		if (ret)
+ 			return ret;
+@@ -288,6 +392,16 @@ static int mxs_phy_hw_init(struct mxs_phy *mxs_phy)
+ 	if (ret)
+ 		goto disable_pll;
+ 
++	if (mxs_phy->phy_3p0) {
++		ret = regulator_enable(mxs_phy->phy_3p0);
++		if (ret) {
++			dev_err(mxs_phy->phy.dev,
++				"Failed to enable 3p0 regulator, ret=%d\n",
++				ret);
++			return ret;
++		}
++	}
++
+ 	/* Power up the PHY */
+ 	writel(0, base + HW_USBPHY_PWD);
+ 
+@@ -326,7 +440,7 @@ static int mxs_phy_hw_init(struct mxs_phy *mxs_phy)
+ 	return 0;
+ 
+ disable_pll:
+-	if (is_imx7ulp_phy(mxs_phy))
++	if (is_imx7ulp_phy(mxs_phy) || is_imx8ulp_phy(mxs_phy))
+ 		mxs_phy_pll_enable(base, false);
+ 	return ret;
+ }
+@@ -386,21 +500,10 @@ static void __mxs_phy_disconnect_line(struct mxs_phy *mxs_phy, bool disconnect)
+ 		usleep_range(500, 1000);
+ }
+ 
+-static bool mxs_phy_is_otg_host(struct mxs_phy *mxs_phy)
+-{
+-	void __iomem *base = mxs_phy->phy.io_priv;
+-	u32 phyctrl = readl(base + HW_USBPHY_CTRL);
+-
+-	if (IS_ENABLED(CONFIG_USB_OTG) &&
+-			!(phyctrl & BM_USBPHY_CTRL_OTG_ID_VALUE))
+-		return true;
+-
+-	return false;
+-}
+-
+ static void mxs_phy_disconnect_line(struct mxs_phy *mxs_phy, bool on)
+ {
+ 	bool vbus_is_on = false;
++	enum usb_phy_events last_event = mxs_phy->phy.last_event;
+ 
+ 	/* If the SoCs don't need to disconnect line without vbus, quit */
+ 	if (!(mxs_phy->data->flags & MXS_PHY_DISCONNECT_LINE_WITHOUT_VBUS))
+@@ -412,7 +515,8 @@ static void mxs_phy_disconnect_line(struct mxs_phy *mxs_phy, bool on)
+ 
+ 	vbus_is_on = mxs_phy_get_vbus_status(mxs_phy);
+ 
+-	if (on && !vbus_is_on && !mxs_phy_is_otg_host(mxs_phy))
++	if (on && ((!vbus_is_on && mxs_phy->mode != CUR_USB_MODE_HOST) ||
++			(last_event == USB_EVENT_VBUS)))
+ 		__mxs_phy_disconnect_line(mxs_phy, true);
+ 	else
+ 		__mxs_phy_disconnect_line(mxs_phy, false);
+@@ -450,9 +554,12 @@ static void mxs_phy_shutdown(struct usb_phy *phy)
+ 	writel(BM_USBPHY_CTRL_CLKGATE,
+ 	       phy->io_priv + HW_USBPHY_CTRL_SET);
+ 
+-	if (is_imx7ulp_phy(mxs_phy))
++	if (is_imx7ulp_phy(mxs_phy) || is_imx8ulp_phy(mxs_phy))
+ 		mxs_phy_pll_enable(phy->io_priv, false);
+ 
++	if (mxs_phy->phy_3p0)
++		regulator_disable(mxs_phy->phy_3p0);
++
+ 	clk_disable_unprepare(mxs_phy->clk);
+ }
+ 
+@@ -506,14 +613,51 @@ static int mxs_phy_suspend(struct usb_phy *x, int suspend)
+ 		} else {
+ 			writel(0xffffffff, x->io_priv + HW_USBPHY_PWD);
+ 		}
++
++		/*
++		 * USB2 PLL use ring VCO, when the PLL power up, the ring
++		 * VCO’s supply also ramp up. There is a possibility that
++		 * the ring VCO start oscillation at multi nodes in this
++		 * phase, especially for VCO which has many stages, then
++		 * the multiwave will be kept until PLL power down. the bit
++		 * hold_ring_off can force the VCO in one determined state
++		 * to avoid the multiwave issue when VCO supply start ramp
++		 * up.
++		 */
++		if (mxs_phy->port_id == 1 && mxs_phy->regmap_anatop)
++			regmap_write(mxs_phy->regmap_anatop,
++				     ANADIG_PLL_USB2_SET,
++				     BM_ANADIG_PLL_USB2_HOLD_RING_OFF);
++
+ 		writel(BM_USBPHY_CTRL_CLKGATE,
+ 		       x->io_priv + HW_USBPHY_CTRL_SET);
+-		clk_disable_unprepare(mxs_phy->clk);
++		if (!(mxs_phy->port_id == 1 &&
++				mxs_phy->hardware_control_phy2_clk))
++			clk_disable_unprepare(mxs_phy->clk);
++		pm_runtime_put(x->dev);
+ 	} else {
++		pm_runtime_get_sync(x->dev);
+ 		mxs_phy_clock_switch_delay();
+-		ret = clk_prepare_enable(mxs_phy->clk);
+-		if (ret)
+-			return ret;
++		if (!(mxs_phy->port_id == 1 &&
++				mxs_phy->hardware_control_phy2_clk)) {
++			ret = clk_prepare_enable(mxs_phy->clk);
++			if (ret)
++				return ret;
++		}
++
++		/*
++		 * Per IC design's requirement, hold_ring_off bit can be
++		 * cleared 25us after PLL power up and 25us before any USB
++		 * TX/RX.
++		 */
++		if (mxs_phy->port_id == 1 && mxs_phy->regmap_anatop) {
++			udelay(25);
++			regmap_write(mxs_phy->regmap_anatop,
++				     ANADIG_PLL_USB2_CLR,
++				     BM_ANADIG_PLL_USB2_HOLD_RING_OFF);
++			udelay(25);
++		}
++
+ 		writel(BM_USBPHY_CTRL_CLKGATE,
+ 		       x->io_priv + HW_USBPHY_CTRL_CLR);
+ 		writel(0, x->io_priv + HW_USBPHY_PWD);
+@@ -708,6 +852,174 @@ static enum usb_charger_type mxs_phy_charger_detect(struct usb_phy *phy)
+ 	return chgr_type;
+ }
+ 
++static int mxs_phy_on_suspend(struct usb_phy *phy,
++		enum usb_device_speed speed)
++{
++	struct mxs_phy *mxs_phy = to_mxs_phy(phy);
++
++	dev_dbg(phy->dev, "%s device has suspended\n",
++		(speed == USB_SPEED_HIGH) ? "HS" : "FS/LS");
++
++	/* delay 4ms to wait bus entering idle */
++	usleep_range(4000, 5000);
++
++	if (mxs_phy->data->flags & MXS_PHY_ABNORMAL_IN_SUSPEND) {
++		writel_relaxed(0xffffffff, phy->io_priv + HW_USBPHY_PWD);
++		writel_relaxed(0, phy->io_priv + HW_USBPHY_PWD);
++	}
++
++	if (speed == USB_SPEED_HIGH)
++		writel_relaxed(BM_USBPHY_CTRL_ENHOSTDISCONDETECT,
++				phy->io_priv + HW_USBPHY_CTRL_CLR);
++
++	return 0;
++}
++
++/*
++ * The resume signal must be finished here.
++ */
++static int mxs_phy_on_resume(struct usb_phy *phy,
++		enum usb_device_speed speed)
++{
++	dev_dbg(phy->dev, "%s device has resumed\n",
++		(speed == USB_SPEED_HIGH) ? "HS" : "FS/LS");
++
++	if (speed == USB_SPEED_HIGH) {
++		/* Make sure the device has switched to High-Speed mode */
++		udelay(500);
++		writel_relaxed(BM_USBPHY_CTRL_ENHOSTDISCONDETECT,
++				phy->io_priv + HW_USBPHY_CTRL_SET);
++	}
++
++	return 0;
++}
++
++/*
++ * Set the usb current role for phy.
++ */
++static int mxs_phy_set_mode(struct usb_phy *phy,
++		enum usb_current_mode mode)
++{
++	struct mxs_phy *mxs_phy = to_mxs_phy(phy);
++
++	mxs_phy->mode = mode;
++
++	return 0;
++}
++
++static int mxs_phy_dcd_start(struct mxs_phy *mxs_phy)
++{
++	void __iomem *base = mxs_phy->phy.io_priv;
++	u32 value;
++
++	value = readl(base + DCD_CONTROL);
++	writel(value | DCD_CONTROL_SR, base + DCD_CONTROL);
++
++	if (!mxs_phy->clk_rate)
++		return -EINVAL;
++
++	value = readl(base + DCD_CONTROL);
++	writel(((mxs_phy->clk_rate / 1000000) << 2) | DCD_CLOCK_MHZ,
++		base + DCD_CLOCK);
++
++	value = readl(base + DCD_TIMER1);
++	value &= ~DCD_TVDPSRC_ON_MASK;
++	value |= DCD_TVDPSRC_ON_VALUE;
++	writel(value, base + DCD_TIMER1);
++
++	value = readl(base + DCD_CONTROL);
++	value &= ~DCD_CONTROL_IE;
++	writel(value | DCD_CONTROL_BC12, base + DCD_CONTROL);
++
++	value = readl(base + DCD_CONTROL);
++	writel(value | DCD_CONTROL_START, base + DCD_CONTROL);
++
++	return 0;
++}
++
++#define DCD_CHARGING_DURTION 1000 /* One second according to BC 1.2 */
++static enum usb_charger_type mxs_phy_dcd_flow(struct usb_phy *phy)
++{
++	struct mxs_phy *mxs_phy = to_mxs_phy(phy);
++	void __iomem *base = mxs_phy->phy.io_priv;
++	u32 value;
++	int i = 0;
++	enum usb_charger_type chgr_type;
++
++	if (mxs_phy_dcd_start(mxs_phy))
++		return UNKNOWN_TYPE;
++
++	while (i++ <= (DCD_CHARGING_DURTION / 50)) {
++		value = readl(base + DCD_CONTROL);
++		if (value & DCD_CONTROL_IF) {
++			value = readl(base + DCD_STATUS);
++			if (value & DCD_STATUS_ACTIVE) {
++				dev_err(phy->dev, "still detecting\n");
++				chgr_type = UNKNOWN_TYPE;
++				break;
++			}
++
++			if (value & DCD_STATUS_TO) {
++				dev_err(phy->dev, "detect timeout\n");
++				chgr_type = UNKNOWN_TYPE;
++				break;
++			}
++
++			if (value & DCD_STATUS_ERR) {
++				dev_err(phy->dev, "detect error\n");
++				chgr_type = UNKNOWN_TYPE;
++				break;
++			}
++
++			if ((value & DCD_STATUS_SEQ_STAT) <= DCD_CHG_DPIN) {
++				dev_err(phy->dev, "error occurs\n");
++				chgr_type = UNKNOWN_TYPE;
++				break;
++			}
++
++			/* SDP */
++			if (((value & DCD_STATUS_SEQ_STAT) == DCD_CHG_PORT) &&
++				((value & DCD_STATUS_SEQ_RES)
++					== DCD_SDP_PORT)) {
++				dev_dbg(phy->dev, "SDP\n");
++				chgr_type = SDP_TYPE;
++				break;
++			}
++
++			if ((value & DCD_STATUS_SEQ_STAT) == DCD_CHG_DET) {
++				if ((value & DCD_STATUS_SEQ_RES) ==
++						DCD_CDP_PORT) {
++					dev_dbg(phy->dev, "CDP\n");
++					chgr_type = CDP_TYPE;
++					break;
++				}
++
++				if ((value & DCD_STATUS_SEQ_RES) ==
++						DCD_DCP_PORT) {
++					dev_dbg(phy->dev, "DCP\n");
++					chgr_type = DCP_TYPE;
++					break;
++				}
++			}
++			dev_err(phy->dev, "unknown error occurs\n");
++			chgr_type = UNKNOWN_TYPE;
++			break;
++		}
++		msleep(50);
++	}
++
++	if (i > 20) {
++		dev_err(phy->dev, "charger detecting timeout\n");
++		chgr_type = UNKNOWN_TYPE;
++	}
++
++	/* disable dcd module */
++	readl(base + DCD_STATUS);
++	writel(DCD_CONTROL_IACK, base + DCD_CONTROL);
++	writel(DCD_CONTROL_SR, base + DCD_CONTROL);
++	return chgr_type;
++}
++
+ static int mxs_phy_probe(struct platform_device *pdev)
+ {
+ 	void __iomem *base;
+@@ -722,16 +1034,15 @@ static int mxs_phy_probe(struct platform_device *pdev)
+ 		return PTR_ERR(base);
+ 
+ 	clk = devm_clk_get(&pdev->dev, NULL);
+-	if (IS_ERR(clk)) {
+-		dev_err(&pdev->dev,
+-			"can't get the clock, err=%ld", PTR_ERR(clk));
+-		return PTR_ERR(clk);
+-	}
++	if (IS_ERR(clk))
++		return dev_err_probe(&pdev->dev, PTR_ERR(clk),
++				     "failed to get clock\n");
+ 
+ 	mxs_phy = devm_kzalloc(&pdev->dev, sizeof(*mxs_phy), GFP_KERNEL);
+ 	if (!mxs_phy)
+ 		return -ENOMEM;
+ 
++	mxs_phy->clk_rate = clk_get_rate(clk);
+ 	/* Some SoCs don't have anatop registers */
+ 	if (of_get_property(np, "fsl,anatop", NULL)) {
+ 		mxs_phy->regmap_anatop = syscon_regmap_lookup_by_phandle
+@@ -743,6 +1054,17 @@ static int mxs_phy_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
++	/* Currently, only imx7ulp has SIM module */
++	if (of_get_property(np, "nxp,sim", NULL)) {
++		mxs_phy->regmap_sim = syscon_regmap_lookup_by_phandle
++			(np, "nxp,sim");
++		if (IS_ERR(mxs_phy->regmap_sim)) {
++			dev_dbg(&pdev->dev,
++				"failed to find regmap for sim\n");
++			return PTR_ERR(mxs_phy->regmap_sim);
++		}
++	}
++
+ 	/* Precompute which bits of the TX register are to be updated, if any */
+ 	if (!of_property_read_u32(np, "fsl,tx-cal-45-dn-ohms", &val) &&
+ 	    val >= MXS_PHY_TX_CAL45_MIN && val <= MXS_PHY_TX_CAL45_MAX) {
+@@ -789,15 +1111,42 @@ static int mxs_phy_probe(struct platform_device *pdev)
+ 	mxs_phy->phy.notify_disconnect	= mxs_phy_on_disconnect;
+ 	mxs_phy->phy.type		= USB_PHY_TYPE_USB2;
+ 	mxs_phy->phy.set_wakeup		= mxs_phy_set_wakeup;
+-	mxs_phy->phy.charger_detect	= mxs_phy_charger_detect;
+-
+ 	mxs_phy->clk = clk;
+ 	mxs_phy->data = of_device_get_match_data(&pdev->dev);
++	mxs_phy->phy.set_mode		= mxs_phy_set_mode;
++
++	if (mxs_phy->data->flags & MXS_PHY_HAS_DCD)
++		mxs_phy->phy.charger_detect	= mxs_phy_dcd_flow;
++	else
++		mxs_phy->phy.charger_detect	= mxs_phy_charger_detect;
++
++	if (mxs_phy->data->flags & MXS_PHY_SENDING_SOF_TOO_FAST) {
++		mxs_phy->phy.notify_suspend = mxs_phy_on_suspend;
++		mxs_phy->phy.notify_resume = mxs_phy_on_resume;
++	}
++
++	mxs_phy->phy_3p0 = devm_regulator_get(&pdev->dev, "phy-3p0");
++	if (PTR_ERR(mxs_phy->phy_3p0) == -ENODEV)
++		/* not exist */
++		mxs_phy->phy_3p0 = NULL;
++	else if (IS_ERR(mxs_phy->phy_3p0))
++		return dev_err_probe(&pdev->dev, PTR_ERR(mxs_phy->phy_3p0),
++				     "Getting regulator error\n");
++
++	if (mxs_phy->phy_3p0)
++		regulator_set_voltage(mxs_phy->phy_3p0, 3200000, 3200000);
++
++	if (mxs_phy->data->flags & MXS_PHY_HARDWARE_CONTROL_PHY2_CLK)
++		mxs_phy->hardware_control_phy2_clk = true;
+ 
+ 	platform_set_drvdata(pdev, mxs_phy);
+ 
+ 	device_set_wakeup_capable(&pdev->dev, true);
+ 
++	pm_runtime_set_active(&pdev->dev);
++	pm_runtime_enable(&pdev->dev);
++	pm_runtime_get_noresume(&pdev->dev);
++
+ 	return usb_add_phy_dev(&mxs_phy->phy);
+ }
+ 
+@@ -806,33 +1155,68 @@ static int mxs_phy_remove(struct platform_device *pdev)
+ 	struct mxs_phy *mxs_phy = platform_get_drvdata(pdev);
+ 
+ 	usb_remove_phy(&mxs_phy->phy);
++	pm_runtime_get_sync(&pdev->dev);
++	pm_runtime_disable(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ 
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_PM
++
+ #ifdef CONFIG_PM_SLEEP
++static void mxs_phy_wakeup_enable(struct mxs_phy *mxs_phy, bool on)
++{
++	u32 mask = USB_PHY_VLLS_WAKEUP_EN;
++
++	/* If the SoCs don't have SIM, quit */
++	if (!mxs_phy->regmap_sim)
++		return;
++
++	if (on) {
++		regmap_update_bits(mxs_phy->regmap_sim, SIM_GPR1, mask, mask);
++		udelay(500);
++	} else {
++		regmap_update_bits(mxs_phy->regmap_sim, SIM_GPR1, mask, 0);
++	}
++}
++
+ static void mxs_phy_enable_ldo_in_suspend(struct mxs_phy *mxs_phy, bool on)
+ {
+-	unsigned int reg = on ? ANADIG_ANA_MISC0_SET : ANADIG_ANA_MISC0_CLR;
++	unsigned int reg;
++	u32 value;
+ 
+ 	/* If the SoCs don't have anatop, quit */
+ 	if (!mxs_phy->regmap_anatop)
+ 		return;
+ 
+-	if (is_imx6q_phy(mxs_phy))
++	if (is_imx6q_phy(mxs_phy)) {
++		reg = on ? ANADIG_ANA_MISC0_SET : ANADIG_ANA_MISC0_CLR;
+ 		regmap_write(mxs_phy->regmap_anatop, reg,
+ 			BM_ANADIG_ANA_MISC0_STOP_MODE_CONFIG);
+-	else if (is_imx6sl_phy(mxs_phy))
++	} else if (is_imx6sl_phy(mxs_phy)) {
++		reg = on ? ANADIG_ANA_MISC0_SET : ANADIG_ANA_MISC0_CLR;
+ 		regmap_write(mxs_phy->regmap_anatop,
+ 			reg, BM_ANADIG_ANA_MISC0_STOP_MODE_CONFIG_SL);
++	} else if (is_imx6ul_phy(mxs_phy)) {
++		reg = on ? ANADIG_REG_1P1_SET : ANADIG_REG_1P1_CLR;
++		value = BM_ANADIG_REG_1P1_ENABLE_WEAK_LINREG |
++			BM_ANADIG_REG_1P1_TRACK_VDD_SOC_CAP;
++		if (mxs_phy_get_vbus_status(mxs_phy) && on)
++			regmap_write(mxs_phy->regmap_anatop, reg, value);
++		else if (!on)
++			regmap_write(mxs_phy->regmap_anatop, reg, value);
++	}
+ }
+ 
+ static int mxs_phy_system_suspend(struct device *dev)
+ {
+ 	struct mxs_phy *mxs_phy = dev_get_drvdata(dev);
+ 
+-	if (device_may_wakeup(dev))
++	if (device_may_wakeup(dev)) {
+ 		mxs_phy_enable_ldo_in_suspend(mxs_phy, true);
++		mxs_phy_wakeup_enable(mxs_phy, true);
++	}
+ 
+ 	return 0;
+ }
+@@ -841,15 +1225,34 @@ static int mxs_phy_system_resume(struct device *dev)
+ {
+ 	struct mxs_phy *mxs_phy = dev_get_drvdata(dev);
+ 
+-	if (device_may_wakeup(dev))
++	if (device_may_wakeup(dev)) {
+ 		mxs_phy_enable_ldo_in_suspend(mxs_phy, false);
++		mxs_phy_wakeup_enable(mxs_phy, false);
++	}
++
++	pm_runtime_disable(dev);
++	pm_runtime_set_active(dev);
++	pm_runtime_enable(dev);
+ 
+ 	return 0;
+ }
+ #endif /* CONFIG_PM_SLEEP */
+ 
+-static SIMPLE_DEV_PM_OPS(mxs_phy_pm, mxs_phy_system_suspend,
+-		mxs_phy_system_resume);
++static int mxs_phy_runtime_resume(struct device *dev)
++{
++	return 0;
++}
++
++static int mxs_phy_runtime_suspend(struct device *dev)
++{
++	return 0;
++}
++#endif /* CONFIG_PM */
++
++static const struct dev_pm_ops mxs_phy_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(mxs_phy_system_suspend, mxs_phy_system_resume)
++	SET_RUNTIME_PM_OPS(mxs_phy_runtime_suspend, mxs_phy_runtime_resume, NULL)
++};
+ 
+ static struct platform_driver mxs_phy_driver = {
+ 	.probe = mxs_phy_probe,
+@@ -857,7 +1260,7 @@ static struct platform_driver mxs_phy_driver = {
+ 	.driver = {
+ 		.name = DRIVER_NAME,
+ 		.of_match_table = mxs_phy_dt_ids,
+-		.pm = &mxs_phy_pm,
++		.pm = &mxs_phy_pm_ops,
+ 	 },
+ };
+ 
+diff --git a/drivers/usb/typec/bus.c b/drivers/usb/typec/bus.c
+index 0aefb9e14..78e0e7895 100644
+--- a/drivers/usb/typec/bus.c
++++ b/drivers/usb/typec/bus.c
+@@ -134,7 +134,7 @@ int typec_altmode_exit(struct typec_altmode *adev)
+ 	if (!adev || !adev->active)
+ 		return 0;
+ 
+-	if (!pdev->ops || !pdev->ops->exit)
++	if (!pdev->ops || !pdev->ops->enter)
+ 		return -EOPNOTSUPP;
+ 
+ 	/* Moving to USB Safe State */
+diff --git a/drivers/usb/typec/class.c b/drivers/usb/typec/class.c
+index 339752fef..ff6c14d7b 100644
+--- a/drivers/usb/typec/class.c
++++ b/drivers/usb/typec/class.c
+@@ -1895,49 +1895,6 @@ void *typec_get_drvdata(struct typec_port *port)
+ }
+ EXPORT_SYMBOL_GPL(typec_get_drvdata);
+ 
+-int typec_get_fw_cap(struct typec_capability *cap,
+-		     struct fwnode_handle *fwnode)
+-{
+-	const char *cap_str;
+-	int ret;
+-
+-	cap->fwnode = fwnode;
+-
+-	ret = fwnode_property_read_string(fwnode, "power-role", &cap_str);
+-	if (ret < 0)
+-		return ret;
+-
+-	ret = typec_find_port_power_role(cap_str);
+-	if (ret < 0)
+-		return ret;
+-	cap->type = ret;
+-
+-	/* USB data support is optional */
+-	ret = fwnode_property_read_string(fwnode, "data-role", &cap_str);
+-	if (ret == 0) {
+-		ret = typec_find_port_data_role(cap_str);
+-		if (ret < 0)
+-			return ret;
+-		cap->data = ret;
+-	}
+-
+-	/* Get the preferred power role for a DRP */
+-	if (cap->type == TYPEC_PORT_DRP) {
+-		cap->prefer_role = TYPEC_NO_PREFERRED_ROLE;
+-
+-		ret = fwnode_property_read_string(fwnode, "try-power-role", &cap_str);
+-		if (ret == 0) {
+-			ret = typec_find_power_role(cap_str);
+-			if (ret < 0)
+-				return ret;
+-			cap->prefer_role = ret;
+-		}
+-	}
+-
+-	return 0;
+-}
+-EXPORT_SYMBOL_GPL(typec_get_fw_cap);
+-
+ /**
+  * typec_port_register_altmode - Register USB Type-C Port Alternate Mode
+  * @port: USB Type-C Port that supports the alternate mode
+diff --git a/drivers/usb/typec/mux/Kconfig b/drivers/usb/typec/mux/Kconfig
+index edead5558..c66819e96 100644
+--- a/drivers/usb/typec/mux/Kconfig
++++ b/drivers/usb/typec/mux/Kconfig
+@@ -19,4 +19,10 @@ config TYPEC_MUX_INTEL_PMC
+ 	  control the USB role switch and also the multiplexer/demultiplexer
+ 	  switches used with USB Type-C Alternate Modes.
+ 
++config TYPEC_SWITCH_GPIO
++	tristate "Simple Super Speed Active Switch via GPIO"
++	help
++	  Say Y or M if your system has a typec super speed channel
++	  switch via a simple GPIO control.
++
+ endmenu
+diff --git a/drivers/usb/typec/mux/Makefile b/drivers/usb/typec/mux/Makefile
+index 280a6f553..319069d30 100644
+--- a/drivers/usb/typec/mux/Makefile
++++ b/drivers/usb/typec/mux/Makefile
+@@ -2,3 +2,4 @@
+ 
+ obj-$(CONFIG_TYPEC_MUX_PI3USB30532)	+= pi3usb30532.o
+ obj-$(CONFIG_TYPEC_MUX_INTEL_PMC)	+= intel_pmc_mux.o
++obj-$(CONFIG_TYPEC_SWITCH_GPIO)		+= gpio-switch.o
+diff --git a/drivers/usb/typec/mux/gpio-switch.c b/drivers/usb/typec/mux/gpio-switch.c
+new file mode 100644
+index 000000000..6029e224a
+--- /dev/null
++++ b/drivers/usb/typec/mux/gpio-switch.c
+@@ -0,0 +1,118 @@
++// SPDX-License-Identifier: GPL-2.0
++/**
++ * gpio-switch.c - typec switch via a simple GPIO control.
++ *
++ * Copyright 2019 NXP
++ * Author: Jun Li <jun.li@nxp.com>
++ *
++ */
++
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/kernel.h>
++#include <linux/platform_device.h>
++#include <linux/of.h>
++#include <linux/of_gpio.h>
++#include <linux/usb/typec_mux.h>
++
++struct gpio_typec_switch {
++	struct typec_switch *sw;
++	struct mutex lock;
++	struct gpio_desc *ss_sel;
++	struct gpio_desc *ss_reset;
++};
++
++static int switch_gpio_set(struct typec_switch *sw,
++			   enum typec_orientation orientation)
++{
++	struct gpio_typec_switch *gpio_sw = typec_switch_get_drvdata(sw);
++
++	mutex_lock(&gpio_sw->lock);
++
++	switch (orientation) {
++	case TYPEC_ORIENTATION_NORMAL:
++		gpiod_set_value_cansleep(gpio_sw->ss_sel, 1);
++		break;
++	case TYPEC_ORIENTATION_REVERSE:
++		gpiod_set_value_cansleep(gpio_sw->ss_sel, 0);
++		break;
++	case TYPEC_ORIENTATION_NONE:
++		break;
++	}
++
++	mutex_unlock(&gpio_sw->lock);
++
++	return 0;
++}
++
++static int typec_switch_gpio_probe(struct platform_device *pdev)
++{
++	struct gpio_typec_switch	*gpio_sw;
++	struct device			*dev = &pdev->dev;
++	struct typec_switch_desc sw_desc;
++
++	gpio_sw = devm_kzalloc(dev, sizeof(*gpio_sw), GFP_KERNEL);
++	if (!gpio_sw)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, gpio_sw);
++
++	sw_desc.drvdata = gpio_sw;
++	sw_desc.fwnode = dev->fwnode;
++	sw_desc.set = switch_gpio_set;
++	sw_desc.name = NULL;
++	mutex_init(&gpio_sw->lock);
++
++	/* Get the super speed mux reset GPIO, it's optional */
++	gpio_sw->ss_reset = devm_gpiod_get_optional(dev, "reset",
++						    GPIOD_OUT_HIGH);
++	if (IS_ERR(gpio_sw->ss_reset))
++		return PTR_ERR(gpio_sw->ss_reset);
++
++	if (gpio_sw->ss_reset)
++		usleep_range(700, 1000);
++
++	/* Get the super speed active channel selection GPIO */
++	gpio_sw->ss_sel = devm_gpiod_get(dev, "switch", GPIOD_OUT_LOW);
++	if (IS_ERR(gpio_sw->ss_sel))
++		return PTR_ERR(gpio_sw->ss_sel);
++
++	gpio_sw->sw = typec_switch_register(dev, &sw_desc);
++	if (IS_ERR(gpio_sw->sw)) {
++		dev_err(dev, "Error registering typec switch: %ld\n", PTR_ERR(gpio_sw->sw));
++		return PTR_ERR(gpio_sw->sw);
++	}
++
++	return 0;
++}
++
++static int typec_switch_gpio_remove(struct platform_device *pdev)
++{
++	struct gpio_typec_switch *gpio_sw = platform_get_drvdata(pdev);
++
++	typec_switch_unregister(gpio_sw->sw);
++
++	return 0;
++}
++
++static const struct of_device_id of_typec_switch_gpio_match[] = {
++	{ .compatible = "nxp,ptn36043" },
++	{ .compatible = "nxp,cbtl04gp" },
++	{ /* Sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, of_typec_switch_gpio_match);
++
++static struct platform_driver typec_switch_gpio_driver = {
++	.probe		= typec_switch_gpio_probe,
++	.remove		= typec_switch_gpio_remove,
++	.driver		= {
++		.name	= "typec-switch-gpio",
++		.of_match_table = of_typec_switch_gpio_match,
++	},
++};
++
++module_platform_driver(typec_switch_gpio_driver);
++MODULE_LICENSE("GPL v2");
++MODULE_DESCRIPTION("TypeC Super Speed Switch GPIO driver");
++MODULE_AUTHOR("Jun Li <jun.li@nxp.com>");
+-- 
+2.25.1
+

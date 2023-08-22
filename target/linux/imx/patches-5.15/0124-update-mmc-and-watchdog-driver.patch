@@ -1,0 +1,1679 @@
+From dd2409c9ed5052a556261453ac9d2aa48a0ed44e Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 16:16:37 +0800
+Subject: [PATCH 24/24] update mmc and watchdog driver
+
+---
+ arch/arm64/include/asm/tlbflush.h   |  44 +++-
+ drivers/i3c/master/svc-i3c-master.c | 345 +++++++++++++++++++++-------
+ drivers/mmc/host/Kconfig            |   3 +-
+ drivers/mmc/host/mmc_hsq.c          |   2 +-
+ drivers/mmc/host/mmc_spi.c          |   8 +-
+ drivers/mmc/host/mmci.c             |   4 +-
+ drivers/mmc/host/mtk-sd.c           |  26 ++-
+ drivers/mmc/host/mxcmmc.c           |   4 +-
+ drivers/mmc/host/sdhci-esdhc-imx.c  |  31 +--
+ drivers/mmc/host/sdhci-of-esdhc.c   |  24 +-
+ drivers/mmc/host/sdhci-pci-core.c   |  16 +-
+ drivers/mmc/host/sdhci.c            |  61 +----
+ drivers/mmc/host/sdhci.h            |   2 -
+ drivers/regulator/fixed.c           |   2 +-
+ drivers/watchdog/imx7ulp_wdt.c      | 217 +++++++++++++----
+ include/linux/usb/hcd.h             |   7 -
+ 16 files changed, 536 insertions(+), 260 deletions(-)
+
+diff --git a/arch/arm64/include/asm/tlbflush.h b/arch/arm64/include/asm/tlbflush.h
+index 412a3b9a3..952e90443 100644
+--- a/arch/arm64/include/asm/tlbflush.h
++++ b/arch/arm64/include/asm/tlbflush.h
+@@ -16,6 +16,8 @@
+ #include <asm/cputype.h>
+ #include <asm/mmu.h>
+ 
++extern bool TKT340553_SW_WORKAROUND;
++
+ /*
+  * Raw TLBI operations.
+  *
+@@ -249,9 +251,16 @@ static inline void flush_tlb_mm(struct mm_struct *mm)
+ 
+ 	dsb(ishst);
+ 	asid = __TLBI_VADDR(0, ASID(mm));
+-	__tlbi(aside1is, asid);
+-	__tlbi_user(aside1is, asid);
+-	dsb(ish);
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++	} else {
++		__tlbi(aside1is, asid);
++		__tlbi_user(aside1is, asid);
++		dsb(ish);
++	}
+ }
+ 
+ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
+@@ -261,8 +270,15 @@ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
+ 
+ 	dsb(ishst);
+ 	addr = __TLBI_VADDR(uaddr, ASID(vma->vm_mm));
+-	__tlbi(vale1is, addr);
+-	__tlbi_user(vale1is, addr);
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++	} else {
++		__tlbi(vale1is, addr);
++		__tlbi_user(vale1is, addr);
++	}
+ }
+ 
+ static inline void flush_tlb_page(struct vm_area_struct *vma,
+@@ -307,6 +323,14 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
+ 	dsb(ishst);
+ 	asid = ASID(vma->vm_mm);
+ 
++	if (TKT340553_SW_WORKAROUND) {
++		/* Flush the entire TLB and exit */
++		__tlbi(vmalle1is);
++		dsb(ish);
++		isb();
++		return;
++	}
++
+ 	/*
+ 	 * When the CPU does not support TLB range operations, flush the TLB
+ 	 * entries one by one at the granularity of 'stride'. If the TLB
+@@ -357,6 +381,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
+ 		}
+ 		scale++;
+ 	}
++
+ 	dsb(ish);
+ }
+ 
+@@ -375,7 +400,8 @@ static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end
+ {
+ 	unsigned long addr;
+ 
+-	if ((end - start) > (MAX_TLBI_OPS * PAGE_SIZE)) {
++	if (((end - start) > (MAX_TLBI_OPS * PAGE_SIZE))
++	    || (TKT340553_SW_WORKAROUND)) {
+ 		flush_tlb_all();
+ 		return;
+ 	}
+@@ -399,7 +425,11 @@ static inline void __flush_tlb_kernel_pgtable(unsigned long kaddr)
+ 	unsigned long addr = __TLBI_VADDR(kaddr, 0);
+ 
+ 	dsb(ishst);
+-	__tlbi(vaae1is, addr);
++	if (TKT340553_SW_WORKAROUND)
++		/* Flush the entire TLB */
++		__tlbi(vmalle1is);
++	else
++		__tlbi(vaae1is, addr);
+ 	dsb(ish);
+ 	isb();
+ }
+diff --git a/drivers/i3c/master/svc-i3c-master.c b/drivers/i3c/master/svc-i3c-master.c
+index 879e5a64a..4011fae20 100644
+--- a/drivers/i3c/master/svc-i3c-master.c
++++ b/drivers/i3c/master/svc-i3c-master.c
+@@ -17,7 +17,9 @@
+ #include <linux/list.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/pinctrl/consumer.h>
+ #include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
+ 
+ /* Master Mode Registers */
+ #define SVC_I3C_MCONFIG      0x000
+@@ -90,6 +92,7 @@
+ #define SVC_I3C_MINTCLR      0x094
+ #define SVC_I3C_MINTMASKED   0x098
+ #define SVC_I3C_MERRWARN     0x09C
++#define   SVC_I3C_MERRWARN_NACK BIT(2)
+ #define SVC_I3C_MDMACTRL     0x0A0
+ #define SVC_I3C_MDATACTRL    0x0AC
+ #define   SVC_I3C_MDATACTRL_FLUSHTB BIT(0)
+@@ -119,6 +122,7 @@
+ #define   SVC_MDYNADDR_ADDR(x) FIELD_PREP(GENMASK(7, 1), (x))
+ 
+ #define SVC_I3C_MAX_DEVS 32
++#define SVC_I3C_PM_TIMEOUT_MS 1000
+ 
+ /* This parameter depends on the implementation and may be tuned */
+ #define SVC_I3C_FIFO_SIZE 16
+@@ -142,6 +146,11 @@ struct svc_i3c_xfer {
+ 	struct svc_i3c_cmd cmds[];
+ };
+ 
++struct svc_i3c_regs_save {
++	u32 mconfig;
++	u32 mdynaddr;
++};
++
+ /**
+  * struct svc_i3c_master - Silvaco I3C Master structure
+  * @base: I3C master controller
+@@ -170,6 +179,7 @@ struct svc_i3c_master {
+ 	struct i3c_master_controller base;
+ 	struct device *dev;
+ 	void __iomem *regs;
++	struct svc_i3c_regs_save saved_regs;
+ 	u32 free_slots;
+ 	u8 addrs[SVC_I3C_MAX_DEVS];
+ 	struct i3c_dev_desc *descs[SVC_I3C_MAX_DEVS];
+@@ -236,6 +246,40 @@ static void svc_i3c_master_disable_interrupts(struct svc_i3c_master *master)
+ 	writel(mask, master->regs + SVC_I3C_MINTCLR);
+ }
+ 
++static void svc_i3c_master_clear_merrwarn(struct svc_i3c_master *master)
++{
++	/* Clear pending warnings */
++	writel(readl(master->regs + SVC_I3C_MERRWARN),
++	       master->regs + SVC_I3C_MERRWARN);
++}
++
++static void svc_i3c_master_flush_fifo(struct svc_i3c_master *master)
++{
++	/* Flush FIFOs */
++	writel(SVC_I3C_MDATACTRL_FLUSHTB | SVC_I3C_MDATACTRL_FLUSHRB,
++	       master->regs + SVC_I3C_MDATACTRL);
++}
++
++static void svc_i3c_master_reset_fifo_trigger(struct svc_i3c_master *master)
++{
++	u32 reg;
++
++	/* Set RX and TX tigger levels, flush FIFOs */
++	reg = SVC_I3C_MDATACTRL_FLUSHTB |
++	      SVC_I3C_MDATACTRL_FLUSHRB |
++	      SVC_I3C_MDATACTRL_UNLOCK_TRIG |
++	      SVC_I3C_MDATACTRL_TXTRIG_FIFO_NOT_FULL |
++	      SVC_I3C_MDATACTRL_RXTRIG_FIFO_NOT_EMPTY;
++	writel(reg, master->regs + SVC_I3C_MDATACTRL);
++}
++
++static void svc_i3c_master_reset(struct svc_i3c_master *master)
++{
++	svc_i3c_master_clear_merrwarn(master);
++	svc_i3c_master_reset_fifo_trigger(master);
++	svc_i3c_master_disable_interrupts(master);
++}
++
+ static inline struct svc_i3c_master *
+ to_svc_i3c_master(struct i3c_master_controller *master)
+ {
+@@ -279,12 +323,6 @@ static void svc_i3c_master_emit_stop(struct svc_i3c_master *master)
+ 	udelay(1);
+ }
+ 
+-static void svc_i3c_master_clear_merrwarn(struct svc_i3c_master *master)
+-{
+-	writel(readl(master->regs + SVC_I3C_MERRWARN),
+-	       master->regs + SVC_I3C_MERRWARN);
+-}
+-
+ static int svc_i3c_master_handle_ibi(struct svc_i3c_master *master,
+ 				     struct i3c_dev_desc *dev)
+ {
+@@ -449,13 +487,23 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 	struct i3c_device_info info = {};
+ 	unsigned long fclk_rate, fclk_period_ns;
+ 	unsigned int high_period_ns, od_low_period_ns;
+-	u32 ppbaud, pplow, odhpp, odbaud, i2cbaud, reg;
++	u32 ppbaud, pplow, odhpp, odbaud, odstop, i2cbaud, reg;
+ 	int ret;
+ 
++	ret = pm_runtime_resume_and_get(master->dev);
++	if (ret < 0) {
++		dev_err(master->dev,
++			"<%s> cannot resume i3c bus master, err: %d\n",
++			__func__, ret);
++		return ret;
++	}
++
+ 	/* Timings derivation */
+ 	fclk_rate = clk_get_rate(master->fclk);
+-	if (!fclk_rate)
+-		return -EINVAL;
++	if (!fclk_rate) {
++		ret = -EINVAL;
++		goto rpm_out;
++	}
+ 
+ 	fclk_period_ns = DIV_ROUND_UP(1000000000, fclk_rate);
+ 
+@@ -479,6 +527,7 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 	switch (bus->mode) {
+ 	case I3C_BUS_MODE_PURE:
+ 		i2cbaud = 0;
++		odstop = 0;
+ 		break;
+ 	case I3C_BUS_MODE_MIXED_FAST:
+ 	case I3C_BUS_MODE_MIXED_LIMITED:
+@@ -487,6 +536,7 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 		 * between the high and low period does not really matter.
+ 		 */
+ 		i2cbaud = DIV_ROUND_UP(1000, od_low_period_ns) - 2;
++		odstop = 1;
+ 		break;
+ 	case I3C_BUS_MODE_MIXED_SLOW:
+ 		/*
+@@ -494,15 +544,16 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 		 * constraints as the FM+ mode.
+ 		 */
+ 		i2cbaud = DIV_ROUND_UP(2500, od_low_period_ns) - 2;
++		odstop = 1;
+ 		break;
+ 	default:
+-		return -EINVAL;
++		goto rpm_out;
+ 	}
+ 
+ 	reg = SVC_I3C_MCONFIG_MASTER_EN |
+ 	      SVC_I3C_MCONFIG_DISTO(0) |
+ 	      SVC_I3C_MCONFIG_HKEEP(0) |
+-	      SVC_I3C_MCONFIG_ODSTOP(0) |
++	      SVC_I3C_MCONFIG_ODSTOP(odstop) |
+ 	      SVC_I3C_MCONFIG_PPBAUD(ppbaud) |
+ 	      SVC_I3C_MCONFIG_PPLOW(pplow) |
+ 	      SVC_I3C_MCONFIG_ODBAUD(odbaud) |
+@@ -514,7 +565,7 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 	/* Master core's registration */
+ 	ret = i3c_master_get_free_addr(m, 0);
+ 	if (ret < 0)
+-		return ret;
++		goto rpm_out;
+ 
+ 	info.dyn_addr = ret;
+ 
+@@ -523,21 +574,33 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
+ 
+ 	ret = i3c_master_set_info(&master->base, &info);
+ 	if (ret)
+-		return ret;
++		goto rpm_out;
+ 
+-	svc_i3c_master_enable_interrupts(master, SVC_I3C_MINT_SLVSTART);
++rpm_out:
++	pm_runtime_mark_last_busy(master->dev);
++	pm_runtime_put_autosuspend(master->dev);
+ 
+-	return 0;
++	return ret;
+ }
+ 
+ static void svc_i3c_master_bus_cleanup(struct i3c_master_controller *m)
+ {
+ 	struct svc_i3c_master *master = to_svc_i3c_master(m);
++	int ret;
++
++	ret = pm_runtime_resume_and_get(master->dev);
++	if (ret < 0) {
++		dev_err(master->dev, "<%s> Cannot get runtime PM.\n", __func__);
++		return;
++	}
+ 
+ 	svc_i3c_master_disable_interrupts(master);
+ 
+ 	/* Disable master */
+ 	writel(0, master->regs + SVC_I3C_MCONFIG);
++
++	pm_runtime_mark_last_busy(master->dev);
++	pm_runtime_put_autosuspend(master->dev);
+ }
+ 
+ static int svc_i3c_master_reserve_slot(struct svc_i3c_master *master)
+@@ -656,8 +719,10 @@ static int svc_i3c_master_readb(struct svc_i3c_master *master, u8 *dst,
+ 	u32 reg;
+ 
+ 	for (i = 0; i < len; i++) {
+-		ret = readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
+-					 SVC_I3C_MSTATUS_RXPEND(reg), 0, 1000);
++		ret = readl_poll_timeout_atomic(master->regs + SVC_I3C_MSTATUS,
++						reg,
++						SVC_I3C_MSTATUS_RXPEND(reg),
++						0, 1000);
+ 		if (ret)
+ 			return ret;
+ 
+@@ -687,10 +752,11 @@ static int svc_i3c_master_do_daa_locked(struct svc_i3c_master *master,
+ 		 * Either one slave will send its ID, or the assignment process
+ 		 * is done.
+ 		 */
+-		ret = readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
+-					 SVC_I3C_MSTATUS_RXPEND(reg) |
+-					 SVC_I3C_MSTATUS_MCTRLDONE(reg),
+-					 1, 1000);
++		ret = readl_poll_timeout_atomic(master->regs + SVC_I3C_MSTATUS,
++						reg,
++						SVC_I3C_MSTATUS_RXPEND(reg) |
++						SVC_I3C_MSTATUS_MCTRLDONE(reg),
++						1, 1000);
+ 		if (ret)
+ 			return ret;
+ 
+@@ -744,11 +810,12 @@ static int svc_i3c_master_do_daa_locked(struct svc_i3c_master *master,
+ 		}
+ 
+ 		/* Wait for the slave to be ready to receive its address */
+-		ret = readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
+-					 SVC_I3C_MSTATUS_MCTRLDONE(reg) &&
+-					 SVC_I3C_MSTATUS_STATE_DAA(reg) &&
+-					 SVC_I3C_MSTATUS_BETWEEN(reg),
+-					 0, 1000);
++		ret = readl_poll_timeout_atomic(master->regs + SVC_I3C_MSTATUS,
++						reg,
++						SVC_I3C_MSTATUS_MCTRLDONE(reg) &&
++						SVC_I3C_MSTATUS_STATE_DAA(reg) &&
++						SVC_I3C_MSTATUS_BETWEEN(reg),
++						0, 1000);
+ 		if (ret)
+ 			return ret;
+ 
+@@ -832,31 +899,36 @@ static int svc_i3c_master_do_daa(struct i3c_master_controller *m)
+ 	unsigned int dev_nb;
+ 	int ret, i;
+ 
++	ret = pm_runtime_resume_and_get(master->dev);
++	if (ret < 0) {
++		dev_err(master->dev, "<%s> Cannot get runtime PM.\n", __func__);
++		return ret;
++	}
++
+ 	spin_lock_irqsave(&master->xferqueue.lock, flags);
+ 	ret = svc_i3c_master_do_daa_locked(master, addrs, &dev_nb);
+ 	spin_unlock_irqrestore(&master->xferqueue.lock, flags);
+-	if (ret)
+-		goto emit_stop;
++	if (ret) {
++		svc_i3c_master_emit_stop(master);
++		svc_i3c_master_clear_merrwarn(master);
++		goto rpm_out;
++	}
+ 
+ 	/* Register all devices who participated to the core */
+ 	for (i = 0; i < dev_nb; i++) {
+ 		ret = i3c_master_add_i3c_dev_locked(m, addrs[i]);
+ 		if (ret)
+-			return ret;
++			goto rpm_out;
+ 	}
+ 
+ 	/* Configure IBI auto-rules */
+ 	ret = svc_i3c_update_ibirules(master);
+-	if (ret) {
++	if (ret)
+ 		dev_err(master->dev, "Cannot handle such a list of devices");
+-		return ret;
+-	}
+-
+-	return 0;
+ 
+-emit_stop:
+-	svc_i3c_master_emit_stop(master);
+-	svc_i3c_master_clear_merrwarn(master);
++rpm_out:
++	pm_runtime_mark_last_busy(master->dev);
++	pm_runtime_put_autosuspend(master->dev);
+ 
+ 	return ret;
+ }
+@@ -864,27 +936,35 @@ static int svc_i3c_master_do_daa(struct i3c_master_controller *m)
+ static int svc_i3c_master_read(struct svc_i3c_master *master,
+ 			       u8 *in, unsigned int len)
+ {
+-	int offset = 0, i, ret;
+-	u32 mdctrl;
++	int offset = 0, i;
++	u32 mdctrl, mstatus;
++	bool completed = false;
++	unsigned int count;
++	unsigned long start = jiffies;
+ 
+-	while (offset < len) {
+-		unsigned int count;
++	while (!completed) {
++		mstatus = readl(master->regs + SVC_I3C_MSTATUS);
++		if (SVC_I3C_MSTATUS_COMPLETE(mstatus) != 0)
++			completed = true;
+ 
+-		ret = readl_poll_timeout(master->regs + SVC_I3C_MDATACTRL,
+-					 mdctrl,
+-					 !(mdctrl & SVC_I3C_MDATACTRL_RXEMPTY),
+-					 0, 1000);
+-		if (ret)
+-			return ret;
++		if (time_after(jiffies, start + msecs_to_jiffies(1000))) {
++			dev_dbg(master->dev, "<%s> timeout\n", __func__);
++			return -ETIMEDOUT;
++		}
+ 
++		mdctrl = readl(master->regs + SVC_I3C_MDATACTRL);
+ 		count = SVC_I3C_MDATACTRL_RXCOUNT(mdctrl);
++		if (offset + count > len) {
++			dev_err(master->dev, "<%s> recv len too long!\n",
++				__func__);
++			return -EINVAL;
++		}
+ 		for (i = 0; i < count; i++)
+ 			in[offset + i] = readl(master->regs + SVC_I3C_MRDATAB);
+-
+ 		offset += count;
+ 	}
+ 
+-	return 0;
++	return offset;
+ }
+ 
+ static int svc_i3c_master_write(struct svc_i3c_master *master,
+@@ -917,7 +997,7 @@ static int svc_i3c_master_write(struct svc_i3c_master *master,
+ static int svc_i3c_master_xfer(struct svc_i3c_master *master,
+ 			       bool rnw, unsigned int xfer_type, u8 addr,
+ 			       u8 *in, const u8 *out, unsigned int xfer_len,
+-			       unsigned int read_len, bool continued)
++			       unsigned int *read_len, bool continued)
+ {
+ 	u32 reg;
+ 	int ret;
+@@ -927,7 +1007,7 @@ static int svc_i3c_master_xfer(struct svc_i3c_master *master,
+ 	       SVC_I3C_MCTRL_IBIRESP_NACK |
+ 	       SVC_I3C_MCTRL_DIR(rnw) |
+ 	       SVC_I3C_MCTRL_ADDR(addr) |
+-	       SVC_I3C_MCTRL_RDTERM(read_len),
++	       SVC_I3C_MCTRL_RDTERM(*read_len),
+ 	       master->regs + SVC_I3C_MCTRL);
+ 
+ 	ret = readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
+@@ -935,21 +1015,34 @@ static int svc_i3c_master_xfer(struct svc_i3c_master *master,
+ 	if (ret)
+ 		goto emit_stop;
+ 
++	if (readl(master->regs + SVC_I3C_MERRWARN) & SVC_I3C_MERRWARN_NACK) {
++		ret = -ENXIO;
++		goto emit_stop;
++	}
++
+ 	if (rnw)
+ 		ret = svc_i3c_master_read(master, in, xfer_len);
+ 	else
+ 		ret = svc_i3c_master_write(master, out, xfer_len);
+-	if (ret)
++	if (ret < 0)
+ 		goto emit_stop;
++	if (rnw)
++		*read_len = ret;
+ 
+ 	ret = readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
+ 				 SVC_I3C_MSTATUS_COMPLETE(reg), 0, 1000);
+ 	if (ret)
+ 		goto emit_stop;
++	writel(SVC_I3C_MINT_COMPLETE, master->regs + SVC_I3C_MSTATUS);
+ 
+-	if (!continued)
++	if (!continued) {
+ 		svc_i3c_master_emit_stop(master);
+ 
++		/* Wait idle if stop is sent. */
++		readl_poll_timeout(master->regs + SVC_I3C_MSTATUS, reg,
++				   !SVC_I3C_MSTATUS_STATE(reg), 0, 1000);
++	}
++
+ 	return 0;
+ 
+ emit_stop:
+@@ -1007,12 +1100,15 @@ static void svc_i3c_master_start_xfer_locked(struct svc_i3c_master *master)
+ 	if (!xfer)
+ 		return;
+ 
++	svc_i3c_master_clear_merrwarn(master);
++	svc_i3c_master_flush_fifo(master);
++
+ 	for (i = 0; i < xfer->ncmds; i++) {
+ 		struct svc_i3c_cmd *cmd = &xfer->cmds[i];
+ 
+ 		ret = svc_i3c_master_xfer(master, cmd->rnw, xfer->type,
+ 					  cmd->addr, cmd->in, cmd->out,
+-					  cmd->len, cmd->read_len,
++					  cmd->len, &cmd->read_len,
+ 					  cmd->continued);
+ 		if (ret)
+ 			break;
+@@ -1038,6 +1134,13 @@ static void svc_i3c_master_enqueue_xfer(struct svc_i3c_master *master,
+ 					struct svc_i3c_xfer *xfer)
+ {
+ 	unsigned long flags;
++	int ret;
++
++	ret = pm_runtime_resume_and_get(master->dev);
++	if (ret < 0) {
++		dev_err(master->dev, "<%s> Cannot get runtime PM.\n", __func__);
++		return;
++	}
+ 
+ 	init_completion(&xfer->comp);
+ 	spin_lock_irqsave(&master->xferqueue.lock, flags);
+@@ -1048,6 +1151,9 @@ static void svc_i3c_master_enqueue_xfer(struct svc_i3c_master *master,
+ 		svc_i3c_master_start_xfer_locked(master);
+ 	}
+ 	spin_unlock_irqrestore(&master->xferqueue.lock, flags);
++
++	pm_runtime_mark_last_busy(master->dev);
++	pm_runtime_put_autosuspend(master->dev);
+ }
+ 
+ static bool
+@@ -1141,6 +1247,9 @@ static int svc_i3c_master_send_direct_ccc_cmd(struct svc_i3c_master *master,
+ 	if (!wait_for_completion_timeout(&xfer->comp, msecs_to_jiffies(1000)))
+ 		svc_i3c_master_dequeue_xfer(master, xfer);
+ 
++	if (cmd->read_len != xfer_len)
++		ccc->dests[0].payload.len = cmd->read_len;
++
+ 	ret = xfer->ret;
+ 	svc_i3c_master_free_xfer(xfer);
+ 
+@@ -1291,6 +1400,16 @@ static void svc_i3c_master_free_ibi(struct i3c_dev_desc *dev)
+ static int svc_i3c_master_enable_ibi(struct i3c_dev_desc *dev)
+ {
+ 	struct i3c_master_controller *m = i3c_dev_get_master(dev);
++	struct svc_i3c_master *master = to_svc_i3c_master(m);
++	int ret;
++
++	ret = pm_runtime_resume_and_get(master->dev);
++	if (ret < 0) {
++		dev_err(master->dev, "<%s> Cannot get runtime PM.\n", __func__);
++		return ret;
++	}
++
++	svc_i3c_master_enable_interrupts(master, SVC_I3C_MINT_SLVSTART);
+ 
+ 	return i3c_master_enec_locked(m, dev->info.dyn_addr, I3C_CCC_EVENT_SIR);
+ }
+@@ -1298,8 +1417,17 @@ static int svc_i3c_master_enable_ibi(struct i3c_dev_desc *dev)
+ static int svc_i3c_master_disable_ibi(struct i3c_dev_desc *dev)
+ {
+ 	struct i3c_master_controller *m = i3c_dev_get_master(dev);
++	struct svc_i3c_master *master = to_svc_i3c_master(m);
++	int ret;
++
++	svc_i3c_master_disable_interrupts(master);
++
++	ret = i3c_master_disec_locked(m, dev->info.dyn_addr, I3C_CCC_EVENT_SIR);
+ 
+-	return i3c_master_disec_locked(m, dev->info.dyn_addr, I3C_CCC_EVENT_SIR);
++	pm_runtime_mark_last_busy(master->dev);
++	pm_runtime_put_autosuspend(master->dev);
++
++	return ret;
+ }
+ 
+ static void svc_i3c_master_recycle_ibi_slot(struct i3c_dev_desc *dev,
+@@ -1330,25 +1458,6 @@ static const struct i3c_master_controller_ops svc_i3c_master_ops = {
+ 	.disable_ibi = svc_i3c_master_disable_ibi,
+ };
+ 
+-static void svc_i3c_master_reset(struct svc_i3c_master *master)
+-{
+-	u32 reg;
+-
+-	/* Clear pending warnings */
+-	writel(readl(master->regs + SVC_I3C_MERRWARN),
+-	       master->regs + SVC_I3C_MERRWARN);
+-
+-	/* Set RX and TX tigger levels, flush FIFOs */
+-	reg = SVC_I3C_MDATACTRL_FLUSHTB |
+-	      SVC_I3C_MDATACTRL_FLUSHRB |
+-	      SVC_I3C_MDATACTRL_UNLOCK_TRIG |
+-	      SVC_I3C_MDATACTRL_TXTRIG_FIFO_NOT_FULL |
+-	      SVC_I3C_MDATACTRL_RXTRIG_FIFO_NOT_EMPTY;
+-	writel(reg, master->regs + SVC_I3C_MDATACTRL);
+-
+-	svc_i3c_master_disable_interrupts(master);
+-}
+-
+ static int svc_i3c_master_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1381,8 +1490,6 @@ static int svc_i3c_master_probe(struct platform_device *pdev)
+ 
+ 	master->dev = dev;
+ 
+-	svc_i3c_master_reset(master);
+-
+ 	ret = clk_prepare_enable(master->pclk);
+ 	if (ret)
+ 		return ret;
+@@ -1419,14 +1526,31 @@ static int svc_i3c_master_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, master);
+ 
++	pm_runtime_set_autosuspend_delay(&pdev->dev, SVC_I3C_PM_TIMEOUT_MS);
++	pm_runtime_use_autosuspend(&pdev->dev);
++	pm_runtime_get_noresume(&pdev->dev);
++	pm_runtime_set_active(&pdev->dev);
++	pm_runtime_enable(&pdev->dev);
++
++	svc_i3c_master_reset(master);
++
+ 	/* Register the master */
+ 	ret = i3c_master_register(&master->base, &pdev->dev,
+ 				  &svc_i3c_master_ops, false);
+ 	if (ret)
+-		goto err_disable_sclk;
++		goto rpm_disable;
++
++	pm_runtime_mark_last_busy(&pdev->dev);
++	pm_runtime_put_autosuspend(&pdev->dev);
+ 
+ 	return 0;
+ 
++rpm_disable:
++	pm_runtime_dont_use_autosuspend(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_disable(&pdev->dev);
++
+ err_disable_sclk:
+ 	clk_disable_unprepare(master->sclk);
+ 
+@@ -1448,17 +1572,83 @@ static int svc_i3c_master_remove(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
++	pm_runtime_dont_use_autosuspend(&pdev->dev);
++	pm_runtime_disable(&pdev->dev);
++
++	return 0;
++}
++
++static void svc_i3c_save_regs(struct svc_i3c_master *master)
++{
++	master->saved_regs.mconfig = readl(master->regs + SVC_I3C_MCONFIG);
++	master->saved_regs.mdynaddr = readl(master->regs + SVC_I3C_MDYNADDR);
++}
++
++static void svc_i3c_restore_regs(struct svc_i3c_master *master)
++{
++	if (readl(master->regs + SVC_I3C_MDYNADDR) !=
++	    master->saved_regs.mdynaddr) {
++		writel(master->saved_regs.mconfig,
++		       master->regs + SVC_I3C_MCONFIG);
++		writel(master->saved_regs.mdynaddr,
++		       master->regs + SVC_I3C_MDYNADDR);
++	}
++}
++
++static int __maybe_unused svc_i3c_runtime_suspend(struct device *dev)
++{
++	struct svc_i3c_master *master = dev_get_drvdata(dev);
++
++	svc_i3c_save_regs(master);
++
+ 	clk_disable_unprepare(master->pclk);
+ 	clk_disable_unprepare(master->fclk);
+ 	clk_disable_unprepare(master->sclk);
++	pinctrl_pm_select_sleep_state(dev);
+ 
+ 	return 0;
+ }
+ 
++static int __maybe_unused svc_i3c_runtime_resume(struct device *dev)
++{
++	struct svc_i3c_master *master = dev_get_drvdata(dev);
++	int ret = 0;
++
++	pinctrl_pm_select_default_state(dev);
++	ret = clk_prepare_enable(master->pclk);
++	if (ret)
++		return ret;
++
++	ret = clk_prepare_enable(master->fclk);
++	if (ret) {
++		clk_disable_unprepare(master->pclk);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(master->sclk);
++	if (ret) {
++		clk_disable_unprepare(master->pclk);
++		clk_disable_unprepare(master->fclk);
++		return ret;
++	}
++
++	svc_i3c_restore_regs(master);
++
++	return ret;
++}
++
++static const struct dev_pm_ops svc_i3c_pm_ops = {
++	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
++				      pm_runtime_force_resume)
++	SET_RUNTIME_PM_OPS(svc_i3c_runtime_suspend,
++			   svc_i3c_runtime_resume, NULL)
++};
++
+ static const struct of_device_id svc_i3c_master_of_match_tbl[] = {
+ 	{ .compatible = "silvaco,i3c-master" },
+ 	{ /* sentinel */ },
+ };
++MODULE_DEVICE_TABLE(of, svc_i3c_master_of_match_tbl);
+ 
+ static struct platform_driver svc_i3c_master = {
+ 	.probe = svc_i3c_master_probe,
+@@ -1466,6 +1656,7 @@ static struct platform_driver svc_i3c_master = {
+ 	.driver = {
+ 		.name = "silvaco-i3c-master",
+ 		.of_match_table = svc_i3c_master_of_match_tbl,
++		.pm = &svc_i3c_pm_ops,
+ 	},
+ };
+ module_platform_driver(svc_i3c_master);
+diff --git a/drivers/mmc/host/Kconfig b/drivers/mmc/host/Kconfig
+index a116f2dde..29920d28b 100644
+--- a/drivers/mmc/host/Kconfig
++++ b/drivers/mmc/host/Kconfig
+@@ -1069,10 +1069,9 @@ config MMC_SDHCI_OMAP
+ 
+ config MMC_SDHCI_AM654
+ 	tristate "Support for the SDHCI Controller in TI's AM654 SOCs"
+-	depends on MMC_SDHCI_PLTFM && OF
++	depends on MMC_SDHCI_PLTFM && OF && REGMAP_MMIO
+ 	select MMC_SDHCI_IO_ACCESSORS
+ 	select MMC_CQHCI
+-	select REGMAP_MMIO
+ 	help
+ 	  This selects the Secure Digital Host Controller Interface (SDHCI)
+ 	  support present in TI's AM654 SOCs. The controller supports
+diff --git a/drivers/mmc/host/mmc_hsq.c b/drivers/mmc/host/mmc_hsq.c
+index 9d35453e7..a5e05ed0f 100644
+--- a/drivers/mmc/host/mmc_hsq.c
++++ b/drivers/mmc/host/mmc_hsq.c
+@@ -34,7 +34,7 @@ static void mmc_hsq_pump_requests(struct mmc_hsq *hsq)
+ 	spin_lock_irqsave(&hsq->lock, flags);
+ 
+ 	/* Make sure we are not already running a request now */
+-	if (hsq->mrq || hsq->recovery_halt) {
++	if (hsq->mrq) {
+ 		spin_unlock_irqrestore(&hsq->lock, flags);
+ 		return;
+ 	}
+diff --git a/drivers/mmc/host/mmc_spi.c b/drivers/mmc/host/mmc_spi.c
+index 91fde4943..b431cdd27 100644
+--- a/drivers/mmc/host/mmc_spi.c
++++ b/drivers/mmc/host/mmc_spi.c
+@@ -1441,7 +1441,7 @@ static int mmc_spi_probe(struct spi_device *spi)
+ 
+ 	status = mmc_add_host(mmc);
+ 	if (status != 0)
+-		goto fail_glue_init;
++		goto fail_add_host;
+ 
+ 	/*
+ 	 * Index 0 is card detect
+@@ -1449,7 +1449,7 @@ static int mmc_spi_probe(struct spi_device *spi)
+ 	 */
+ 	status = mmc_gpiod_request_cd(mmc, NULL, 0, false, 1000);
+ 	if (status == -EPROBE_DEFER)
+-		goto fail_gpiod_request;
++		goto fail_add_host;
+ 	if (!status) {
+ 		/*
+ 		 * The platform has a CD GPIO signal that may support
+@@ -1464,7 +1464,7 @@ static int mmc_spi_probe(struct spi_device *spi)
+ 	/* Index 1 is write protect/read only */
+ 	status = mmc_gpiod_request_ro(mmc, NULL, 1, 0);
+ 	if (status == -EPROBE_DEFER)
+-		goto fail_gpiod_request;
++		goto fail_add_host;
+ 	if (!status)
+ 		has_ro = true;
+ 
+@@ -1478,7 +1478,7 @@ static int mmc_spi_probe(struct spi_device *spi)
+ 				? ", cd polling" : "");
+ 	return 0;
+ 
+-fail_gpiod_request:
++fail_add_host:
+ 	mmc_remove_host(mmc);
+ fail_glue_init:
+ 	mmc_spi_dma_free(host);
+diff --git a/drivers/mmc/host/mmci.c b/drivers/mmc/host/mmci.c
+index 2c4eda83c..3765e2f4a 100644
+--- a/drivers/mmc/host/mmci.c
++++ b/drivers/mmc/host/mmci.c
+@@ -2254,9 +2254,7 @@ static int mmci_probe(struct amba_device *dev,
+ 	pm_runtime_set_autosuspend_delay(&dev->dev, 50);
+ 	pm_runtime_use_autosuspend(&dev->dev);
+ 
+-	ret = mmc_add_host(mmc);
+-	if (ret)
+-		goto clk_disable;
++	mmc_add_host(mmc);
+ 
+ 	pm_runtime_put(&dev->dev);
+ 	return 0;
+diff --git a/drivers/mmc/host/mtk-sd.c b/drivers/mmc/host/mtk-sd.c
+index 1ac920159..99d8881a7 100644
+--- a/drivers/mmc/host/mtk-sd.c
++++ b/drivers/mmc/host/mtk-sd.c
+@@ -1355,7 +1355,7 @@ static void msdc_data_xfer_next(struct msdc_host *host, struct mmc_request *mrq)
+ 		msdc_request_done(host, mrq);
+ }
+ 
+-static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
++static void msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 				struct mmc_request *mrq, struct mmc_data *data)
+ {
+ 	struct mmc_command *stop;
+@@ -1375,7 +1375,7 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 	spin_unlock_irqrestore(&host->lock, flags);
+ 
+ 	if (done)
+-		return true;
++		return;
+ 	stop = data->stop;
+ 
+ 	if (check_data || (stop && stop->error)) {
+@@ -1384,12 +1384,15 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 		sdr_set_field(host->base + MSDC_DMA_CTRL, MSDC_DMA_CTRL_STOP,
+ 				1);
+ 
++		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CTRL, val,
++						!(val & MSDC_DMA_CTRL_STOP), 1, 20000);
++		if (ret)
++			dev_dbg(host->dev, "DMA stop timed out\n");
++
+ 		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CFG, val,
+ 						!(val & MSDC_DMA_CFG_STS), 1, 20000);
+-		if (ret) {
+-			dev_dbg(host->dev, "DMA stop timed out\n");
+-			return false;
+-		}
++		if (ret)
++			dev_dbg(host->dev, "DMA inactive timed out\n");
+ 
+ 		sdr_clr_bits(host->base + MSDC_INTEN, data_ints_mask);
+ 		dev_dbg(host->dev, "DMA stop\n");
+@@ -1414,9 +1417,7 @@ static bool msdc_data_xfer_done(struct msdc_host *host, u32 events,
+ 		}
+ 
+ 		msdc_data_xfer_next(host, mrq);
+-		done = true;
+ 	}
+-	return done;
+ }
+ 
+ static void msdc_set_buswidth(struct msdc_host *host, u32 width)
+@@ -2344,9 +2345,15 @@ static void msdc_cqe_disable(struct mmc_host *mmc, bool recovery)
+ 	/* disable busy check */
+ 	sdr_clr_bits(host->base + MSDC_PATCH_BIT1, MSDC_PB1_BUSY_CHECK_SEL);
+ 
++	val = readl(host->base + MSDC_INT);
++	writel(val, host->base + MSDC_INT);
++
+ 	if (recovery) {
+ 		sdr_set_field(host->base + MSDC_DMA_CTRL,
+ 			      MSDC_DMA_CTRL_STOP, 1);
++		if (WARN_ON(readl_poll_timeout(host->base + MSDC_DMA_CTRL, val,
++			!(val & MSDC_DMA_CTRL_STOP), 1, 3000)))
++			return;
+ 		if (WARN_ON(readl_poll_timeout(host->base + MSDC_DMA_CFG, val,
+ 			!(val & MSDC_DMA_CFG_STS), 1, 3000)))
+ 			return;
+@@ -2781,11 +2788,14 @@ static int __maybe_unused msdc_suspend(struct device *dev)
+ {
+ 	struct mmc_host *mmc = dev_get_drvdata(dev);
+ 	int ret;
++	u32 val;
+ 
+ 	if (mmc->caps2 & MMC_CAP2_CQE) {
+ 		ret = cqhci_suspend(mmc);
+ 		if (ret)
+ 			return ret;
++		val = readl(((struct msdc_host *)mmc_priv(mmc))->base + MSDC_INT);
++		writel(val, ((struct msdc_host *)mmc_priv(mmc))->base + MSDC_INT);
+ 	}
+ 
+ 	return pm_runtime_force_suspend(dev);
+diff --git a/drivers/mmc/host/mxcmmc.c b/drivers/mmc/host/mxcmmc.c
+index 97227ad71..9bf95ba21 100644
+--- a/drivers/mmc/host/mxcmmc.c
++++ b/drivers/mmc/host/mxcmmc.c
+@@ -1143,9 +1143,7 @@ static int mxcmci_probe(struct platform_device *pdev)
+ 
+ 	timer_setup(&host->watchdog, mxcmci_watchdog, 0);
+ 
+-	ret = mmc_add_host(mmc);
+-	if (ret)
+-		goto out_free_dma;
++	mmc_add_host(mmc);
+ 
+ 	return 0;
+ 
+diff --git a/drivers/mmc/host/sdhci-esdhc-imx.c b/drivers/mmc/host/sdhci-esdhc-imx.c
+index 27f140461..2314a7595 100644
+--- a/drivers/mmc/host/sdhci-esdhc-imx.c
++++ b/drivers/mmc/host/sdhci-esdhc-imx.c
+@@ -26,7 +26,6 @@
+ #include <linux/of_device.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/pm_runtime.h>
+-#include "sdhci-cqhci.h"
+ #include "sdhci-pltfm.h"
+ #include "sdhci-esdhc.h"
+ #include "cqhci.h"
+@@ -108,7 +107,6 @@
+ #define ESDHC_TUNING_START_TAP_DEFAULT	0x1
+ #define ESDHC_TUNING_START_TAP_MASK	0x7f
+ #define ESDHC_TUNING_CMD_CRC_CHECK_DISABLE	(1 << 7)
+-#define ESDHC_TUNING_STEP_DEFAULT	0x1
+ #define ESDHC_TUNING_STEP_MASK		0x00070000
+ #define ESDHC_TUNING_STEP_SHIFT		16
+ 
+@@ -1315,7 +1313,7 @@ static void esdhc_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
+ 
+ static void esdhc_reset(struct sdhci_host *host, u8 mask)
+ {
+-	sdhci_and_cqhci_reset(host, mask);
++	sdhci_reset(host, mask);
+ 
+ 	sdhci_writel(host, host->ier, SDHCI_INT_ENABLE);
+ 	sdhci_writel(host, host->ier, SDHCI_SIGNAL_ENABLE);
+@@ -1387,7 +1385,7 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+ 	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+ 	struct cqhci_host *cq_host = host->mmc->cqe_private;
+-	u32 tmp;
++	int tmp;
+ 
+ 	if (esdhc_is_usdhc(imx_data)) {
+ 		/*
+@@ -1441,24 +1439,17 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 
+ 		if (imx_data->socdata->flags & ESDHC_FLAG_STD_TUNING) {
+ 			tmp = readl(host->ioaddr + ESDHC_TUNING_CTRL);
+-			tmp |= ESDHC_STD_TUNING_EN;
+-
+-			/*
+-			 * ROM code or bootloader may config the start tap
+-			 * and step, unmask them first.
+-			 */
+-			tmp &= ~(ESDHC_TUNING_START_TAP_MASK | ESDHC_TUNING_STEP_MASK);
+-			if (imx_data->boarddata.tuning_start_tap)
++			tmp |= ESDHC_STD_TUNING_EN |
++				ESDHC_TUNING_START_TAP_DEFAULT;
++			if (imx_data->boarddata.tuning_start_tap) {
++				tmp &= ~ESDHC_TUNING_START_TAP_MASK;
+ 				tmp |= imx_data->boarddata.tuning_start_tap;
+-			else
+-				tmp |= ESDHC_TUNING_START_TAP_DEFAULT;
++			}
+ 
+ 			if (imx_data->boarddata.tuning_step) {
++				tmp &= ~ESDHC_TUNING_STEP_MASK;
+ 				tmp |= imx_data->boarddata.tuning_step
+ 					<< ESDHC_TUNING_STEP_SHIFT;
+-			} else {
+-				tmp |= ESDHC_TUNING_STEP_DEFAULT
+-					<< ESDHC_TUNING_STEP_SHIFT;
+ 			}
+ 
+ 			/* Disable the CMD CRC check for tuning, if not, need to
+@@ -1544,7 +1535,7 @@ static void esdhc_cqe_enable(struct mmc_host *mmc)
+ 	 * system resume back.
+ 	 */
+ 	cqhci_writel(cq_host, 0, CQHCI_CTL);
+-	if (cqhci_readl(cq_host, CQHCI_CTL) & CQHCI_HALT)
++	if (cqhci_readl(cq_host, CQHCI_CTL) && CQHCI_HALT)
+ 		dev_err(mmc_dev(host->mmc),
+ 			"failed to exit halt state when enable CQE\n");
+ 
+@@ -1613,10 +1604,6 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
+ 	if (ret)
+ 		return ret;
+ 
+-	/* HS400/HS400ES require 8 bit bus */
+-	if (!(host->mmc->caps & MMC_CAP_8_BIT_DATA))
+-		host->mmc->caps2 &= ~(MMC_CAP2_HS400 | MMC_CAP2_HS400_ES);
+-
+ 	if (mmc_gpio_get_cd(host->mmc) >= 0)
+ 		host->quirks &= ~SDHCI_QUIRK_BROKEN_CARD_DETECTION;
+ 
+diff --git a/drivers/mmc/host/sdhci-of-esdhc.c b/drivers/mmc/host/sdhci-of-esdhc.c
+index c9a11d14d..6b44daf4b 100644
+--- a/drivers/mmc/host/sdhci-of-esdhc.c
++++ b/drivers/mmc/host/sdhci-of-esdhc.c
+@@ -135,7 +135,6 @@ static u32 esdhc_readl_fixup(struct sdhci_host *host,
+ 			return ret;
+ 		}
+ 	}
+-
+ 	/*
+ 	 * The DAT[3:0] line signal levels and the CMD line signal level are
+ 	 * not compatible with standard SDHC register. The line signal levels
+@@ -147,16 +146,6 @@ static u32 esdhc_readl_fixup(struct sdhci_host *host,
+ 		ret = value & 0x000fffff;
+ 		ret |= (value >> 4) & SDHCI_DATA_LVL_MASK;
+ 		ret |= (value << 1) & SDHCI_CMD_LVL;
+-
+-		/*
+-		 * Some controllers have unreliable Data Line Active
+-		 * bit for commands with busy signal. This affects
+-		 * Command Inhibit (data) bit. Just ignore it since
+-		 * MMC core driver has already polled card status
+-		 * with CMD13 after any command with busy siganl.
+-		 */
+-		if (esdhc->quirk_ignore_data_inhibit)
+-			ret &= ~SDHCI_DATA_INHIBIT;
+ 		return ret;
+ 	}
+ 
+@@ -171,6 +160,19 @@ static u32 esdhc_readl_fixup(struct sdhci_host *host,
+ 		return ret;
+ 	}
+ 
++	/*
++	 * Some controllers have unreliable Data Line Active
++	 * bit for commands with busy signal. This affects
++	 * Command Inhibit (data) bit. Just ignore it since
++	 * MMC core driver has already polled card status
++	 * with CMD13 after any command with busy siganl.
++	 */
++	if ((spec_reg == SDHCI_PRESENT_STATE) &&
++	(esdhc->quirk_ignore_data_inhibit == true)) {
++		ret = value & ~SDHCI_DATA_INHIBIT;
++		return ret;
++	}
++
+ 	ret = value;
+ 	return ret;
+ }
+diff --git a/drivers/mmc/host/sdhci-pci-core.c b/drivers/mmc/host/sdhci-pci-core.c
+index 8736e04fa..c2b26ada1 100644
+--- a/drivers/mmc/host/sdhci-pci-core.c
++++ b/drivers/mmc/host/sdhci-pci-core.c
+@@ -978,12 +978,6 @@ static bool glk_broken_cqhci(struct sdhci_pci_slot *slot)
+ 		dmi_match(DMI_SYS_VENDOR, "IRBIS"));
+ }
+ 
+-static bool jsl_broken_hs400es(struct sdhci_pci_slot *slot)
+-{
+-	return slot->chip->pdev->device == PCI_DEVICE_ID_INTEL_JSL_EMMC &&
+-			dmi_match(DMI_BIOS_VENDOR, "ASUSTeK COMPUTER INC.");
+-}
+-
+ static int glk_emmc_probe_slot(struct sdhci_pci_slot *slot)
+ {
+ 	int ret = byt_emmc_probe_slot(slot);
+@@ -992,11 +986,9 @@ static int glk_emmc_probe_slot(struct sdhci_pci_slot *slot)
+ 		slot->host->mmc->caps2 |= MMC_CAP2_CQE;
+ 
+ 	if (slot->chip->pdev->device != PCI_DEVICE_ID_INTEL_GLK_EMMC) {
+-		if (!jsl_broken_hs400es(slot)) {
+-			slot->host->mmc->caps2 |= MMC_CAP2_HS400_ES;
+-			slot->host->mmc_host_ops.hs400_enhanced_strobe =
+-							intel_hs400_enhanced_strobe;
+-		}
++		slot->host->mmc->caps2 |= MMC_CAP2_HS400_ES;
++		slot->host->mmc_host_ops.hs400_enhanced_strobe =
++						intel_hs400_enhanced_strobe;
+ 		slot->host->mmc->caps2 |= MMC_CAP2_CQE_DCMD;
+ 	}
+ 
+@@ -1818,8 +1810,6 @@ static int amd_probe(struct sdhci_pci_chip *chip)
+ 		}
+ 	}
+ 
+-	pci_dev_put(smbus_dev);
+-
+ 	if (gen == AMD_CHIPSET_BEFORE_ML || gen == AMD_CHIPSET_CZ)
+ 		chip->quirks2 |= SDHCI_QUIRK2_CLEAR_TRANSFERMODE_REG_BEFORE_CMD;
+ 
+diff --git a/drivers/mmc/host/sdhci.c b/drivers/mmc/host/sdhci.c
+index fdd69d68f..fc637b971 100644
+--- a/drivers/mmc/host/sdhci.c
++++ b/drivers/mmc/host/sdhci.c
+@@ -338,7 +338,6 @@ static void sdhci_init(struct sdhci_host *host, int soft)
+ 	if (soft) {
+ 		/* force clock reconfiguration */
+ 		host->clock = 0;
+-		host->reinit_uhs = true;
+ 		mmc->ops->set_ios(mmc, &mmc->ios);
+ 	}
+ }
+@@ -2258,46 +2257,11 @@ void sdhci_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
+ }
+ EXPORT_SYMBOL_GPL(sdhci_set_uhs_signaling);
+ 
+-static bool sdhci_timing_has_preset(unsigned char timing)
+-{
+-	switch (timing) {
+-	case MMC_TIMING_UHS_SDR12:
+-	case MMC_TIMING_UHS_SDR25:
+-	case MMC_TIMING_UHS_SDR50:
+-	case MMC_TIMING_UHS_SDR104:
+-	case MMC_TIMING_UHS_DDR50:
+-	case MMC_TIMING_MMC_DDR52:
+-		return true;
+-	};
+-	return false;
+-}
+-
+-static bool sdhci_preset_needed(struct sdhci_host *host, unsigned char timing)
+-{
+-	return !(host->quirks2 & SDHCI_QUIRK2_PRESET_VALUE_BROKEN) &&
+-	       sdhci_timing_has_preset(timing);
+-}
+-
+-static bool sdhci_presetable_values_change(struct sdhci_host *host, struct mmc_ios *ios)
+-{
+-	/*
+-	 * Preset Values are: Driver Strength, Clock Generator and SDCLK/RCLK
+-	 * Frequency. Check if preset values need to be enabled, or the Driver
+-	 * Strength needs updating. Note, clock changes are handled separately.
+-	 */
+-	return !host->preset_enabled &&
+-	       (sdhci_preset_needed(host, ios->timing) || host->drv_type != ios->drv_type);
+-}
+-
+ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ {
+ 	struct sdhci_host *host = mmc_priv(mmc);
+-	bool reinit_uhs = host->reinit_uhs;
+-	bool turning_on_clk = false;
+ 	u8 ctrl;
+ 
+-	host->reinit_uhs = false;
+-
+ 	if (ios->power_mode == MMC_POWER_UNDEFINED)
+ 		return;
+ 
+@@ -2323,8 +2287,6 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 		sdhci_enable_preset_value(host, false);
+ 
+ 	if (!ios->clock || ios->clock != host->clock) {
+-		turning_on_clk = ios->clock && !host->clock;
+-
+ 		host->ops->set_clock(host, ios->clock);
+ 		host->clock = ios->clock;
+ 
+@@ -2351,17 +2313,6 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 
+ 	host->ops->set_bus_width(host, ios->bus_width);
+ 
+-	/*
+-	 * Special case to avoid multiple clock changes during voltage
+-	 * switching.
+-	 */
+-	if (!reinit_uhs &&
+-	    turning_on_clk &&
+-	    host->timing == ios->timing &&
+-	    host->version >= SDHCI_SPEC_300 &&
+-	    !sdhci_presetable_values_change(host, ios))
+-		return;
+-
+ 	ctrl = sdhci_readb(host, SDHCI_HOST_CONTROL);
+ 
+ 	if (!(host->quirks & SDHCI_QUIRK_NO_HISPD_BIT)) {
+@@ -2405,7 +2356,6 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 			}
+ 
+ 			sdhci_writew(host, ctrl_2, SDHCI_HOST_CONTROL2);
+-			host->drv_type = ios->drv_type;
+ 		} else {
+ 			/*
+ 			 * According to SDHC Spec v3.00, if the Preset Value
+@@ -2433,14 +2383,19 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 		host->ops->set_uhs_signaling(host, ios->timing);
+ 		host->timing = ios->timing;
+ 
+-		if (sdhci_preset_needed(host, ios->timing)) {
++		if (!(host->quirks2 & SDHCI_QUIRK2_PRESET_VALUE_BROKEN) &&
++				((ios->timing == MMC_TIMING_UHS_SDR12) ||
++				 (ios->timing == MMC_TIMING_UHS_SDR25) ||
++				 (ios->timing == MMC_TIMING_UHS_SDR50) ||
++				 (ios->timing == MMC_TIMING_UHS_SDR104) ||
++				 (ios->timing == MMC_TIMING_UHS_DDR50) ||
++				 (ios->timing == MMC_TIMING_MMC_DDR52))) {
+ 			u16 preset;
+ 
+ 			sdhci_enable_preset_value(host, true);
+ 			preset = sdhci_get_preset_value(host);
+ 			ios->drv_type = FIELD_GET(SDHCI_PRESET_DRV_MASK,
+ 						  preset);
+-			host->drv_type = ios->drv_type;
+ 		}
+ 
+ 		/* Re-enable SD Clock */
+@@ -3755,7 +3710,6 @@ int sdhci_resume_host(struct sdhci_host *host)
+ 		sdhci_init(host, 0);
+ 		host->pwr = 0;
+ 		host->clock = 0;
+-		host->reinit_uhs = true;
+ 		mmc->ops->set_ios(mmc, &mmc->ios);
+ 	} else {
+ 		sdhci_init(host, (mmc->pm_flags & MMC_PM_KEEP_POWER));
+@@ -3814,7 +3768,6 @@ int sdhci_runtime_resume_host(struct sdhci_host *host, int soft_reset)
+ 		/* Force clock and power re-program */
+ 		host->pwr = 0;
+ 		host->clock = 0;
+-		host->reinit_uhs = true;
+ 		mmc->ops->start_signal_voltage_switch(mmc, &mmc->ios);
+ 		mmc->ops->set_ios(mmc, &mmc->ios);
+ 
+diff --git a/drivers/mmc/host/sdhci.h b/drivers/mmc/host/sdhci.h
+index 6a5cc0557..6c689be3e 100644
+--- a/drivers/mmc/host/sdhci.h
++++ b/drivers/mmc/host/sdhci.h
+@@ -523,8 +523,6 @@ struct sdhci_host {
+ 
+ 	unsigned int clock;	/* Current clock (MHz) */
+ 	u8 pwr;			/* Current voltage */
+-	u8 drv_type;		/* Current UHS-I driver type */
+-	bool reinit_uhs;	/* Force UHS-related re-initialization */
+ 
+ 	bool runtime_suspended;	/* Host is runtime suspended */
+ 	bool bus_on;		/* Bus power prevents runtime suspend */
+diff --git a/drivers/regulator/fixed.c b/drivers/regulator/fixed.c
+index 17e77b2b4..e9e753f89 100644
+--- a/drivers/regulator/fixed.c
++++ b/drivers/regulator/fixed.c
+@@ -215,7 +215,7 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
+ 		drvdata->enable_clock = devm_clk_get(dev, NULL);
+ 		if (IS_ERR(drvdata->enable_clock)) {
+ 			dev_err(dev, "Can't get enable-clock from devicetree\n");
+-			return PTR_ERR(drvdata->enable_clock);
++			return -ENOENT;
+ 		}
+ 	} else if (drvtype && drvtype->has_performance_state) {
+ 		drvdata->desc.ops = &fixed_voltage_domain_ops;
+diff --git a/drivers/watchdog/imx7ulp_wdt.c b/drivers/watchdog/imx7ulp_wdt.c
+index 922b60374..3611f8454 100644
+--- a/drivers/watchdog/imx7ulp_wdt.c
++++ b/drivers/watchdog/imx7ulp_wdt.c
+@@ -9,12 +9,15 @@
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_device.h>
+ #include <linux/platform_device.h>
+ #include <linux/reboot.h>
+ #include <linux/watchdog.h>
+ 
+ #define WDOG_CS			0x0
++#define WDOG_CS_FLG		BIT(14)
+ #define WDOG_CS_CMD32EN		BIT(13)
++#define WDOG_CS_PRES		BIT(12)
+ #define WDOG_CS_ULK		BIT(11)
+ #define WDOG_CS_RCS		BIT(10)
+ #define LPO_CLK			0x1
+@@ -39,60 +42,104 @@
+ #define DEFAULT_TIMEOUT	60
+ #define MAX_TIMEOUT	128
+ #define WDOG_CLOCK_RATE	1000
+-#define WDOG_WAIT_TIMEOUT	20
++#define WDOG_ULK_WAIT_TIMEOUT	1000
++#define WDOG_RCS_WAIT_TIMEOUT	10000
++#define WDOG_RCS_POST_WAIT 3000
++
++#define RETRY_MAX 5
+ 
+ static bool nowayout = WATCHDOG_NOWAYOUT;
+ module_param(nowayout, bool, 0000);
+ MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default="
+ 		 __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
+ 
++struct imx_wdt_hw_feature {
++	bool prescaler_enable;
++	u32 wdog_clock_rate;
++};
++
+ struct imx7ulp_wdt_device {
+ 	struct watchdog_device wdd;
+ 	void __iomem *base;
+ 	struct clk *clk;
++	bool post_rcs_wait;
++	const struct imx_wdt_hw_feature *hw;
+ };
+ 
+-static int imx7ulp_wdt_wait(void __iomem *base, u32 mask)
++static int imx7ulp_wdt_wait_ulk(void __iomem *base)
+ {
+ 	u32 val = readl(base + WDOG_CS);
+-
+-	if (!(val & mask) && readl_poll_timeout_atomic(base + WDOG_CS, val,
+-						       val & mask, 0,
+-						       WDOG_WAIT_TIMEOUT))
++	if (!(val & WDOG_CS_ULK) &&
++	    readl_poll_timeout_atomic(base + WDOG_CS, val,
++				      val & WDOG_CS_ULK, 0,
++				      WDOG_ULK_WAIT_TIMEOUT))
+ 		return -ETIMEDOUT;
+ 
+ 	return 0;
+ }
+ 
+-static int imx7ulp_wdt_enable(struct watchdog_device *wdog, bool enable)
++static int imx7ulp_wdt_wait_rcs(struct imx7ulp_wdt_device *wdt)
+ {
+-	struct imx7ulp_wdt_device *wdt = watchdog_get_drvdata(wdog);
++	int ret = 0;
++	u32 val = readl(wdt->base + WDOG_CS);
++	u64 timeout = (val & WDOG_CS_PRES) ?
++		WDOG_RCS_WAIT_TIMEOUT * 256 : WDOG_RCS_WAIT_TIMEOUT;
++	unsigned long wait_min = (val & WDOG_CS_PRES) ?
++		WDOG_RCS_POST_WAIT * 256 : WDOG_RCS_POST_WAIT;
++
++	if (!(val & WDOG_CS_RCS) &&
++	    readl_poll_timeout(wdt->base + WDOG_CS, val, val & WDOG_CS_RCS, 0,
++			       timeout))
++		ret = -ETIMEDOUT;
++
++	/* Wait 2.5 clocks after RCS done */
++	if (wdt->post_rcs_wait)
++		usleep_range(wait_min, wait_min + 2000);
+ 
++	return ret;
++}
++
++static int _imx7ulp_wdt_enable(struct imx7ulp_wdt_device *wdt, bool enable)
++{
+ 	u32 val = readl(wdt->base + WDOG_CS);
+ 	int ret;
+ 
+ 	local_irq_disable();
+ 	writel(UNLOCK, wdt->base + WDOG_CNT);
+-	ret = imx7ulp_wdt_wait(wdt->base, WDOG_CS_ULK);
++	ret = imx7ulp_wdt_wait_ulk(wdt->base);
+ 	if (ret)
+ 		goto enable_out;
+ 	if (enable)
+ 		writel(val | WDOG_CS_EN, wdt->base + WDOG_CS);
+ 	else
+ 		writel(val & ~WDOG_CS_EN, wdt->base + WDOG_CS);
+-	imx7ulp_wdt_wait(wdt->base, WDOG_CS_RCS);
+ 
+-enable_out:
+ 	local_irq_enable();
++	ret = imx7ulp_wdt_wait_rcs(wdt);
+ 
+ 	return ret;
++
++enable_out:
++	local_irq_enable();
++	return ret;
+ }
+ 
+-static bool imx7ulp_wdt_is_enabled(void __iomem *base)
++static int imx7ulp_wdt_enable(struct watchdog_device *wdog, bool enable)
+ {
+-	u32 val = readl(base + WDOG_CS);
++	struct imx7ulp_wdt_device *wdt = watchdog_get_drvdata(wdog);
++	int ret;
++	u32 val;
++	u32 loop = RETRY_MAX;
+ 
+-	return val & WDOG_CS_EN;
++	do {
++		ret = _imx7ulp_wdt_enable(wdt, enable);
++		val = readl(wdt->base + WDOG_CS);
++	} while (--loop > 0 && ((!!(val & WDOG_CS_EN)) != enable || ret));
++
++	if (loop == 0)
++		return -EBUSY;
++
++	return ret;
+ }
+ 
+ static int imx7ulp_wdt_ping(struct watchdog_device *wdog)
+@@ -114,26 +161,44 @@ static int imx7ulp_wdt_stop(struct watchdog_device *wdog)
+ 	return imx7ulp_wdt_enable(wdog, false);
+ }
+ 
+-static int imx7ulp_wdt_set_timeout(struct watchdog_device *wdog,
+-				   unsigned int timeout)
++static int _imx7ulp_wdt_set_timeout(struct imx7ulp_wdt_device *wdt,
++				   unsigned int toval)
+ {
+-	struct imx7ulp_wdt_device *wdt = watchdog_get_drvdata(wdog);
+-	u32 val = WDOG_CLOCK_RATE * timeout;
+ 	int ret;
+ 
+ 	local_irq_disable();
+ 	writel(UNLOCK, wdt->base + WDOG_CNT);
+-	ret = imx7ulp_wdt_wait(wdt->base, WDOG_CS_ULK);
++	ret = imx7ulp_wdt_wait_ulk(wdt->base);
+ 	if (ret)
+ 		goto timeout_out;
+-	writel(val, wdt->base + WDOG_TOVAL);
+-	imx7ulp_wdt_wait(wdt->base, WDOG_CS_RCS);
+-
+-	wdog->timeout = timeout;
++	writel(toval, wdt->base + WDOG_TOVAL);
++	local_irq_enable();
++	ret = imx7ulp_wdt_wait_rcs(wdt);
++	return ret;
+ 
+ timeout_out:
+ 	local_irq_enable();
++	return ret;
++}
++
++static int imx7ulp_wdt_set_timeout(struct watchdog_device *wdog,
++				   unsigned int timeout)
++{
++	struct imx7ulp_wdt_device *wdt = watchdog_get_drvdata(wdog);
++	u32 toval = wdt->hw->wdog_clock_rate * timeout;
++	u32 val;
++	int ret;
++	u32 loop = RETRY_MAX;
++
++	do {
++		ret = _imx7ulp_wdt_set_timeout(wdt, toval);
++		val = readl(wdt->base + WDOG_TOVAL);
++	} while (--loop > 0 && (val != toval || ret));
+ 
++	if (loop == 0)
++		return -EBUSY;
++
++	wdog->timeout = timeout;
+ 	return ret;
+ }
+ 
+@@ -173,29 +238,62 @@ static const struct watchdog_info imx7ulp_wdt_info = {
+ 		    WDIOF_MAGICCLOSE,
+ };
+ 
+-static int imx7ulp_wdt_init(void __iomem *base, unsigned int timeout)
++static int _imx7ulp_wdt_init(struct imx7ulp_wdt_device *wdt, unsigned int timeout, unsigned int cs)
+ {
+ 	u32 val;
+ 	int ret;
+ 
+ 	local_irq_disable();
+-	/* unlock the wdog for reconfiguration */
+-	writel_relaxed(UNLOCK_SEQ0, base + WDOG_CNT);
+-	writel_relaxed(UNLOCK_SEQ1, base + WDOG_CNT);
+-	ret = imx7ulp_wdt_wait(base, WDOG_CS_ULK);
++
++	val = readl(wdt->base + WDOG_CS);
++	if (val & WDOG_CS_CMD32EN) {
++		writel(UNLOCK, wdt->base + WDOG_CNT);
++	} else {
++		mb();
++		/* unlock the wdog for reconfiguration */
++		writel_relaxed(UNLOCK_SEQ0, wdt->base + WDOG_CNT);
++		writel_relaxed(UNLOCK_SEQ1, wdt->base + WDOG_CNT);
++		mb();
++	}
++
++	ret = imx7ulp_wdt_wait_ulk(wdt->base);
+ 	if (ret)
+ 		goto init_out;
+ 
+ 	/* set an initial timeout value in TOVAL */
+-	writel(timeout, base + WDOG_TOVAL);
+-	/* enable 32bit command sequence and reconfigure */
+-	val = WDOG_CS_CMD32EN | WDOG_CS_CLK | WDOG_CS_UPDATE |
+-	      WDOG_CS_WAIT | WDOG_CS_STOP;
+-	writel(val, base + WDOG_CS);
+-	imx7ulp_wdt_wait(base, WDOG_CS_RCS);
++	writel(timeout, wdt->base + WDOG_TOVAL);
++	writel(cs, wdt->base + WDOG_CS);
++	local_irq_enable();
++	ret = imx7ulp_wdt_wait_rcs(wdt);
++
++	return ret;
+ 
+ init_out:
+ 	local_irq_enable();
++	return ret;
++}
++
++static int imx7ulp_wdt_init(struct imx7ulp_wdt_device *wdt, unsigned int timeout)
++{
++	/* enable 32bit command sequence and reconfigure */
++	u32 val = WDOG_CS_CMD32EN | WDOG_CS_CLK | WDOG_CS_UPDATE |
++		  WDOG_CS_WAIT | WDOG_CS_STOP;
++	u32 cs, toval;
++	int ret;
++	u32 loop = RETRY_MAX;
++
++	if (wdt->hw->prescaler_enable)
++		val |= WDOG_CS_PRES;
++
++	do {
++		ret = _imx7ulp_wdt_init(wdt, timeout, val);
++		toval = readl(wdt->base + WDOG_TOVAL);
++		cs = readl(wdt->base + WDOG_CS);
++		cs &= ~(WDOG_CS_FLG | WDOG_CS_ULK | WDOG_CS_RCS);
++	} while (--loop > 0 && (cs != val || toval != timeout || ret));
++
++	if (loop == 0)
++		return -EBUSY;
+ 
+ 	return ret;
+ }
+@@ -228,6 +326,19 @@ static int imx7ulp_wdt_probe(struct platform_device *pdev)
+ 		return PTR_ERR(imx7ulp_wdt->clk);
+ 	}
+ 
++	imx7ulp_wdt->post_rcs_wait = true;
++	if (of_device_is_compatible(dev->of_node,
++				    "fsl,imx8ulp-wdt")) {
++		dev_info(dev, "imx8ulp wdt probe\n");
++		imx7ulp_wdt->post_rcs_wait = false;
++	} else if (of_device_is_compatible(dev->of_node,
++				    "fsl,imx93-wdt")) {
++		dev_info(dev, "imx93 wdt probe\n");
++		imx7ulp_wdt->post_rcs_wait = false;
++	} else {
++		dev_info(dev, "imx7ulp wdt probe\n");
++	}
++
+ 	ret = clk_prepare_enable(imx7ulp_wdt->clk);
+ 	if (ret)
+ 		return ret;
+@@ -248,14 +359,16 @@ static int imx7ulp_wdt_probe(struct platform_device *pdev)
+ 	watchdog_stop_on_reboot(wdog);
+ 	watchdog_stop_on_unregister(wdog);
+ 	watchdog_set_drvdata(wdog, imx7ulp_wdt);
+-	ret = imx7ulp_wdt_init(imx7ulp_wdt->base, wdog->timeout * WDOG_CLOCK_RATE);
++
++	imx7ulp_wdt->hw = of_device_get_match_data(dev);
++	ret = imx7ulp_wdt_init(imx7ulp_wdt, wdog->timeout * imx7ulp_wdt->hw->wdog_clock_rate);
+ 	if (ret)
+ 		return ret;
+ 
+ 	return devm_watchdog_register_device(dev, wdog);
+ }
+ 
+-static int __maybe_unused imx7ulp_wdt_suspend(struct device *dev)
++static int __maybe_unused imx7ulp_wdt_suspend_noirq(struct device *dev)
+ {
+ 	struct imx7ulp_wdt_device *imx7ulp_wdt = dev_get_drvdata(dev);
+ 
+@@ -267,30 +380,44 @@ static int __maybe_unused imx7ulp_wdt_suspend(struct device *dev)
+ 	return 0;
+ }
+ 
+-static int __maybe_unused imx7ulp_wdt_resume(struct device *dev)
++static int __maybe_unused imx7ulp_wdt_resume_noirq(struct device *dev)
+ {
+ 	struct imx7ulp_wdt_device *imx7ulp_wdt = dev_get_drvdata(dev);
+-	u32 timeout = imx7ulp_wdt->wdd.timeout * WDOG_CLOCK_RATE;
++	u32 timeout = imx7ulp_wdt->wdd.timeout * imx7ulp_wdt->hw->wdog_clock_rate;
+ 	int ret;
+ 
+ 	ret = clk_prepare_enable(imx7ulp_wdt->clk);
+ 	if (ret)
+ 		return ret;
+ 
+-	if (imx7ulp_wdt_is_enabled(imx7ulp_wdt->base))
+-		imx7ulp_wdt_init(imx7ulp_wdt->base, timeout);
+-
+-	if (watchdog_active(&imx7ulp_wdt->wdd))
++	if (watchdog_active(&imx7ulp_wdt->wdd)) {
++		imx7ulp_wdt_init(imx7ulp_wdt, timeout);
+ 		imx7ulp_wdt_start(&imx7ulp_wdt->wdd);
++		imx7ulp_wdt_ping(&imx7ulp_wdt->wdd);
++	}
+ 
+ 	return 0;
+ }
+ 
+-static SIMPLE_DEV_PM_OPS(imx7ulp_wdt_pm_ops, imx7ulp_wdt_suspend,
+-			 imx7ulp_wdt_resume);
++static const struct dev_pm_ops imx7ulp_wdt_pm_ops = {
++	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(imx7ulp_wdt_suspend_noirq,
++				      imx7ulp_wdt_resume_noirq)
++};
++
++static const struct imx_wdt_hw_feature imx7ulp_wdt_hw = {
++	.prescaler_enable = false,
++	.wdog_clock_rate = 1000,
++};
++
++static const struct imx_wdt_hw_feature imx93_wdt_hw = {
++	.prescaler_enable = true,
++	.wdog_clock_rate = 125,
++};
+ 
+ static const struct of_device_id imx7ulp_wdt_dt_ids[] = {
+-	{ .compatible = "fsl,imx7ulp-wdt", },
++	{ .compatible = "fsl,imx8ulp-wdt", .data = &imx7ulp_wdt_hw, },
++	{ .compatible = "fsl,imx7ulp-wdt", .data = &imx7ulp_wdt_hw, },
++	{ .compatible = "fsl,imx93-wdt", .data = &imx93_wdt_hw, },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, imx7ulp_wdt_dt_ids);
+diff --git a/include/linux/usb/hcd.h b/include/linux/usb/hcd.h
+index aef3bf66d..98d1921f0 100644
+--- a/include/linux/usb/hcd.h
++++ b/include/linux/usb/hcd.h
+@@ -498,14 +498,7 @@ extern int usb_hcd_pci_probe(struct pci_dev *dev,
+ extern void usb_hcd_pci_remove(struct pci_dev *dev);
+ extern void usb_hcd_pci_shutdown(struct pci_dev *dev);
+ 
+-#ifndef CONFIG_PCI_DISABLE_COMMON_QUIRKS
+ extern int usb_hcd_amd_remote_wakeup_quirk(struct pci_dev *dev);
+-#else
+-static inline int usb_hcd_amd_remote_wakeup_quirk(struct pci_dev *dev)
+-{
+-	return 0;
+-}
+-#endif
+ 
+ #ifdef CONFIG_PM
+ extern const struct dev_pm_ops usb_hcd_pci_pm_ops;
+-- 
+2.25.1
+

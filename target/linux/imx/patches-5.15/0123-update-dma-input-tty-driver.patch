@@ -1,0 +1,3527 @@
+From 5cf2155e21a1118d60665763b529257534e2d53e Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 14:50:04 +0800
+Subject: [PATCH 23/24] update dma/input/tty driver
+
+---
+ drivers/clocksource/timer-imx-sysctr.c  |   6 +-
+ drivers/dma/Kconfig                     |   2 +-
+ drivers/dma/at_hdmac.c                  | 153 +++--
+ drivers/dma/at_hdmac_regs.h             |  10 +-
+ drivers/dma/at_xdmac.c                  |  33 +-
+ drivers/dma/dmaengine.c                 |   7 +-
+ drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c |  51 +-
+ drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.h |   5 +-
+ drivers/dma/fsl-dpaa2-qdma/dpdmai.c     | 176 +++---
+ drivers/dma/fsl-dpaa2-qdma/dpdmai.h     | 166 +++--
+ drivers/dma/fsl-edma-common.c           |  27 +-
+ drivers/dma/fsl-edma-common.h           |  16 +-
+ drivers/dma/fsl-edma-v3.c               |   3 +
+ drivers/dma/fsl-edma.c                  | 106 +++-
+ drivers/dma/fsl-qdma.c                  |  24 +-
+ drivers/dma/imx-dma.c                   |   2 +-
+ drivers/dma/imx-sdma.c                  |   6 +-
+ drivers/dma/mxs-dma.c                   | 153 ++++-
+ drivers/input/keyboard/Kconfig          |  11 +
+ drivers/input/keyboard/Makefile         |   1 +
+ drivers/input/keyboard/bbnsm_pwrkey.c   | 199 ++++++
+ drivers/tty/serial/fsl_lpuart.c         | 782 +++++++++++++++++-------
+ 22 files changed, 1414 insertions(+), 525 deletions(-)
+ mode change 100644 => 100755 drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c
+ create mode 100644 drivers/input/keyboard/bbnsm_pwrkey.c
+
+diff --git a/drivers/clocksource/timer-imx-sysctr.c b/drivers/clocksource/timer-imx-sysctr.c
+index 18b90fc56..59ec95287 100644
+--- a/drivers/clocksource/timer-imx-sysctr.c
++++ b/drivers/clocksource/timer-imx-sysctr.c
+@@ -134,8 +134,10 @@ static int __init sysctr_timer_init(struct device_node *np)
+ 	if (ret)
+ 		return ret;
+ 
+-	/* system counter clock is divided by 3 internally */
+-	to_sysctr.of_clk.rate /= SYS_CTR_CLK_DIV;
++	/* check if need to adjust the rate */
++	if (!of_property_read_bool(np, "no-divider"))
++		/* system counter clock is divided by 3 internally */
++		to_sysctr.of_clk.rate /= SYS_CTR_CLK_DIV;
+ 
+ 	sys_ctr_base = timer_of_base(&to_sysctr);
+ 	cmpcr = readl(sys_ctr_base + CMPCR);
+diff --git a/drivers/dma/Kconfig b/drivers/dma/Kconfig
+index 2d35126e2..066bceed8 100644
+--- a/drivers/dma/Kconfig
++++ b/drivers/dma/Kconfig
+@@ -265,7 +265,7 @@ config FSL_RAID
+ 
+ config HISI_DMA
+ 	tristate "HiSilicon DMA Engine support"
+-	depends on ARCH_HISI || COMPILE_TEST
++	depends on ARM64 || COMPILE_TEST
+ 	depends on PCI_MSI
+ 	select DMA_ENGINE
+ 	select DMA_VIRTUAL_CHANNELS
+diff --git a/drivers/dma/at_hdmac.c b/drivers/dma/at_hdmac.c
+index 4583a8b5e..30ae36124 100644
+--- a/drivers/dma/at_hdmac.c
++++ b/drivers/dma/at_hdmac.c
+@@ -256,8 +256,6 @@ static void atc_dostart(struct at_dma_chan *atchan, struct at_desc *first)
+ 		       ATC_SPIP_BOUNDARY(first->boundary));
+ 	channel_writel(atchan, DPIP, ATC_DPIP_HOLE(first->dst_hole) |
+ 		       ATC_DPIP_BOUNDARY(first->boundary));
+-	/* Don't allow CPU to reorder channel enable. */
+-	wmb();
+ 	dma_writel(atdma, CHER, atchan->mask);
+ 
+ 	vdbg_dump_regs(atchan);
+@@ -318,8 +316,7 @@ static int atc_get_bytes_left(struct dma_chan *chan, dma_cookie_t cookie)
+ 	struct at_desc *desc_first = atc_first_active(atchan);
+ 	struct at_desc *desc;
+ 	int ret;
+-	u32 ctrla, dscr;
+-	unsigned int i;
++	u32 ctrla, dscr, trials;
+ 
+ 	/*
+ 	 * If the cookie doesn't match to the currently running transfer then
+@@ -389,7 +386,7 @@ static int atc_get_bytes_left(struct dma_chan *chan, dma_cookie_t cookie)
+ 		dscr = channel_readl(atchan, DSCR);
+ 		rmb(); /* ensure DSCR is read before CTRLA */
+ 		ctrla = channel_readl(atchan, CTRLA);
+-		for (i = 0; i < ATC_MAX_DSCR_TRIALS; ++i) {
++		for (trials = 0; trials < ATC_MAX_DSCR_TRIALS; ++trials) {
+ 			u32 new_dscr;
+ 
+ 			rmb(); /* ensure DSCR is read after CTRLA */
+@@ -415,7 +412,7 @@ static int atc_get_bytes_left(struct dma_chan *chan, dma_cookie_t cookie)
+ 			rmb(); /* ensure DSCR is read before CTRLA */
+ 			ctrla = channel_readl(atchan, CTRLA);
+ 		}
+-		if (unlikely(i == ATC_MAX_DSCR_TRIALS))
++		if (unlikely(trials >= ATC_MAX_DSCR_TRIALS))
+ 			return -ETIMEDOUT;
+ 
+ 		/* for the first descriptor we can be more accurate */
+@@ -465,6 +462,18 @@ atc_chain_complete(struct at_dma_chan *atchan, struct at_desc *desc)
+ 	if (!atc_chan_is_cyclic(atchan))
+ 		dma_cookie_complete(txd);
+ 
++	/* If the transfer was a memset, free our temporary buffer */
++	if (desc->memset_buffer) {
++		dma_pool_free(atdma->memset_pool, desc->memset_vaddr,
++			      desc->memset_paddr);
++		desc->memset_buffer = false;
++	}
++
++	/* move children to free_list */
++	list_splice_init(&desc->tx_list, &atchan->free_list);
++	/* move myself to free_list */
++	list_move(&desc->desc_node, &atchan->free_list);
++
+ 	spin_unlock_irqrestore(&atchan->lock, flags);
+ 
+ 	dma_descriptor_unmap(txd);
+@@ -474,20 +483,42 @@ atc_chain_complete(struct at_dma_chan *atchan, struct at_desc *desc)
+ 		dmaengine_desc_get_callback_invoke(txd, NULL);
+ 
+ 	dma_run_dependencies(txd);
++}
++
++/**
++ * atc_complete_all - finish work for all transactions
++ * @atchan: channel to complete transactions for
++ *
++ * Eventually submit queued descriptors if any
++ *
++ * Assume channel is idle while calling this function
++ * Called with atchan->lock held and bh disabled
++ */
++static void atc_complete_all(struct at_dma_chan *atchan)
++{
++	struct at_desc *desc, *_desc;
++	LIST_HEAD(list);
++	unsigned long flags;
++
++	dev_vdbg(chan2dev(&atchan->chan_common), "complete all\n");
+ 
+ 	spin_lock_irqsave(&atchan->lock, flags);
+-	/* move children to free_list */
+-	list_splice_init(&desc->tx_list, &atchan->free_list);
+-	/* add myself to free_list */
+-	list_add(&desc->desc_node, &atchan->free_list);
++
++	/*
++	 * Submit queued descriptors ASAP, i.e. before we go through
++	 * the completed ones.
++	 */
++	if (!list_empty(&atchan->queue))
++		atc_dostart(atchan, atc_first_queued(atchan));
++	/* empty active_list now it is completed */
++	list_splice_init(&atchan->active_list, &list);
++	/* empty queue list by moving descriptors (if any) to active_list */
++	list_splice_init(&atchan->queue, &atchan->active_list);
++
+ 	spin_unlock_irqrestore(&atchan->lock, flags);
+ 
+-	/* If the transfer was a memset, free our temporary buffer */
+-	if (desc->memset_buffer) {
+-		dma_pool_free(atdma->memset_pool, desc->memset_vaddr,
+-			      desc->memset_paddr);
+-		desc->memset_buffer = false;
+-	}
++	list_for_each_entry_safe(desc, _desc, &list, desc_node)
++		atc_chain_complete(atchan, desc);
+ }
+ 
+ /**
+@@ -496,28 +527,26 @@ atc_chain_complete(struct at_dma_chan *atchan, struct at_desc *desc)
+  */
+ static void atc_advance_work(struct at_dma_chan *atchan)
+ {
+-	struct at_desc *desc;
+ 	unsigned long flags;
++	int ret;
+ 
+ 	dev_vdbg(chan2dev(&atchan->chan_common), "advance_work\n");
+ 
+ 	spin_lock_irqsave(&atchan->lock, flags);
+-	if (atc_chan_is_enabled(atchan) || list_empty(&atchan->active_list))
+-		return spin_unlock_irqrestore(&atchan->lock, flags);
+-
+-	desc = atc_first_active(atchan);
+-	/* Remove the transfer node from the active list. */
+-	list_del_init(&desc->desc_node);
++	ret = atc_chan_is_enabled(atchan);
+ 	spin_unlock_irqrestore(&atchan->lock, flags);
+-	atc_chain_complete(atchan, desc);
++	if (ret)
++		return;
++
++	if (list_empty(&atchan->active_list) ||
++	    list_is_singular(&atchan->active_list))
++		return atc_complete_all(atchan);
++
++	atc_chain_complete(atchan, atc_first_active(atchan));
+ 
+ 	/* advance work */
+ 	spin_lock_irqsave(&atchan->lock, flags);
+-	if (!list_empty(&atchan->active_list)) {
+-		desc = atc_first_queued(atchan);
+-		list_move_tail(&desc->desc_node, &atchan->active_list);
+-		atc_dostart(atchan, desc);
+-	}
++	atc_dostart(atchan, atc_first_active(atchan));
+ 	spin_unlock_irqrestore(&atchan->lock, flags);
+ }
+ 
+@@ -529,7 +558,6 @@ static void atc_advance_work(struct at_dma_chan *atchan)
+ static void atc_handle_error(struct at_dma_chan *atchan)
+ {
+ 	struct at_desc *bad_desc;
+-	struct at_desc *desc;
+ 	struct at_desc *child;
+ 	unsigned long flags;
+ 
+@@ -542,12 +570,13 @@ static void atc_handle_error(struct at_dma_chan *atchan)
+ 	bad_desc = atc_first_active(atchan);
+ 	list_del_init(&bad_desc->desc_node);
+ 
++	/* As we are stopped, take advantage to push queued descriptors
++	 * in active_list */
++	list_splice_init(&atchan->queue, atchan->active_list.prev);
++
+ 	/* Try to restart the controller */
+-	if (!list_empty(&atchan->active_list)) {
+-		desc = atc_first_queued(atchan);
+-		list_move_tail(&desc->desc_node, &atchan->active_list);
+-		atc_dostart(atchan, desc);
+-	}
++	if (!list_empty(&atchan->active_list))
++		atc_dostart(atchan, atc_first_active(atchan));
+ 
+ 	/*
+ 	 * KERN_CRITICAL may seem harsh, but since this only happens
+@@ -662,11 +691,19 @@ static dma_cookie_t atc_tx_submit(struct dma_async_tx_descriptor *tx)
+ 	spin_lock_irqsave(&atchan->lock, flags);
+ 	cookie = dma_cookie_assign(tx);
+ 
+-	list_add_tail(&desc->desc_node, &atchan->queue);
++	if (list_empty(&atchan->active_list)) {
++		dev_vdbg(chan2dev(tx->chan), "tx_submit: started %u\n",
++				desc->txd.cookie);
++		atc_dostart(atchan, desc);
++		list_add_tail(&desc->desc_node, &atchan->active_list);
++	} else {
++		dev_vdbg(chan2dev(tx->chan), "tx_submit: queued %u\n",
++				desc->txd.cookie);
++		list_add_tail(&desc->desc_node, &atchan->queue);
++	}
++
+ 	spin_unlock_irqrestore(&atchan->lock, flags);
+ 
+-	dev_vdbg(chan2dev(tx->chan), "tx_submit: queued %u\n",
+-		 desc->txd.cookie);
+ 	return cookie;
+ }
+ 
+@@ -1400,8 +1437,11 @@ static int atc_terminate_all(struct dma_chan *chan)
+ 	struct at_dma_chan	*atchan = to_at_dma_chan(chan);
+ 	struct at_dma		*atdma = to_at_dma(chan->device);
+ 	int			chan_id = atchan->chan_common.chan_id;
++	struct at_desc		*desc, *_desc;
+ 	unsigned long		flags;
+ 
++	LIST_HEAD(list);
++
+ 	dev_vdbg(chan2dev(chan), "%s\n", __func__);
+ 
+ 	/*
+@@ -1420,15 +1460,19 @@ static int atc_terminate_all(struct dma_chan *chan)
+ 		cpu_relax();
+ 
+ 	/* active_list entries will end up before queued entries */
+-	list_splice_tail_init(&atchan->queue, &atchan->free_list);
+-	list_splice_tail_init(&atchan->active_list, &atchan->free_list);
++	list_splice_init(&atchan->queue, &list);
++	list_splice_init(&atchan->active_list, &list);
++
++	spin_unlock_irqrestore(&atchan->lock, flags);
++
++	/* Flush all pending and queued descriptors */
++	list_for_each_entry_safe(desc, _desc, &list, desc_node)
++		atc_chain_complete(atchan, desc);
+ 
+ 	clear_bit(ATC_IS_PAUSED, &atchan->status);
+ 	/* if channel dedicated to cyclic operations, free it */
+ 	clear_bit(ATC_IS_CYCLIC, &atchan->status);
+ 
+-	spin_unlock_irqrestore(&atchan->lock, flags);
+-
+ 	return 0;
+ }
+ 
+@@ -1483,26 +1527,20 @@ atc_tx_status(struct dma_chan *chan,
+ }
+ 
+ /**
+- * atc_issue_pending - takes the first transaction descriptor in the pending
+- * queue and starts the transfer.
++ * atc_issue_pending - try to finish work
+  * @chan: target DMA channel
+  */
+ static void atc_issue_pending(struct dma_chan *chan)
+ {
+-	struct at_dma_chan *atchan = to_at_dma_chan(chan);
+-	struct at_desc *desc;
+-	unsigned long flags;
++	struct at_dma_chan	*atchan = to_at_dma_chan(chan);
+ 
+ 	dev_vdbg(chan2dev(chan), "issue_pending\n");
+ 
+-	spin_lock_irqsave(&atchan->lock, flags);
+-	if (atc_chan_is_enabled(atchan) || list_empty(&atchan->queue))
+-		return spin_unlock_irqrestore(&atchan->lock, flags);
++	/* Not needed for cyclic transfers */
++	if (atc_chan_is_cyclic(atchan))
++		return;
+ 
+-	desc = atc_first_queued(atchan);
+-	list_move_tail(&desc->desc_node, &atchan->active_list);
+-	atc_dostart(atchan, desc);
+-	spin_unlock_irqrestore(&atchan->lock, flags);
++	atc_advance_work(atchan);
+ }
+ 
+ /**
+@@ -1920,11 +1958,7 @@ static int __init at_dma_probe(struct platform_device *pdev)
+ 	  dma_has_cap(DMA_SLAVE, atdma->dma_common.cap_mask)  ? "slave " : "",
+ 	  plat_dat->nr_channels);
+ 
+-	err = dma_async_device_register(&atdma->dma_common);
+-	if (err) {
+-		dev_err(&pdev->dev, "Unable to register: %d.\n", err);
+-		goto err_dma_async_device_register;
+-	}
++	dma_async_device_register(&atdma->dma_common);
+ 
+ 	/*
+ 	 * Do not return an error if the dmac node is not present in order to
+@@ -1944,7 +1978,6 @@ static int __init at_dma_probe(struct platform_device *pdev)
+ 
+ err_of_dma_controller_register:
+ 	dma_async_device_unregister(&atdma->dma_common);
+-err_dma_async_device_register:
+ 	dma_pool_destroy(atdma->memset_pool);
+ err_memset_pool_create:
+ 	dma_pool_destroy(atdma->dma_desc_pool);
+diff --git a/drivers/dma/at_hdmac_regs.h b/drivers/dma/at_hdmac_regs.h
+index d4d382d74..4d1ebc040 100644
+--- a/drivers/dma/at_hdmac_regs.h
++++ b/drivers/dma/at_hdmac_regs.h
+@@ -186,13 +186,13 @@
+ /* LLI == Linked List Item; aka DMA buffer descriptor */
+ struct at_lli {
+ 	/* values that are not changed by hardware */
+-	u32 saddr;
+-	u32 daddr;
++	dma_addr_t	saddr;
++	dma_addr_t	daddr;
+ 	/* value that may get written back: */
+-	u32 ctrla;
++	u32		ctrla;
+ 	/* more values that are not changed by hardware */
+-	u32 ctrlb;
+-	u32 dscr;	/* chain to next lli */
++	u32		ctrlb;
++	dma_addr_t	dscr;	/* chain to next lli */
+ };
+ 
+ /**
+diff --git a/drivers/dma/at_xdmac.c b/drivers/dma/at_xdmac.c
+index 80c609aa2..c5638afe9 100644
+--- a/drivers/dma/at_xdmac.c
++++ b/drivers/dma/at_xdmac.c
+@@ -243,7 +243,6 @@ struct at_xdmac {
+ 	int			irq;
+ 	struct clk		*clk;
+ 	u32			save_gim;
+-	u32			save_gs;
+ 	struct dma_pool		*at_xdmac_desc_pool;
+ 	const struct at_xdmac_layout	*layout;
+ 	struct at_xdmac_chan	chan[];
+@@ -1587,6 +1586,20 @@ at_xdmac_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
+ 	return ret;
+ }
+ 
++/* Call must be protected by lock. */
++static void at_xdmac_remove_xfer(struct at_xdmac_chan *atchan,
++				    struct at_xdmac_desc *desc)
++{
++	dev_dbg(chan2dev(&atchan->chan), "%s: desc 0x%p\n", __func__, desc);
++
++	/*
++	 * Remove the transfer from the transfer list then move the transfer
++	 * descriptors into the free descriptors list.
++	 */
++	list_del(&desc->xfer_node);
++	list_splice_init(&desc->descs_list, &atchan->free_descs_list);
++}
++
+ static void at_xdmac_advance_work(struct at_xdmac_chan *atchan)
+ {
+ 	struct at_xdmac_desc	*desc;
+@@ -1697,19 +1710,17 @@ static void at_xdmac_tasklet(struct tasklet_struct *t)
+ 		}
+ 
+ 		txd = &desc->tx_dma_desc;
+-		dma_cookie_complete(txd);
+-		/* Remove the transfer from the transfer list. */
+-		list_del(&desc->xfer_node);
++
++		at_xdmac_remove_xfer(atchan, desc);
+ 		spin_unlock_irq(&atchan->lock);
+ 
++		dma_cookie_complete(txd);
+ 		if (txd->flags & DMA_PREP_INTERRUPT)
+ 			dmaengine_desc_get_callback_invoke(txd, NULL);
+ 
+ 		dma_run_dependencies(txd);
+ 
+ 		spin_lock_irq(&atchan->lock);
+-		/* Move the xfer descriptors into the free descriptors list. */
+-		list_splice_init(&desc->descs_list, &atchan->free_descs_list);
+ 		at_xdmac_advance_work(atchan);
+ 		spin_unlock_irq(&atchan->lock);
+ 	}
+@@ -1856,10 +1867,8 @@ static int at_xdmac_device_terminate_all(struct dma_chan *chan)
+ 		cpu_relax();
+ 
+ 	/* Cancel all pending transfers. */
+-	list_for_each_entry_safe(desc, _desc, &atchan->xfers_list, xfer_node) {
+-		list_del(&desc->xfer_node);
+-		list_splice_init(&desc->descs_list, &atchan->free_descs_list);
+-	}
++	list_for_each_entry_safe(desc, _desc, &atchan->xfers_list, xfer_node)
++		at_xdmac_remove_xfer(atchan, desc);
+ 
+ 	clear_bit(AT_XDMAC_CHAN_IS_PAUSED, &atchan->status);
+ 	clear_bit(AT_XDMAC_CHAN_IS_CYCLIC, &atchan->status);
+@@ -1985,7 +1994,6 @@ static int atmel_xdmac_suspend(struct device *dev)
+ 		}
+ 	}
+ 	atxdmac->save_gim = at_xdmac_read(atxdmac, AT_XDMAC_GIM);
+-	atxdmac->save_gs = at_xdmac_read(atxdmac, AT_XDMAC_GS);
+ 
+ 	at_xdmac_off(atxdmac);
+ 	clk_disable_unprepare(atxdmac->clk);
+@@ -2025,8 +2033,7 @@ static int atmel_xdmac_resume(struct device *dev)
+ 			at_xdmac_chan_write(atchan, AT_XDMAC_CNDC, atchan->save_cndc);
+ 			at_xdmac_chan_write(atchan, AT_XDMAC_CIE, atchan->save_cim);
+ 			wmb();
+-			if (atxdmac->save_gs & atchan->mask)
+-				at_xdmac_write(atxdmac, AT_XDMAC_GE, atchan->mask);
++			at_xdmac_write(atxdmac, AT_XDMAC_GE, atchan->mask);
+ 		}
+ 	}
+ 	return 0;
+diff --git a/drivers/dma/dmaengine.c b/drivers/dma/dmaengine.c
+index 4ec7bb58c..af3ee288b 100644
+--- a/drivers/dma/dmaengine.c
++++ b/drivers/dma/dmaengine.c
+@@ -451,8 +451,7 @@ static int dma_chan_get(struct dma_chan *chan)
+ 	/* The channel is already in use, update client count */
+ 	if (chan->client_count) {
+ 		__module_get(owner);
+-		chan->client_count++;
+-		return 0;
++		goto out;
+ 	}
+ 
+ 	if (!try_module_get(owner))
+@@ -471,11 +470,11 @@ static int dma_chan_get(struct dma_chan *chan)
+ 			goto err_out;
+ 	}
+ 
+-	chan->client_count++;
+-
+ 	if (!dma_has_cap(DMA_PRIVATE, chan->device->cap_mask))
+ 		balance_ref_count(chan);
+ 
++out:
++	chan->client_count++;
+ 	return 0;
+ 
+ err_out:
+diff --git a/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c b/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c
+old mode 100644
+new mode 100755
+index 8dd40d00a..9a0dd86c7
+--- a/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c
++++ b/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.c
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
+-// Copyright 2019 NXP
++// Copyright 2019-2021 NXP
+ 
+ #include <linux/init.h>
+ #include <linux/module.h>
+@@ -38,15 +38,17 @@ static int dpaa2_qdma_alloc_chan_resources(struct dma_chan *chan)
+ 	if (!dpaa2_chan->fd_pool)
+ 		goto err;
+ 
+-	dpaa2_chan->fl_pool = dma_pool_create("fl_pool", dev,
+-					      sizeof(struct dpaa2_fl_entry),
+-					      sizeof(struct dpaa2_fl_entry), 0);
++	dpaa2_chan->fl_pool =
++		dma_pool_create("fl_pool", dev,
++				 sizeof(struct dpaa2_fl_entry) * 3,
++				 sizeof(struct dpaa2_fl_entry), 0);
++
+ 	if (!dpaa2_chan->fl_pool)
+ 		goto err_fd;
+ 
+ 	dpaa2_chan->sdd_pool =
+ 		dma_pool_create("sdd_pool", dev,
+-				sizeof(struct dpaa2_qdma_sd_d),
++				sizeof(struct dpaa2_qdma_sd_d) * 2,
+ 				sizeof(struct dpaa2_qdma_sd_d), 0);
+ 	if (!dpaa2_chan->sdd_pool)
+ 		goto err_fl;
+@@ -330,26 +332,6 @@ static int __cold dpaa2_qdma_setup(struct fsl_mc_device *ls_dev)
+ 		goto exit;
+ 	}
+ 
+-	if (priv->dpdmai_attr.version.major > DPDMAI_VER_MAJOR) {
+-		err = -EINVAL;
+-		dev_err(dev, "DPDMAI major version mismatch\n"
+-			     "Found %u.%u, supported version is %u.%u\n",
+-				priv->dpdmai_attr.version.major,
+-				priv->dpdmai_attr.version.minor,
+-				DPDMAI_VER_MAJOR, DPDMAI_VER_MINOR);
+-		goto exit;
+-	}
+-
+-	if (priv->dpdmai_attr.version.minor > DPDMAI_VER_MINOR) {
+-		err = -EINVAL;
+-		dev_err(dev, "DPDMAI minor version mismatch\n"
+-			     "Found %u.%u, supported version is %u.%u\n",
+-				priv->dpdmai_attr.version.major,
+-				priv->dpdmai_attr.version.minor,
+-				DPDMAI_VER_MAJOR, DPDMAI_VER_MINOR);
+-		goto exit;
+-	}
+-
+ 	priv->num_pairs = min(priv->dpdmai_attr.num_of_priorities, prio_def);
+ 	ppriv = kcalloc(priv->num_pairs, sizeof(*ppriv), GFP_KERNEL);
+ 	if (!ppriv) {
+@@ -360,7 +342,7 @@ static int __cold dpaa2_qdma_setup(struct fsl_mc_device *ls_dev)
+ 
+ 	for (i = 0; i < priv->num_pairs; i++) {
+ 		err = dpdmai_get_rx_queue(priv->mc_io, 0, ls_dev->mc_handle,
+-					  i, &priv->rx_queue_attr[i]);
++					  i, 0, &priv->rx_queue_attr[i]);
+ 		if (err) {
+ 			dev_err(dev, "dpdmai_get_rx_queue() failed\n");
+ 			goto exit;
+@@ -368,13 +350,13 @@ static int __cold dpaa2_qdma_setup(struct fsl_mc_device *ls_dev)
+ 		ppriv->rsp_fqid = priv->rx_queue_attr[i].fqid;
+ 
+ 		err = dpdmai_get_tx_queue(priv->mc_io, 0, ls_dev->mc_handle,
+-					  i, &priv->tx_fqid[i]);
++					  i, 0, &priv->tx_queue_attr[i]);
+ 		if (err) {
+ 			dev_err(dev, "dpdmai_get_tx_queue() failed\n");
+ 			goto exit;
+ 		}
+-		ppriv->req_fqid = priv->tx_fqid[i];
+-		ppriv->prio = i;
++		ppriv->req_fqid = priv->tx_queue_attr[i].fqid;
++		ppriv->prio = DPAA2_QDMA_DEFAULT_PRIORITY;
+ 		ppriv->priv = priv;
+ 		ppriv++;
+ 	}
+@@ -540,8 +522,7 @@ static int __cold dpaa2_dpdmai_bind(struct dpaa2_qdma_priv *priv)
+ 		rx_queue_cfg.dest_cfg.dest_id = ppriv->nctx.dpio_id;
+ 		rx_queue_cfg.dest_cfg.priority = ppriv->prio;
+ 		err = dpdmai_set_rx_queue(priv->mc_io, 0, ls_dev->mc_handle,
+-					  rx_queue_cfg.dest_cfg.priority,
+-					  &rx_queue_cfg);
++					  i, 0, &rx_queue_cfg);
+ 		if (err) {
+ 			dev_err(dev, "dpdmai_set_rx_queue() failed\n");
+ 			return err;
+@@ -603,6 +584,7 @@ static void dpaa2_dpdmai_free_comp(struct dpaa2_qdma_chan *qchan,
+ static void dpaa2_dpdmai_free_channels(struct dpaa2_qdma_engine *dpaa2_qdma)
+ {
+ 	struct dpaa2_qdma_chan *qchan;
++	struct dma_chan	*chan;
+ 	int num, i;
+ 
+ 	num = dpaa2_qdma->n_chans;
+@@ -613,6 +595,9 @@ static void dpaa2_dpdmai_free_channels(struct dpaa2_qdma_engine *dpaa2_qdma)
+ 		dma_pool_destroy(qchan->fd_pool);
+ 		dma_pool_destroy(qchan->fl_pool);
+ 		dma_pool_destroy(qchan->sdd_pool);
++		chan = &qchan->vchan.chan;
++		if (chan->client_count)
++			chan->client_count--;
+ 	}
+ }
+ 
+@@ -640,7 +625,7 @@ static int dpaa2_dpdmai_init_channels(struct dpaa2_qdma_engine *dpaa2_qdma)
+ 	for (i = 0; i < dpaa2_qdma->n_chans; i++) {
+ 		dpaa2_chan = &dpaa2_qdma->chans[i];
+ 		dpaa2_chan->qdma = dpaa2_qdma;
+-		dpaa2_chan->fqid = priv->tx_fqid[i % num];
++		dpaa2_chan->fqid = priv->tx_queue_attr[i % num].fqid;
+ 		dpaa2_chan->vchan.desc_free = dpaa2_qdma_free_desc;
+ 		vchan_init(&dpaa2_chan->vchan, &dpaa2_qdma->dma_dev);
+ 		spin_lock_init(&dpaa2_chan->queue_lock);
+@@ -802,7 +787,7 @@ static void dpaa2_qdma_shutdown(struct fsl_mc_device *ls_dev)
+ 	dpdmai_disable(priv->mc_io, 0, ls_dev->mc_handle);
+ 	dpaa2_dpdmai_dpio_unbind(priv);
+ 	dpdmai_close(priv->mc_io, 0, ls_dev->mc_handle);
+-	dpdmai_destroy(priv->mc_io, 0, ls_dev->mc_handle);
++	dpdmai_destroy(priv->mc_io, 0, priv->dpqdma_id, ls_dev->mc_handle);
+ }
+ 
+ static const struct fsl_mc_device_id dpaa2_qdma_id_table[] = {
+diff --git a/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.h b/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.h
+index 7d571849c..c04a3dbef 100644
+--- a/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.h
++++ b/drivers/dma/fsl-dpaa2-qdma/dpaa2-qdma.h
+@@ -6,6 +6,7 @@
+ 
+ #define DPAA2_QDMA_STORE_SIZE 16
+ #define NUM_CH 8
++#define DPAA2_QDMA_DEFAULT_PRIORITY 0
+ 
+ struct dpaa2_qdma_sd_d {
+ 	u32 rsv:32;
+@@ -122,8 +123,8 @@ struct dpaa2_qdma_priv {
+ 	struct dpaa2_qdma_engine	*dpaa2_qdma;
+ 	struct dpaa2_qdma_priv_per_prio	*ppriv;
+ 
+-	struct dpdmai_rx_queue_attr rx_queue_attr[DPDMAI_PRIO_NUM];
+-	u32 tx_fqid[DPDMAI_PRIO_NUM];
++	struct dpdmai_rx_queue_attr rx_queue_attr[DPDMAI_MAX_QUEUE_NUM];
++	struct dpdmai_tx_queue_attr tx_queue_attr[DPDMAI_MAX_QUEUE_NUM];
+ };
+ 
+ struct dpaa2_qdma_priv_per_prio {
+diff --git a/drivers/dma/fsl-dpaa2-qdma/dpdmai.c b/drivers/dma/fsl-dpaa2-qdma/dpdmai.c
+index 878662aaa..ba26b5100 100644
+--- a/drivers/dma/fsl-dpaa2-qdma/dpdmai.c
++++ b/drivers/dma/fsl-dpaa2-qdma/dpdmai.c
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
+-// Copyright 2019 NXP
++// Copyright 2019-2021 NXP
+ 
+ #include <linux/module.h>
+ #include <linux/types.h>
+@@ -7,47 +7,6 @@
+ #include <linux/fsl/mc.h>
+ #include "dpdmai.h"
+ 
+-struct dpdmai_rsp_get_attributes {
+-	__le32 id;
+-	u8 num_of_priorities;
+-	u8 pad0[3];
+-	__le16 major;
+-	__le16 minor;
+-};
+-
+-struct dpdmai_cmd_queue {
+-	__le32 dest_id;
+-	u8 priority;
+-	u8 queue;
+-	u8 dest_type;
+-	u8 pad;
+-	__le64 user_ctx;
+-	union {
+-		__le32 options;
+-		__le32 fqid;
+-	};
+-};
+-
+-struct dpdmai_rsp_get_tx_queue {
+-	__le64 pad;
+-	__le32 fqid;
+-};
+-
+-#define MC_CMD_OP(_cmd, _param, _offset, _width, _type, _arg) \
+-	((_cmd).params[_param] |= mc_enc((_offset), (_width), _arg))
+-
+-/* cmd, param, offset, width, type, arg_name */
+-#define DPDMAI_CMD_CREATE(cmd, cfg) \
+-do { \
+-	MC_CMD_OP(cmd, 0, 8,  8,  u8,  (cfg)->priorities[0]);\
+-	MC_CMD_OP(cmd, 0, 16, 8,  u8,  (cfg)->priorities[1]);\
+-} while (0)
+-
+-static inline u64 mc_enc(int lsoffset, int width, u64 val)
+-{
+-	return (val & MAKE_UMASK64(width)) << lsoffset;
+-}
+-
+ /**
+  * dpdmai_open() - Open a control session for the specified object
+  * @mc_io:	Pointer to MC portal's I/O object
+@@ -68,16 +27,16 @@ static inline u64 mc_enc(int lsoffset, int width, u64 val)
+ int dpdmai_open(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 		int dpdmai_id, u16 *token)
+ {
++	struct dpdmai_cmd_open *cmd_params;
+ 	struct fsl_mc_command cmd = { 0 };
+-	__le64 *cmd_dpdmai_id;
+ 	int err;
+ 
+ 	/* prepare command */
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_OPEN,
+ 					  cmd_flags, 0);
+ 
+-	cmd_dpdmai_id = cmd.params;
+-	*cmd_dpdmai_id = cpu_to_le32(dpdmai_id);
++	cmd_params = (struct dpdmai_cmd_open *)cmd.params;
++	cmd_params->dpdmai_id = cpu_to_le32(dpdmai_id);
+ 
+ 	/* send command to mc*/
+ 	err = mc_send_command(mc_io, &cmd);
+@@ -138,15 +97,20 @@ EXPORT_SYMBOL_GPL(dpdmai_close);
+  * Return:	'0' on Success; Error code otherwise.
+  */
+ int dpdmai_create(struct fsl_mc_io *mc_io, u32 cmd_flags,
+-		  const struct dpdmai_cfg *cfg, u16 *token)
++		  const struct dpdmai_cfg *cfg, u16 token,
++		  u32 *dpdmai_id)
+ {
++	struct dpdmai_cmd_create *cmd_params;
+ 	struct fsl_mc_command cmd = { 0 };
+ 	int err;
+ 
+ 	/* prepare command */
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_CREATE,
+-					  cmd_flags, 0);
+-	DPDMAI_CMD_CREATE(cmd, cfg);
++					  cmd_flags, token);
++	cmd_params = (struct dpdmai_cmd_create *)cmd.params;
++	cmd_params->num_queues = cfg->num_queues;
++	cmd_params->priorities[0] = cfg->priorities[0];
++	cmd_params->priorities[1] = cfg->priorities[1];
+ 
+ 	/* send command to mc*/
+ 	err = mc_send_command(mc_io, &cmd);
+@@ -154,26 +118,38 @@ int dpdmai_create(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 		return err;
+ 
+ 	/* retrieve response parameters */
+-	*token = mc_cmd_hdr_read_token(&cmd);
++	*dpdmai_id = mc_cmd_read_object_id(&cmd);
+ 
+ 	return 0;
+ }
++EXPORT_SYMBOL_GPL(dpdmai_create);
+ 
+ /**
+  * dpdmai_destroy() - Destroy the DPDMAI object and release all its resources.
+- * @mc_io:      Pointer to MC portal's I/O object
+- * @cmd_flags:  Command flags; one or more of 'MC_CMD_FLAG_'
+- * @token:      Token of DPDMAI object
++ * @mc_io:	Pointer to MC portal's I/O object
++ * @token:	Parent container token; '0' for default container
++ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
++ * @object_id:	The object id; it must be a valid id within the container that
++ *		created this object;
+  *
+- * Return:      '0' on Success; error code otherwise.
++ * The function accepts the authentication token of the parent container that
++ * created the object (not the one that currently owns the object). The object
++ * is searched within parent using the provided 'object_id'.
++ * All tokens to the object must be closed before calling destroy.
++ *
++ * Return:	'0' on Success; error code otherwise.
+  */
+-int dpdmai_destroy(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token)
++int dpdmai_destroy(struct fsl_mc_io *mc_io, u32 cmd_flags,
++		   u32 dpdmai_id, u16 token)
+ {
++	struct dpdmai_cmd_destroy *cmd_params;
+ 	struct fsl_mc_command cmd = { 0 };
+ 
+ 	/* prepare command */
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_DESTROY,
+ 					  cmd_flags, token);
++	cmd_params = (struct dpdmai_cmd_destroy *)cmd.params;
++	cmd_params->dpdmai_id = cpu_to_le32(dpdmai_id);
+ 
+ 	/* send command to mc*/
+ 	return mc_send_command(mc_io, &cmd);
+@@ -222,6 +198,40 @@ int dpdmai_disable(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token)
+ }
+ EXPORT_SYMBOL_GPL(dpdmai_disable);
+ 
++/**
++ * dpdmai_is_enabled() - Check if the DPDMAI is enabled.
++ * @mc_io:	Pointer to MC portal's I/O object
++ * @cmd_flags:	Command flags; one or more of 'MC_CMD_FLAG_'
++ * @token:	Token of DPDMAI object
++ * @en:		Returns '1' if object is enabled; '0' otherwise
++ *
++ * Return:	'0' on Success; Error code otherwise.
++ */
++int dpdmai_is_enabled(struct fsl_mc_io *mc_io, u32 cmd_flags,
++		      u16 token, int *en)
++{
++	struct dpdmai_rsp_is_enabled *rsp_params;
++	struct fsl_mc_command cmd = { 0 };
++	int err;
++
++	/* prepare command */
++	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_IS_ENABLED,
++					  cmd_flags,
++					  token);
++
++	/* send command to mc*/
++	err = mc_send_command(mc_io, &cmd);
++	if (err)
++		return err;
++
++	/* retrieve response parameters */
++	rsp_params = (struct dpdmai_rsp_is_enabled *)cmd.params;
++	*en = dpdmai_get_field(rsp_params->en, ENABLE);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(dpdmai_is_enabled);
++
+ /**
+  * dpdmai_reset() - Reset the DPDMAI, returns the object to initial state.
+  * @mc_io:	Pointer to MC portal's I/O object
+@@ -271,9 +281,8 @@ int dpdmai_get_attributes(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 	/* retrieve response parameters */
+ 	rsp_params = (struct dpdmai_rsp_get_attributes *)cmd.params;
+ 	attr->id = le32_to_cpu(rsp_params->id);
+-	attr->version.major = le16_to_cpu(rsp_params->major);
+-	attr->version.minor = le16_to_cpu(rsp_params->minor);
+ 	attr->num_of_priorities = rsp_params->num_of_priorities;
++	attr->num_of_queues = rsp_params->num_of_queues;
+ 
+ 	return 0;
+ }
+@@ -290,23 +299,27 @@ EXPORT_SYMBOL_GPL(dpdmai_get_attributes);
+  *
+  * Return:	'0' on Success; Error code otherwise.
+  */
+-int dpdmai_set_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+-			u8 priority, const struct dpdmai_rx_queue_cfg *cfg)
++int dpdmai_set_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
++			u16 token, u8 queue_idx, u8 priority,
++			const struct dpdmai_rx_queue_cfg *cfg)
+ {
+-	struct dpdmai_cmd_queue *cmd_params;
++	struct dpdmai_cmd_set_rx_queue *cmd_params;
+ 	struct fsl_mc_command cmd = { 0 };
+ 
+ 	/* prepare command */
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_SET_RX_QUEUE,
+ 					  cmd_flags, token);
+ 
+-	cmd_params = (struct dpdmai_cmd_queue *)cmd.params;
++	cmd_params = (struct dpdmai_cmd_set_rx_queue *)cmd.params;
+ 	cmd_params->dest_id = cpu_to_le32(cfg->dest_cfg.dest_id);
+-	cmd_params->priority = cfg->dest_cfg.priority;
+-	cmd_params->queue = priority;
+-	cmd_params->dest_type = cfg->dest_cfg.dest_type;
++	cmd_params->dest_priority = cfg->dest_cfg.priority;
++	cmd_params->priority = priority;
++	cmd_params->queue_idx = queue_idx;
+ 	cmd_params->user_ctx = cpu_to_le64(cfg->user_ctx);
+ 	cmd_params->options = cpu_to_le32(cfg->options);
++	dpdmai_set_field(cmd_params->dest_type,
++			 DEST_TYPE,
++			 cfg->dest_cfg.dest_type);
+ 
+ 	/* send command to mc*/
+ 	return mc_send_command(mc_io, &cmd);
+@@ -324,10 +337,12 @@ EXPORT_SYMBOL_GPL(dpdmai_set_rx_queue);
+  *
+  * Return:	'0' on Success; Error code otherwise.
+  */
+-int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+-			u8 priority, struct dpdmai_rx_queue_attr *attr)
++int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
++			u16 token, u8 queue_idx, u8 priority,
++			struct dpdmai_rx_queue_attr *attr)
+ {
+-	struct dpdmai_cmd_queue *cmd_params;
++	struct dpdmai_cmd_get_queue *cmd_params;
++	struct dpdmai_rsp_get_rx_queue *rsp_params;
+ 	struct fsl_mc_command cmd = { 0 };
+ 	int err;
+ 
+@@ -335,8 +350,9 @@ int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_GET_RX_QUEUE,
+ 					  cmd_flags, token);
+ 
+-	cmd_params = (struct dpdmai_cmd_queue *)cmd.params;
+-	cmd_params->queue = priority;
++	cmd_params = (struct dpdmai_cmd_get_queue *)cmd.params;
++	cmd_params->priority = priority;
++	cmd_params->queue_idx = queue_idx;
+ 
+ 	/* send command to mc*/
+ 	err = mc_send_command(mc_io, &cmd);
+@@ -344,11 +360,13 @@ int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+ 		return err;
+ 
+ 	/* retrieve response parameters */
+-	attr->dest_cfg.dest_id = le32_to_cpu(cmd_params->dest_id);
+-	attr->dest_cfg.priority = cmd_params->priority;
+-	attr->dest_cfg.dest_type = cmd_params->dest_type;
+-	attr->user_ctx = le64_to_cpu(cmd_params->user_ctx);
+-	attr->fqid = le32_to_cpu(cmd_params->fqid);
++	rsp_params = (struct dpdmai_rsp_get_rx_queue *)cmd.params;
++	attr->user_ctx = le64_to_cpu(rsp_params->user_ctx);
++	attr->fqid = le32_to_cpu(rsp_params->fqid);
++	attr->dest_cfg.dest_id = le32_to_cpu(rsp_params->dest_id);
++	attr->dest_cfg.priority = le32_to_cpu(rsp_params->dest_priority);
++	attr->dest_cfg.dest_type = dpdmai_get_field(rsp_params->dest_type,
++						    DEST_TYPE);
+ 
+ 	return 0;
+ }
+@@ -366,10 +384,11 @@ EXPORT_SYMBOL_GPL(dpdmai_get_rx_queue);
+  * Return:	'0' on Success; Error code otherwise.
+  */
+ int dpdmai_get_tx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
+-			u16 token, u8 priority, u32 *fqid)
++			u16 token, u8 queue_idx, u8 priority,
++			struct dpdmai_tx_queue_attr *attr)
+ {
++	struct dpdmai_cmd_get_queue *cmd_params;
+ 	struct dpdmai_rsp_get_tx_queue *rsp_params;
+-	struct dpdmai_cmd_queue *cmd_params;
+ 	struct fsl_mc_command cmd = { 0 };
+ 	int err;
+ 
+@@ -377,8 +396,9 @@ int dpdmai_get_tx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 	cmd.header = mc_encode_cmd_header(DPDMAI_CMDID_GET_TX_QUEUE,
+ 					  cmd_flags, token);
+ 
+-	cmd_params = (struct dpdmai_cmd_queue *)cmd.params;
+-	cmd_params->queue = priority;
++	cmd_params = (struct dpdmai_cmd_get_queue *)cmd.params;
++	cmd_params->priority = priority;
++	cmd_params->queue_idx = queue_idx;
+ 
+ 	/* send command to mc*/
+ 	err = mc_send_command(mc_io, &cmd);
+@@ -388,7 +408,7 @@ int dpdmai_get_tx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 	/* retrieve response parameters */
+ 
+ 	rsp_params = (struct dpdmai_rsp_get_tx_queue *)cmd.params;
+-	*fqid = le32_to_cpu(rsp_params->fqid);
++	attr->fqid = le32_to_cpu(rsp_params->fqid);
+ 
+ 	return 0;
+ }
+diff --git a/drivers/dma/fsl-dpaa2-qdma/dpdmai.h b/drivers/dma/fsl-dpaa2-qdma/dpdmai.h
+index b13b9bf0c..0a87d37f7 100644
+--- a/drivers/dma/fsl-dpaa2-qdma/dpdmai.h
++++ b/drivers/dma/fsl-dpaa2-qdma/dpdmai.h
+@@ -1,43 +1,45 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+-/* Copyright 2019 NXP */
++/* Copyright 2019-2021 NXP */
+ 
+ #ifndef __FSL_DPDMAI_H
+ #define __FSL_DPDMAI_H
+ 
+ /* DPDMAI Version */
+-#define DPDMAI_VER_MAJOR	2
+-#define DPDMAI_VER_MINOR	2
++#define DPDMAI_VER_MAJOR	3
++#define DPDMAI_VER_MINOR	3
+ 
+-#define DPDMAI_CMD_BASE_VERSION	0
++#define DPDMAI_CMD_BASE_VERSION	1
++#define DPDMAI_CMD_VERSION_2	2
+ #define DPDMAI_CMD_ID_OFFSET	4
+ 
+-#define DPDMAI_CMDID_FORMAT(x)	(((x) << DPDMAI_CMD_ID_OFFSET) | \
+-				DPDMAI_CMD_BASE_VERSION)
++#define DPDMAI_CMD(id)		((id << DPDMAI_CMD_ID_OFFSET) | DPDMAI_CMD_BASE_VERSION)
++#define DPDMAI_CMD_V2(id)	((id << DPDMAI_CMD_ID_OFFSET) | DPDMAI_CMD_VERSION_2)
+ 
+ /* Command IDs */
+-#define DPDMAI_CMDID_CLOSE		DPDMAI_CMDID_FORMAT(0x800)
+-#define DPDMAI_CMDID_OPEN               DPDMAI_CMDID_FORMAT(0x80E)
+-#define DPDMAI_CMDID_CREATE             DPDMAI_CMDID_FORMAT(0x90E)
+-#define DPDMAI_CMDID_DESTROY            DPDMAI_CMDID_FORMAT(0x900)
+-
+-#define DPDMAI_CMDID_ENABLE             DPDMAI_CMDID_FORMAT(0x002)
+-#define DPDMAI_CMDID_DISABLE            DPDMAI_CMDID_FORMAT(0x003)
+-#define DPDMAI_CMDID_GET_ATTR           DPDMAI_CMDID_FORMAT(0x004)
+-#define DPDMAI_CMDID_RESET              DPDMAI_CMDID_FORMAT(0x005)
+-#define DPDMAI_CMDID_IS_ENABLED         DPDMAI_CMDID_FORMAT(0x006)
+-
+-#define DPDMAI_CMDID_SET_IRQ            DPDMAI_CMDID_FORMAT(0x010)
+-#define DPDMAI_CMDID_GET_IRQ            DPDMAI_CMDID_FORMAT(0x011)
+-#define DPDMAI_CMDID_SET_IRQ_ENABLE     DPDMAI_CMDID_FORMAT(0x012)
+-#define DPDMAI_CMDID_GET_IRQ_ENABLE     DPDMAI_CMDID_FORMAT(0x013)
+-#define DPDMAI_CMDID_SET_IRQ_MASK       DPDMAI_CMDID_FORMAT(0x014)
+-#define DPDMAI_CMDID_GET_IRQ_MASK       DPDMAI_CMDID_FORMAT(0x015)
+-#define DPDMAI_CMDID_GET_IRQ_STATUS     DPDMAI_CMDID_FORMAT(0x016)
+-#define DPDMAI_CMDID_CLEAR_IRQ_STATUS	DPDMAI_CMDID_FORMAT(0x017)
+-
+-#define DPDMAI_CMDID_SET_RX_QUEUE	DPDMAI_CMDID_FORMAT(0x1A0)
+-#define DPDMAI_CMDID_GET_RX_QUEUE       DPDMAI_CMDID_FORMAT(0x1A1)
+-#define DPDMAI_CMDID_GET_TX_QUEUE       DPDMAI_CMDID_FORMAT(0x1A2)
++#define DPDMAI_CMDID_CLOSE		DPDMAI_CMD(0x800)
++#define DPDMAI_CMDID_OPEN               DPDMAI_CMD(0x80E)
++#define DPDMAI_CMDID_CREATE             DPDMAI_CMD_V2(0x90E)
++#define DPDMAI_CMDID_DESTROY            DPDMAI_CMD(0x98E)
++#define DPDMAI_CMDID_GET_API_VERSION	DPDMAI_CMD(0xa0E)
++
++#define DPDMAI_CMDID_ENABLE             DPDMAI_CMD(0x002)
++#define DPDMAI_CMDID_DISABLE            DPDMAI_CMD(0x003)
++#define DPDMAI_CMDID_GET_ATTR           DPDMAI_CMD_V2(0x004)
++#define DPDMAI_CMDID_RESET              DPDMAI_CMD(0x005)
++#define DPDMAI_CMDID_IS_ENABLED		DPDMAI_CMD(0x006)
++
++#define DPDMAI_CMDID_SET_RX_QUEUE	DPDMAI_CMD_V2(0x1A0)
++#define DPDMAI_CMDID_GET_RX_QUEUE       DPDMAI_CMD_V2(0x1A1)
++#define DPDMAI_CMDID_GET_TX_QUEUE       DPDMAI_CMD_V2(0x1A2)
++
++/* Macros for accessing command fields smaller than 1byte */
++#define DPDMAI_MASK(field)	\
++	GENMASK(DPDMAI_##field##_SHIFT + DPDMAI_##field##_SIZE - 1,	\
++		DPDMAI_##field##_SHIFT)
++#define dpdmai_set_field(var, field, val)	\
++	((var) |= (((val) << DPDMAI_##field##_SHIFT) & DPDMAI_MASK(field)))
++#define dpdmai_get_field(var, field)	\
++	(((var) & DPDMAI_MASK(field)) >> DPDMAI_##field##_SHIFT)
+ 
+ #define MC_CMD_HDR_TOKEN_O 32  /* Token field offset */
+ #define MC_CMD_HDR_TOKEN_S 16  /* Token field size */
+@@ -49,11 +51,21 @@
+  * Contains initialization APIs and runtime control APIs for DPDMAI
+  */
+ 
++/*
++ * Maximum number of Tx/Rx queues per DPDMAI object
++ */
++#define DPDMAI_MAX_QUEUE_NUM	8
++
+ /**
+  * Maximum number of Tx/Rx priorities per DPDMAI object
+  */
+ #define DPDMAI_PRIO_NUM		2
+ 
++/**
++ * All queues considered; see dpdmai_set_rx_queue()
++ */
++#define DPDMAI_ALL_QUEUES	((uint8_t)(-1))
++
+ /* DPDMAI queue modification options */
+ 
+ /**
+@@ -66,6 +78,69 @@
+  */
+ #define DPDMAI_QUEUE_OPT_DEST		0x2
+ 
++struct dpdmai_cmd_open {
++	u32	dpdmai_id;
++};
++
++struct dpdmai_cmd_create {
++	u8	num_queues;
++	u8	priorities[2];
++};
++
++struct dpdmai_cmd_destroy {
++	u32	dpdmai_id;
++};
++
++#define DPDMAI_ENABLE_SHIFT	0
++#define DPDMAI_ENABLE_SIZE	1
++
++struct dpdmai_rsp_is_enabled {
++	/* only the LSB bit */
++	u8 en;
++};
++
++struct dpdmai_rsp_get_attributes {
++	u32 id;
++	u8 num_of_priorities;
++	u8 num_of_queues;
++};
++
++#define DPDMAI_DEST_TYPE_SHIFT	0
++#define DPDMAI_DEST_TYPE_SIZE	4
++
++struct dpdmai_cmd_set_rx_queue {
++	u32 dest_id;
++	u8 dest_priority;
++	u8 priority;
++	/* from LSB: dest_type:4 */
++	u8 dest_type;
++	u8 queue_idx;
++	u64 user_ctx;
++	u32 options;
++};
++
++struct dpdmai_cmd_get_queue {
++	u8 pad[5];
++	u8 priority;
++	u8 queue_idx;
++};
++
++struct dpdmai_rsp_get_rx_queue {
++	u32 dest_id;
++	u8 dest_priority;
++	u8 pad1;
++	/* from LSB: dest_type:4 */
++	u8 dest_type;
++	u8 pad2;
++	u64 user_ctx;
++	u32 fqid;
++};
++
++struct dpdmai_rsp_get_tx_queue {
++	u64 pad;
++	u32 fqid;
++};
++
+ /**
+  * struct dpdmai_cfg - Structure representing DPDMAI configuration
+  * @priorities: Priorities for the DMA hardware processing; valid priorities are
+@@ -73,6 +148,7 @@
+  *	should be configured with 0
+  */
+ struct dpdmai_cfg {
++	u8 num_queues;
+ 	u8 priorities[DPDMAI_PRIO_NUM];
+ };
+ 
+@@ -83,17 +159,14 @@ struct dpdmai_cfg {
+  * @num_of_priorities: number of priorities
+  */
+ struct dpdmai_attr {
+-	int	id;
++	int id;
+ 	/**
+ 	 * struct version - DPDMAI version
+ 	 * @major: DPDMAI major version
+ 	 * @minor: DPDMAI minor version
+ 	 */
+-	struct {
+-		u16 major;
+-		u16 minor;
+-	} version;
+ 	u8 num_of_priorities;
++	u8 num_of_queues;
+ };
+ 
+ /**
+@@ -158,22 +231,33 @@ struct dpdmai_rx_queue_attr {
+ 	u32 fqid;
+ };
+ 
++struct dpdmai_tx_queue_attr {
++	u32 fqid;
++};
++
+ int dpdmai_open(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 		int dpdmai_id, u16 *token);
+ int dpdmai_close(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token);
+-int dpdmai_destroy(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token);
+ int dpdmai_create(struct fsl_mc_io *mc_io, u32 cmd_flags,
+-		  const struct dpdmai_cfg *cfg, u16 *token);
++		  const struct dpdmai_cfg *cfg, u16 token,
++		  u32 *dpdmai_id);
++int dpdmai_destroy(struct fsl_mc_io *mc_io, u32 cmd_flags,
++		   u32 dpdmai_id, u16 token);
+ int dpdmai_enable(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token);
+ int dpdmai_disable(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token);
++int dpdmai_is_enabled(struct fsl_mc_io *mc_io, u32 cmd_flags,
++		      u16 token, int *en);
+ int dpdmai_reset(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token);
+ int dpdmai_get_attributes(struct fsl_mc_io *mc_io, u32 cmd_flags,
+ 			  u16 token, struct dpdmai_attr	*attr);
+-int dpdmai_set_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+-			u8 priority, const struct dpdmai_rx_queue_cfg *cfg);
+-int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags, u16 token,
+-			u8 priority, struct dpdmai_rx_queue_attr *attr);
++int dpdmai_set_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
++			u16 token, u8 queue_idx, u8 priority,
++			const struct dpdmai_rx_queue_cfg *cfg);
++int dpdmai_get_rx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
++			u16 token, u8 queue_idx, u8 priority,
++			struct dpdmai_rx_queue_attr *attr);
+ int dpdmai_get_tx_queue(struct fsl_mc_io *mc_io, u32 cmd_flags,
+-			u16 token, u8 priority, u32 *fqid);
++			u16 token, u8 queue_idx, u8 priority,
++			struct dpdmai_tx_queue_attr *attr);
+ 
+ #endif /* __FSL_DPDMAI_H */
+diff --git a/drivers/dma/fsl-edma-common.c b/drivers/dma/fsl-edma-common.c
+index 930ae268c..7bd002c02 100644
+--- a/drivers/dma/fsl-edma-common.c
++++ b/drivers/dma/fsl-edma-common.c
+@@ -4,6 +4,7 @@
+ // Copyright (c) 2017 Sysam, Angelo Dureghello  <angelo@sysam.it>
+ 
+ #include <linux/dmapool.h>
++#include <linux/delay.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
+ #include <linux/dma-mapping.h>
+@@ -160,11 +161,24 @@ EXPORT_SYMBOL_GPL(fsl_edma_free_desc);
+ int fsl_edma_terminate_all(struct dma_chan *chan)
+ {
+ 	struct fsl_edma_chan *fsl_chan = to_fsl_edma_chan(chan);
++	struct edma_regs *regs = &fsl_chan->edma->regs;
++	u32 ch = fsl_chan->vchan.chan.chan_id;
+ 	unsigned long flags;
++	int count = 0;
+ 	LIST_HEAD(head);
+ 
+-	spin_lock_irqsave(&fsl_chan->vchan.lock, flags);
+ 	fsl_edma_disable_request(fsl_chan);
++
++	/*
++	 * Checking ACTIVE to ensure minor loop stop indeed to prevent the
++	 * potential illegal memory write if channel not stopped with buffer
++	 * freed.
++	 */
++	while (count++ < EDMA_MINOR_LOOP_TIMEOUT && (EDMA_TCD_CSR_ACTIVE &
++		edma_readw(fsl_chan->edma, &regs->tcd[ch].csr)))
++		udelay(1);
++
++	spin_lock_irqsave(&fsl_chan->vchan.lock, flags);
+ 	fsl_chan->edesc = NULL;
+ 	fsl_chan->idle = true;
+ 	vchan_get_all_descriptors(&fsl_chan->vchan, &head);
+@@ -310,6 +324,11 @@ static size_t fsl_edma_desc_residue(struct fsl_edma_chan *fsl_chan,
+ 	return len;
+ }
+ 
++void fsl_edma_get_realcnt(struct fsl_edma_chan *fsl_chan)
++{
++	fsl_chan->chn_real_count = fsl_edma_desc_residue(fsl_chan, NULL, true);
++}
++
+ enum dma_status fsl_edma_tx_status(struct dma_chan *chan,
+ 		dma_cookie_t cookie, struct dma_tx_state *txstate)
+ {
+@@ -319,8 +338,12 @@ enum dma_status fsl_edma_tx_status(struct dma_chan *chan,
+ 	unsigned long flags;
+ 
+ 	status = dma_cookie_status(chan, cookie, txstate);
+-	if (status == DMA_COMPLETE)
++	if (status == DMA_COMPLETE) {
++		spin_lock_irqsave(&fsl_chan->vchan.lock, flags);
++		txstate->residue = fsl_chan->chn_real_count;
++		spin_unlock_irqrestore(&fsl_chan->vchan.lock, flags);
+ 		return status;
++	}
+ 
+ 	if (!txstate)
+ 		return fsl_chan->status;
+diff --git a/drivers/dma/fsl-edma-common.h b/drivers/dma/fsl-edma-common.h
+index ec1169741..f2eff5846 100644
+--- a/drivers/dma/fsl-edma-common.h
++++ b/drivers/dma/fsl-edma-common.h
+@@ -2,6 +2,7 @@
+ /*
+  * Copyright 2013-2014 Freescale Semiconductor, Inc.
+  * Copyright 2018 Angelo Dureghello <angelo@sysam.it>
++ * Copyright 2020 NXP
+  */
+ #ifndef _FSL_EDMA_COMMON_H_
+ #define _FSL_EDMA_COMMON_H_
+@@ -58,6 +59,8 @@
+ 
+ #define DMAMUX_NR	2
+ 
++#define EDMA_MINOR_LOOP_TIMEOUT		500 /* us */
++
+ #define FSL_EDMA_BUSWIDTHS	(BIT(DMA_SLAVE_BUSWIDTH_1_BYTE) | \
+ 				 BIT(DMA_SLAVE_BUSWIDTH_2_BYTES) | \
+ 				 BIT(DMA_SLAVE_BUSWIDTH_4_BYTES) | \
+@@ -126,6 +129,7 @@ struct fsl_edma_chan {
+ 	u32				dma_dev_size;
+ 	enum dma_data_direction		dma_dir;
+ 	char				chan_name[16];
++	u32				chn_real_count;
+ };
+ 
+ struct fsl_edma_desc {
+@@ -150,6 +154,7 @@ struct fsl_edma_drvdata {
+ 	bool			mux_swap;
+ 	int			(*setup_irq)(struct platform_device *pdev,
+ 					     struct fsl_edma_engine *fsl_edma);
++	u8			txirq_count;
+ };
+ 
+ struct fsl_edma_engine {
+@@ -161,7 +166,7 @@ struct fsl_edma_engine {
+ 	struct mutex		fsl_edma_mutex;
+ 	const struct fsl_edma_drvdata *drvdata;
+ 	u32			n_chans;
+-	int			txirq;
++	int			*txirqs;
+ 	int			errirq;
+ 	bool			big_endian;
+ 	struct edma_regs	regs;
+@@ -182,6 +187,14 @@ static inline u32 edma_readl(struct fsl_edma_engine *edma, void __iomem *addr)
+ 		return ioread32(addr);
+ }
+ 
++static inline u32 edma_readw(struct fsl_edma_engine *edma, void __iomem *addr)
++{
++	if (edma->big_endian)
++		return ioread16be(addr);
++	else
++		return ioread16(addr);
++}
++
+ static inline void edma_writeb(struct fsl_edma_engine *edma,
+ 			       u8 val, void __iomem *addr)
+ {
+@@ -230,6 +243,7 @@ int fsl_edma_pause(struct dma_chan *chan);
+ int fsl_edma_resume(struct dma_chan *chan);
+ int fsl_edma_slave_config(struct dma_chan *chan,
+ 				 struct dma_slave_config *cfg);
++void fsl_edma_get_realcnt(struct fsl_edma_chan *fsl_chan);
+ enum dma_status fsl_edma_tx_status(struct dma_chan *chan,
+ 		dma_cookie_t cookie, struct dma_tx_state *txstate);
+ struct dma_async_tx_descriptor *fsl_edma_prep_dma_cyclic(
+diff --git a/drivers/dma/fsl-edma-v3.c b/drivers/dma/fsl-edma-v3.c
+index d0acec5c9..31fe09c9a 100644
+--- a/drivers/dma/fsl-edma-v3.c
++++ b/drivers/dma/fsl-edma-v3.c
+@@ -1015,6 +1015,9 @@ static void fsl_edma3_synchronize(struct dma_chan *chan)
+ {
+ 	struct fsl_edma3_chan *fsl_chan = to_fsl_edma3_chan(chan);
+ 
++	if (fsl_chan->status == DMA_PAUSED)
++		fsl_edma3_terminate_all(chan);
++
+ 	vchan_synchronize(&fsl_chan->vchan);
+ }
+ 
+diff --git a/drivers/dma/fsl-edma.c b/drivers/dma/fsl-edma.c
+index 90bb72af3..c403e7f93 100644
+--- a/drivers/dma/fsl-edma.c
++++ b/drivers/dma/fsl-edma.c
+@@ -2,11 +2,12 @@
+ /*
+  * drivers/dma/fsl-edma.c
+  *
+- * Copyright 2013-2014 Freescale Semiconductor, Inc.
++ * Copyright 2013-2016 Freescale Semiconductor, Inc.
++ * Copyright 2020 NXP
+  *
+  * Driver for the Freescale eDMA engine with flexible channel multiplexing
+  * capability for DMA request sources. The eDMA block can be found on some
+- * Vybrid and Layerscape SoCs.
++ * Vybrid, Layerscape and S32V234 SoCs.
+  */
+ 
+ #include <linux/module.h>
+@@ -53,6 +54,7 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
+ 			}
+ 
+ 			if (!fsl_chan->edesc->iscyclic) {
++				fsl_edma_get_realcnt(fsl_chan);
+ 				list_del(&fsl_chan->edesc->vdesc.node);
+ 				vchan_cookie_complete(&fsl_chan->edesc->vdesc);
+ 				fsl_chan->edesc = NULL;
+@@ -138,23 +140,23 @@ fsl_edma_irq_init(struct platform_device *pdev, struct fsl_edma_engine *fsl_edma
+ {
+ 	int ret;
+ 
+-	fsl_edma->txirq = platform_get_irq_byname(pdev, "edma-tx");
+-	if (fsl_edma->txirq < 0)
+-		return fsl_edma->txirq;
++	*fsl_edma->txirqs = platform_get_irq_byname(pdev, "edma-tx");
++	if (*fsl_edma->txirqs < 0)
++		return *fsl_edma->txirqs;
+ 
+ 	fsl_edma->errirq = platform_get_irq_byname(pdev, "edma-err");
+ 	if (fsl_edma->errirq < 0)
+ 		return fsl_edma->errirq;
+ 
+-	if (fsl_edma->txirq == fsl_edma->errirq) {
+-		ret = devm_request_irq(&pdev->dev, fsl_edma->txirq,
++	if (*fsl_edma->txirqs == fsl_edma->errirq) {
++		ret = devm_request_irq(&pdev->dev, *fsl_edma->txirqs,
+ 				fsl_edma_irq_handler, 0, "eDMA", fsl_edma);
+ 		if (ret) {
+ 			dev_err(&pdev->dev, "Can't register eDMA IRQ.\n");
+ 			return ret;
+ 		}
+ 	} else {
+-		ret = devm_request_irq(&pdev->dev, fsl_edma->txirq,
++		ret = devm_request_irq(&pdev->dev, *fsl_edma->txirqs,
+ 				fsl_edma_tx_handler, 0, "eDMA tx", fsl_edma);
+ 		if (ret) {
+ 			dev_err(&pdev->dev, "Can't register eDMA tx IRQ.\n");
+@@ -177,14 +179,7 @@ fsl_edma2_irq_init(struct platform_device *pdev,
+ 		   struct fsl_edma_engine *fsl_edma)
+ {
+ 	int i, ret, irq;
+-	int count;
+-
+-	count = platform_irq_count(pdev);
+-	dev_dbg(&pdev->dev, "%s Found %d interrupts\r\n", __func__, count);
+-	if (count <= 2) {
+-		dev_err(&pdev->dev, "Interrupts in DTS not correct.\n");
+-		return -EINVAL;
+-	}
++	int count = fsl_edma->drvdata->txirq_count + 1;
+ 	/*
+ 	 * 16 channel independent interrupts + 1 error interrupt on i.mx7ulp.
+ 	 * 2 channel share one interrupt, for example, ch0/ch16, ch1/ch17...
+@@ -199,15 +194,18 @@ fsl_edma2_irq_init(struct platform_device *pdev,
+ 		sprintf(fsl_edma->chans[i].chan_name, "eDMA2-CH%02d", i);
+ 
+ 		/* The last IRQ is for eDMA err */
+-		if (i == count - 1)
++		if (i == count - 1) {
++			fsl_edma->errirq = irq;
+ 			ret = devm_request_irq(&pdev->dev, irq,
+ 						fsl_edma_err_handler,
+ 						0, "eDMA2-ERR", fsl_edma);
+-		else
++		} else {
++			fsl_edma->txirqs[i] = irq;
+ 			ret = devm_request_irq(&pdev->dev, irq,
+ 						fsl_edma_tx_handler, 0,
+ 						fsl_edma->chans[i].chan_name,
+ 						fsl_edma);
++		}
+ 		if (ret)
+ 			return ret;
+ 	}
+@@ -215,15 +213,59 @@ fsl_edma2_irq_init(struct platform_device *pdev,
+ 	return 0;
+ }
+ 
++static int fsl_edma_irq_init_s32(struct platform_device *pdev,
++				 struct fsl_edma_engine *fsl_edma)
++{
++	int i, ret, irq, txirq_count = fsl_edma->drvdata->txirq_count;
++	static const char * const names[] = {"edma-tx_0-15", "edma-tx_16-31",
++					     "edma-err"};
++
++	for (i = 0; i <= txirq_count; i++) {
++		irq = platform_get_irq_byname(pdev, names[i]);
++		if (irq < 0) {
++			dev_err(&pdev->dev, "Can't get %s IRQ.\n",
++				names[i]);
++			return irq;
++		}
++
++		if (i == txirq_count) {
++			fsl_edma->errirq = irq;
++			ret = devm_request_irq(&pdev->dev, irq,
++					       fsl_edma_err_handler, 0,
++					       names[i], fsl_edma);
++		} else {
++			fsl_edma->txirqs[i] = irq;
++			ret = devm_request_irq(&pdev->dev, irq,
++					       fsl_edma_tx_handler, 0,
++					       names[i], fsl_edma);
++		}
++
++		if (ret) {
++			dev_err(&pdev->dev,
++				"Can't register %s IRQ.\n",
++				names[i]);
++			return ret;
++		}
++	}
++
++	return 0;
++}
++
+ static void fsl_edma_irq_exit(
+ 		struct platform_device *pdev, struct fsl_edma_engine *fsl_edma)
+ {
+-	if (fsl_edma->txirq == fsl_edma->errirq) {
+-		devm_free_irq(&pdev->dev, fsl_edma->txirq, fsl_edma);
+-	} else {
+-		devm_free_irq(&pdev->dev, fsl_edma->txirq, fsl_edma);
+-		devm_free_irq(&pdev->dev, fsl_edma->errirq, fsl_edma);
++	int i;
++	bool free_errirq = true;
++	u8 count = fsl_edma->drvdata->txirq_count;
++
++	for (i = 0; i < count; i++) {
++		devm_free_irq(&pdev->dev, fsl_edma->txirqs[i], fsl_edma);
++		if (fsl_edma->txirqs[i] == fsl_edma->errirq)
++			free_errirq = false;
+ 	}
++
++	if (free_errirq)
++		devm_free_irq(&pdev->dev, fsl_edma->errirq, fsl_edma);
+ }
+ 
+ static void fsl_disable_clocks(struct fsl_edma_engine *fsl_edma, int nr_clocks)
+@@ -238,6 +280,7 @@ static struct fsl_edma_drvdata vf610_data = {
+ 	.version = v1,
+ 	.dmamuxs = DMAMUX_NR,
+ 	.setup_irq = fsl_edma_irq_init,
++	.txirq_count = 1,
+ };
+ 
+ static struct fsl_edma_drvdata ls1028a_data = {
+@@ -245,6 +288,7 @@ static struct fsl_edma_drvdata ls1028a_data = {
+ 	.dmamuxs = DMAMUX_NR,
+ 	.mux_swap = true,
+ 	.setup_irq = fsl_edma_irq_init,
++	.txirq_count = 1,
+ };
+ 
+ static struct fsl_edma_drvdata imx7ulp_data = {
+@@ -252,12 +296,22 @@ static struct fsl_edma_drvdata imx7ulp_data = {
+ 	.dmamuxs = 1,
+ 	.has_dmaclk = true,
+ 	.setup_irq = fsl_edma2_irq_init,
++	.txirq_count = 16,
++};
++
++static struct fsl_edma_drvdata s32v234_data = {
++	.version = v1,
++	.dmamuxs = DMAMUX_NR,
++	.mux_swap = true,
++	.setup_irq = fsl_edma_irq_init_s32,
++	.txirq_count = 2,
+ };
+ 
+ static const struct of_device_id fsl_edma_dt_ids[] = {
+ 	{ .compatible = "fsl,vf610-edma", .data = &vf610_data},
+ 	{ .compatible = "fsl,ls1028a-edma", .data = &ls1028a_data},
+ 	{ .compatible = "fsl,imx7ulp-edma", .data = &imx7ulp_data},
++	{ .compatible = "fsl,s32v234-edma", .data = &s32v234_data},
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, fsl_edma_dt_ids);
+@@ -365,6 +419,12 @@ static int fsl_edma_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	edma_writel(fsl_edma, ~0, regs->intl);
++
++	fsl_edma->txirqs = devm_kzalloc(&pdev->dev,
++		drvdata->txirq_count * sizeof(*fsl_edma->txirqs), GFP_KERNEL);
++	if (!fsl_edma->txirqs)
++		return -ENOMEM;
++
+ 	ret = fsl_edma->drvdata->setup_irq(pdev, fsl_edma);
+ 	if (ret)
+ 		return ret;
+diff --git a/drivers/dma/fsl-qdma.c b/drivers/dma/fsl-qdma.c
+index 045ead46e..44f42d501 100644
+--- a/drivers/dma/fsl-qdma.c
++++ b/drivers/dma/fsl-qdma.c
+@@ -109,6 +109,7 @@
+ #define FSL_QDMA_CMD_WTHROTL_OFFSET	20
+ #define FSL_QDMA_CMD_DSEN_OFFSET	19
+ #define FSL_QDMA_CMD_LWC_OFFSET		16
++#define FSL_QDMA_CMD_PF			BIT(17)
+ 
+ /* Field definition for Descriptor status */
+ #define QDMA_CCDF_STATUS_RTE		BIT(5)
+@@ -316,7 +317,7 @@ static void fsl_qdma_free_chan_resources(struct dma_chan *chan)
+ 
+ 	vchan_dma_desc_free_list(&fsl_chan->vchan, &head);
+ 
+-	if (!fsl_queue->comp_pool && !fsl_queue->desc_pool)
++	if (!fsl_queue->comp_pool || !fsl_queue->desc_pool)
+ 		return;
+ 
+ 	list_for_each_entry_safe(comp_temp, _comp_temp,
+@@ -384,7 +385,8 @@ static void fsl_qdma_comp_fill_memcpy(struct fsl_qdma_comp *fsl_comp,
+ 	qdma_csgf_set_f(csgf_dest, len);
+ 	/* Descriptor Buffer */
+ 	cmd = cpu_to_le32(FSL_QDMA_CMD_RWTTYPE <<
+-			  FSL_QDMA_CMD_RWTTYPE_OFFSET);
++			  FSL_QDMA_CMD_RWTTYPE_OFFSET) |
++			  FSL_QDMA_CMD_PF;
+ 	sdf->data = QDMA_SDDF_CMD(cmd);
+ 
+ 	cmd = cpu_to_le32(FSL_QDMA_CMD_RWTTYPE <<
+@@ -1201,10 +1203,6 @@ static int fsl_qdma_probe(struct platform_device *pdev)
+ 	if (!fsl_qdma->queue)
+ 		return -ENOMEM;
+ 
+-	ret = fsl_qdma_irq_init(pdev, fsl_qdma);
+-	if (ret)
+-		return ret;
+-
+ 	fsl_qdma->irq_base = platform_get_irq_byname(pdev, "qdma-queue0");
+ 	if (fsl_qdma->irq_base < 0)
+ 		return fsl_qdma->irq_base;
+@@ -1243,16 +1241,20 @@ static int fsl_qdma_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, fsl_qdma);
+ 
+-	ret = dma_async_device_register(&fsl_qdma->dma_dev);
++	ret = fsl_qdma_reg_init(fsl_qdma);
+ 	if (ret) {
+-		dev_err(&pdev->dev,
+-			"Can't register NXP Layerscape qDMA engine.\n");
++		dev_err(&pdev->dev, "Can't Initialize the qDMA engine.\n");
+ 		return ret;
+ 	}
+ 
+-	ret = fsl_qdma_reg_init(fsl_qdma);
++	ret = fsl_qdma_irq_init(pdev, fsl_qdma);
++	if (ret)
++		return ret;
++
++	ret = dma_async_device_register(&fsl_qdma->dma_dev);
+ 	if (ret) {
+-		dev_err(&pdev->dev, "Can't Initialize the qDMA engine.\n");
++		dev_err(&pdev->dev,
++			"Can't register NXP Layerscape qDMA engine.\n");
+ 		return ret;
+ 	}
+ 
+diff --git a/drivers/dma/imx-dma.c b/drivers/dma/imx-dma.c
+index 2ddc31e64..da31e73d2 100644
+--- a/drivers/dma/imx-dma.c
++++ b/drivers/dma/imx-dma.c
+@@ -1047,7 +1047,7 @@ static int __init imxdma_probe(struct platform_device *pdev)
+ 		return -ENOMEM;
+ 
+ 	imxdma->dev = &pdev->dev;
+-	imxdma->devtype = (enum imx_dma_type)of_device_get_match_data(&pdev->dev);
++	imxdma->devtype = (uintptr_t)of_device_get_match_data(&pdev->dev);
+ 
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	imxdma->base = devm_ioremap_resource(&pdev->dev, res);
+diff --git a/drivers/dma/imx-sdma.c b/drivers/dma/imx-sdma.c
+index 188684fc7..52e20bfe6 100644
+--- a/drivers/dma/imx-sdma.c
++++ b/drivers/dma/imx-sdma.c
+@@ -2278,7 +2278,7 @@ static int sdma_event_remap(struct sdma_engine *sdma)
+ 	u32 reg, val, shift, num_map, i;
+ 	int ret = 0;
+ 
+-	if (IS_ERR(np) || IS_ERR(gpr_np))
++	if (IS_ERR(np) || !gpr_np)
+ 		goto out;
+ 
+ 	event_remap = of_find_property(np, propname, NULL);
+@@ -2326,7 +2326,7 @@ static int sdma_event_remap(struct sdma_engine *sdma)
+ 	}
+ 
+ out:
+-	if (!IS_ERR(gpr_np))
++	if (gpr_np)
+ 		of_node_put(gpr_np);
+ 
+ 	return ret;
+@@ -2763,7 +2763,7 @@ MODULE_DESCRIPTION("i.MX SDMA driver");
+ #if IS_ENABLED(CONFIG_SOC_IMX6Q)
+ MODULE_FIRMWARE("imx/sdma/sdma-imx6q.bin");
+ #endif
+-#if IS_ENABLED(CONFIG_SOC_IMX7D)
++#if IS_ENABLED(CONFIG_SOC_IMX7D) || IS_ENABLED(CONFIG_SOC_IMX8M)
+ MODULE_FIRMWARE("imx/sdma/sdma-imx7d.bin");
+ #endif
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/dma/mxs-dma.c b/drivers/dma/mxs-dma.c
+index dc147cc24..c04c7c971 100644
+--- a/drivers/dma/mxs-dma.c
++++ b/drivers/dma/mxs-dma.c
+@@ -25,6 +25,8 @@
+ #include <linux/of_dma.h>
+ #include <linux/list.h>
+ #include <linux/dma/mxs-dma.h>
++#include <linux/pm_runtime.h>
++#include <linux/dmapool.h>
+ 
+ #include <asm/irq.h>
+ 
+@@ -39,6 +41,8 @@
+ #define dma_is_apbh(mxs_dma)	((mxs_dma)->type == MXS_DMA_APBH)
+ #define apbh_is_old(mxs_dma)	((mxs_dma)->dev_id == IMX23_DMA)
+ 
++#define MXS_DMA_RPM_TIMEOUT 50 /* ms */
++
+ #define HW_APBHX_CTRL0				0x000
+ #define BM_APBH_CTRL0_APB_BURST8_EN		(1 << 29)
+ #define BM_APBH_CTRL0_APB_BURST_EN		(1 << 28)
+@@ -118,6 +122,7 @@ struct mxs_dma_chan {
+ 	enum dma_status			status;
+ 	unsigned int			flags;
+ 	bool				reset;
++	struct dma_pool			*ccw_pool;
+ #define MXS_DMA_SG_LOOP			(1 << 0)
+ #define MXS_DMA_USE_SEMAPHORE		(1 << 1)
+ };
+@@ -397,11 +402,13 @@ static int mxs_dma_alloc_chan_resources(struct dma_chan *chan)
+ {
+ 	struct mxs_dma_chan *mxs_chan = to_mxs_dma_chan(chan);
+ 	struct mxs_dma_engine *mxs_dma = mxs_chan->mxs_dma;
++	struct device *dev = &mxs_dma->pdev->dev;
+ 	int ret;
+ 
+-	mxs_chan->ccw = dma_alloc_coherent(mxs_dma->dma_device.dev,
+-					   CCW_BLOCK_SIZE,
+-					   &mxs_chan->ccw_phys, GFP_KERNEL);
++	mxs_chan->ccw = dma_pool_zalloc(mxs_chan->ccw_pool,
++				        GFP_ATOMIC,
++				        &mxs_chan->ccw_phys);
++
+ 	if (!mxs_chan->ccw) {
+ 		ret = -ENOMEM;
+ 		goto err_alloc;
+@@ -412,9 +419,11 @@ static int mxs_dma_alloc_chan_resources(struct dma_chan *chan)
+ 	if (ret)
+ 		goto err_irq;
+ 
+-	ret = clk_prepare_enable(mxs_dma->clk);
+-	if (ret)
++	ret = pm_runtime_get_sync(dev);
++	if (ret < 0) {
++		dev_err(dev, "Failed to enable clock\n");
+ 		goto err_clk;
++	}
+ 
+ 	mxs_dma_reset_chan(chan);
+ 
+@@ -429,8 +438,8 @@ static int mxs_dma_alloc_chan_resources(struct dma_chan *chan)
+ err_clk:
+ 	free_irq(mxs_chan->chan_irq, mxs_dma);
+ err_irq:
+-	dma_free_coherent(mxs_dma->dma_device.dev, CCW_BLOCK_SIZE,
+-			mxs_chan->ccw, mxs_chan->ccw_phys);
++	dma_pool_free(mxs_chan->ccw_pool, mxs_chan->ccw,
++		      mxs_chan->ccw_phys);
+ err_alloc:
+ 	return ret;
+ }
+@@ -439,15 +448,18 @@ static void mxs_dma_free_chan_resources(struct dma_chan *chan)
+ {
+ 	struct mxs_dma_chan *mxs_chan = to_mxs_dma_chan(chan);
+ 	struct mxs_dma_engine *mxs_dma = mxs_chan->mxs_dma;
++	struct device *dev = &mxs_dma->pdev->dev;
+ 
+ 	mxs_dma_disable_chan(chan);
+ 
+ 	free_irq(mxs_chan->chan_irq, mxs_dma);
+ 
+-	dma_free_coherent(mxs_dma->dma_device.dev, CCW_BLOCK_SIZE,
+-			mxs_chan->ccw, mxs_chan->ccw_phys);
++	dma_pool_free(mxs_chan->ccw_pool, mxs_chan->ccw,
++		      mxs_chan->ccw_phys);
++
++	pm_runtime_mark_last_busy(dev);
++	pm_runtime_put_autosuspend(dev);
+ 
+-	clk_disable_unprepare(mxs_dma->clk);
+ }
+ 
+ /*
+@@ -670,14 +682,32 @@ static enum dma_status mxs_dma_tx_status(struct dma_chan *chan,
+ 	return mxs_chan->status;
+ }
+ 
++static int mxs_dma_init_rpm(struct mxs_dma_engine *mxs_dma)
++{
++	struct device *dev = &mxs_dma->pdev->dev;
++
++	pm_runtime_enable(dev);
++	pm_runtime_set_autosuspend_delay(dev, MXS_DMA_RPM_TIMEOUT);
++	pm_runtime_use_autosuspend(dev);
++
++	return 0;
++}
++
+ static int mxs_dma_init(struct mxs_dma_engine *mxs_dma)
+ {
++	struct device *dev = &mxs_dma->pdev->dev;
+ 	int ret;
+ 
+-	ret = clk_prepare_enable(mxs_dma->clk);
++	ret = mxs_dma_init_rpm(mxs_dma);
+ 	if (ret)
+ 		return ret;
+ 
++	ret = pm_runtime_get_sync(dev);
++	if (ret < 0) {
++		dev_err(dev, "Failed to enable clock\n");
++		return ret;
++	}
++
+ 	ret = stmp_reset_block(mxs_dma->base);
+ 	if (ret)
+ 		goto err_out;
+@@ -695,7 +725,8 @@ static int mxs_dma_init(struct mxs_dma_engine *mxs_dma)
+ 		mxs_dma->base + HW_APBHX_CTRL1 + STMP_OFFSET_REG_SET);
+ 
+ err_out:
+-	clk_disable_unprepare(mxs_dma->clk);
++	pm_runtime_mark_last_busy(dev);
++	pm_runtime_put_autosuspend(dev);
+ 	return ret;
+ }
+ 
+@@ -710,6 +741,12 @@ static bool mxs_dma_filter_fn(struct dma_chan *chan, void *fn_param)
+ 	struct mxs_dma_engine *mxs_dma = mxs_chan->mxs_dma;
+ 	int chan_irq;
+ 
++	if (strcmp(chan->device->dev->driver->name, "mxs-dma"))
++		return false;
++
++	if (!mxs_dma)
++		return false;
++
+ 	if (chan->chan_id != param->chan_id)
+ 		return false;
+ 
+@@ -747,6 +784,7 @@ static int mxs_dma_probe(struct platform_device *pdev)
+ 	const struct mxs_dma_type *dma_type;
+ 	struct mxs_dma_engine *mxs_dma;
+ 	struct resource *iores;
++	struct dma_pool *ccw_pool;
+ 	int ret, i;
+ 
+ 	mxs_dma = devm_kzalloc(&pdev->dev, sizeof(*mxs_dma), GFP_KERNEL);
+@@ -787,19 +825,31 @@ static int mxs_dma_probe(struct platform_device *pdev)
+ 
+ 		tasklet_setup(&mxs_chan->tasklet, mxs_dma_tasklet);
+ 
+-
+ 		/* Add the channel to mxs_chan list */
+ 		list_add_tail(&mxs_chan->chan.device_node,
+ 			&mxs_dma->dma_device.channels);
+ 	}
+ 
++	platform_set_drvdata(pdev, mxs_dma);
++	mxs_dma->pdev = pdev;
++
+ 	ret = mxs_dma_init(mxs_dma);
+ 	if (ret)
+ 		return ret;
+ 
+-	mxs_dma->pdev = pdev;
+ 	mxs_dma->dma_device.dev = &pdev->dev;
+ 
++	/* create the dma pool */
++	ccw_pool = dma_pool_create("ccw_pool",
++				   mxs_dma->dma_device.dev,
++				   CCW_BLOCK_SIZE, 32, 0);
++
++	for (i = 0; i < MXS_DMA_CHANNELS; i++) {
++		struct mxs_dma_chan *mxs_chan = &mxs_dma->mxs_chans[i];
++
++		mxs_chan->ccw_pool = ccw_pool;
++	}
++
+ 	/* mxs_dma gets 65535 bytes maximum sg size */
+ 	dma_set_max_seg_size(mxs_dma->dma_device.dev, MAX_XFER_BYTES);
+ 
+@@ -834,12 +884,85 @@ static int mxs_dma_probe(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++static int mxs_dma_remove(struct platform_device *pdev)
++{
++	struct mxs_dma_engine *mxs_dma = platform_get_drvdata(pdev);
++	int i;
++
++	dma_async_device_unregister(&mxs_dma->dma_device);
++	dma_pool_destroy(mxs_dma->mxs_chans[0].ccw_pool);
++
++	for (i = 0; i < MXS_DMA_CHANNELS; i++) {
++		struct mxs_dma_chan *mxs_chan = &mxs_dma->mxs_chans[i];
++
++		tasklet_kill(&mxs_chan->tasklet);
++		mxs_chan->ccw_pool = NULL;
++	}
++
++	return 0;
++}
++
++#ifdef CONFIG_PM_SLEEP
++static int mxs_dma_pm_suspend(struct device *dev)
++{
++	int ret;
++
++	ret = pm_runtime_force_suspend(dev);
++
++	return ret;
++}
++
++static int mxs_dma_pm_resume(struct device *dev)
++{
++	struct mxs_dma_engine *mxs_dma = dev_get_drvdata(dev);
++	int ret;
++
++	ret = mxs_dma_init(mxs_dma);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++#endif
++
++int mxs_dma_runtime_suspend(struct device *dev)
++{
++	struct mxs_dma_engine *mxs_dma = dev_get_drvdata(dev);
++
++	clk_disable_unprepare(mxs_dma->clk);
++
++	return 0;
++}
++
++int mxs_dma_runtime_resume(struct device *dev)
++{
++	struct mxs_dma_engine *mxs_dma = dev_get_drvdata(dev);
++	int ret;
++
++	ret = clk_prepare_enable(mxs_dma->clk);
++	if (ret) {
++		dev_err(&mxs_dma->pdev->dev, "failed to enable the clock\n");
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct dev_pm_ops mxs_dma_pm_ops = {
++	SET_RUNTIME_PM_OPS(mxs_dma_runtime_suspend, mxs_dma_runtime_resume, NULL)
++	SET_SYSTEM_SLEEP_PM_OPS(mxs_dma_pm_suspend, mxs_dma_pm_resume)
++};
++
+ static struct platform_driver mxs_dma_driver = {
+ 	.driver		= {
+ 		.name	= "mxs-dma",
++		.pm = &mxs_dma_pm_ops,
+ 		.of_match_table = mxs_dma_dt_ids,
+ 	},
++	.remove		= mxs_dma_remove,
+ 	.probe = mxs_dma_probe,
+ };
++module_platform_driver(mxs_dma_driver);
+ 
+-builtin_platform_driver(mxs_dma_driver);
++MODULE_DESCRIPTION("MXS DMA driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/input/keyboard/Kconfig b/drivers/input/keyboard/Kconfig
+index e402915cc..a50294a68 100644
+--- a/drivers/input/keyboard/Kconfig
++++ b/drivers/input/keyboard/Kconfig
+@@ -452,6 +452,17 @@ config KEYBOARD_SNVS_PWRKEY
+ 	  To compile this driver as a module, choose M here; the
+ 	  module will be called snvs_pwrkey.
+ 
++config KEYBOARD_BBNSM_PWRKEY
++   tristate "NXP BBNSM Power Key Driver"
++   depends on ARCH_MXC || COMPILE_TEST
++   depends on OF
++   help
++     This is the bbnsm powerkey driver for the NXP i.MX application
++     processors.
++
++     To compile this driver as a module, choose M here; the
++     module will be called bbnsm_pwrkey.
++
+ config KEYBOARD_IMX
+ 	tristate "IMX keypad support"
+ 	depends on ARCH_MXC || COMPILE_TEST
+diff --git a/drivers/input/keyboard/Makefile b/drivers/input/keyboard/Makefile
+index 1d689fdd5..0f7128590 100644
+--- a/drivers/input/keyboard/Makefile
++++ b/drivers/input/keyboard/Makefile
+@@ -59,6 +59,7 @@ obj-$(CONFIG_KEYBOARD_QT2160)		+= qt2160.o
+ obj-$(CONFIG_KEYBOARD_SAMSUNG)		+= samsung-keypad.o
+ obj-$(CONFIG_KEYBOARD_SH_KEYSC)		+= sh_keysc.o
+ obj-$(CONFIG_KEYBOARD_SNVS_PWRKEY)	+= snvs_pwrkey.o
++obj-$(CONFIG_KEYBOARD_BBNSM_PWRKEY)    += bbnsm_pwrkey.o
+ obj-$(CONFIG_KEYBOARD_SPEAR)		+= spear-keyboard.o
+ obj-$(CONFIG_KEYBOARD_STMPE)		+= stmpe-keypad.o
+ obj-$(CONFIG_KEYBOARD_STOWAWAY)		+= stowaway.o
+diff --git a/drivers/input/keyboard/bbnsm_pwrkey.c b/drivers/input/keyboard/bbnsm_pwrkey.c
+new file mode 100644
+index 000000000..92fbfbcde
+--- /dev/null
++++ b/drivers/input/keyboard/bbnsm_pwrkey.c
+@@ -0,0 +1,199 @@
++// SPDX-License-Identifier: GPL-2.0+
++//
++// Copyright 2022 NXP.
++
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/init.h>
++#include <linux/input.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeirq.h>
++#include <linux/mfd/syscon.h>
++#include <linux/regmap.h>
++
++#define BBNSM_CTRL		0x8
++#define BBNSM_INT_EN		0x10
++#define BBNSM_EVENTS		0x14
++#define BBNSM_PAD_CTRL		0x24
++
++#define BBNSM_BTN_PRESSED	BIT(7)
++#define BBNSM_PWR_ON		BIT(6)
++#define BBNSM_BTN_OFF		BIT(5)
++#define BBNSM_EMG_OFF		BIT(4)
++#define BBNSM_PWRKEY_EVENTS	(BBNSM_PWR_ON | BBNSM_BTN_OFF | BBNSM_EMG_OFF)
++#define BBNSM_DP_EN		BIT(24)
++
++#define DEBOUNCE_TIME		30
++#define REPEAT_INTERVAL		60
++
++struct bbnsm_pwrkey {
++	struct regmap *regmap;
++	int irq;
++	int keycode;
++	int keystate;  /* 1:pressed */
++	int wakeup;
++	struct timer_list check_timer;
++	struct input_dev *input;
++};
++
++static void bbnsm_pwrkey_check_for_events(struct timer_list *t)
++{
++	struct bbnsm_pwrkey *bbnsm = from_timer(bbnsm, t, check_timer);
++	struct input_dev *input = bbnsm->input;
++	u32 state;
++
++	regmap_read(bbnsm->regmap, BBNSM_EVENTS, &state);
++
++	state = state & BBNSM_BTN_PRESSED ? 1 : 0;
++
++	/* only report new event if status changed */
++	if (state ^ bbnsm->keystate) {
++		bbnsm->keystate = state;
++		input_event(input, EV_KEY, bbnsm->keycode, state);
++		input_sync(input);
++		pm_relax(bbnsm->input->dev.parent);
++	}
++
++	/* repeat check if pressed long */
++	if (state) {
++		mod_timer(&bbnsm->check_timer,
++			  jiffies + msecs_to_jiffies(REPEAT_INTERVAL));
++	}
++}
++
++static irqreturn_t bbnsm_pwrkey_interrupt(int irq, void *dev_id)
++{
++	struct platform_device *pdev = dev_id;
++	struct bbnsm_pwrkey *bbnsm = platform_get_drvdata(pdev);
++	struct input_dev *input = bbnsm->input;
++	u32 event;
++
++	regmap_read(bbnsm->regmap, BBNSM_EVENTS, &event);
++	if (event & BBNSM_BTN_OFF)
++		mod_timer(&bbnsm->check_timer, jiffies + msecs_to_jiffies(DEBOUNCE_TIME));
++	else
++		return IRQ_NONE;
++
++	pm_wakeup_event(input->dev.parent, 0);
++
++	/* clear PWR OFF */
++	regmap_write(bbnsm->regmap, BBNSM_EVENTS, BBNSM_BTN_OFF);
++
++	return IRQ_HANDLED;
++}
++
++static void bbnsm_pwrkey_act(void *pdata)
++{
++	struct bbnsm_pwrkey *bbnsm = pdata;
++
++	del_timer_sync(&bbnsm->check_timer);
++}
++
++static int bbnsm_pwrkey_probe(struct platform_device *pdev)
++{
++	struct bbnsm_pwrkey *bbnsm;
++	struct input_dev *input;
++	struct device_node *np = pdev->dev.of_node;
++	int error;
++
++	bbnsm = devm_kzalloc(&pdev->dev, sizeof(*bbnsm), GFP_KERNEL);
++	if (!bbnsm)
++		return -ENOMEM;
++
++	bbnsm->regmap = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "regmap");
++	if (IS_ERR(bbnsm->regmap)) {
++		dev_err(&pdev->dev, "bbnsm pwerkey get regmap failed\n");
++		return PTR_ERR(bbnsm->regmap);
++	}
++
++	if (of_property_read_u32(np, "linux,keycode", &bbnsm->keycode)) {
++		bbnsm->keycode = KEY_POWER;
++		dev_warn(&pdev->dev, "KEY_POWER without setting in dts\n");
++	}
++
++	bbnsm->wakeup = of_property_read_bool(np, "wakeup-source");
++
++	bbnsm->irq = platform_get_irq(pdev, 0);
++	if (bbnsm ->irq < 0)
++		return -EINVAL;
++
++	/* config the BBNSM power related register */
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, BBNSM_DP_EN, BBNSM_DP_EN);
++
++	/* clear the unexpected interrupt before driver ready */
++	regmap_write_bits(bbnsm->regmap, BBNSM_EVENTS, BBNSM_PWRKEY_EVENTS, BBNSM_PWRKEY_EVENTS);
++
++	timer_setup(&bbnsm->check_timer, bbnsm_pwrkey_check_for_events, 0);
++
++	input = devm_input_allocate_device(&pdev->dev);
++	if (!input) {
++		dev_err(&pdev->dev, "failed to allocate the input device\n");
++		error = -ENOMEM;
++		goto error_probe;
++	}
++
++	input->name = pdev->name;
++	input->phys = "bbnsm-pwrkey/input0";
++	input->id.bustype = BUS_HOST;
++
++	input_set_capability(input, EV_KEY, bbnsm->keycode);
++
++	/* input customer action to cancel release timer */
++	error = devm_add_action(&pdev->dev, bbnsm_pwrkey_act, bbnsm);
++	if (error) {
++		dev_err(&pdev->dev, "failed to register remove action\n");
++		goto error_probe;
++	}
++
++	bbnsm->input = input;
++	platform_set_drvdata(pdev, bbnsm);
++
++	error = devm_request_irq(&pdev->dev, bbnsm->irq, bbnsm_pwrkey_interrupt,
++			       IRQF_SHARED, pdev->name, pdev);
++	if (error) {
++		dev_err(&pdev->dev, "interrupt not available.\n");
++		goto error_probe;
++	}
++
++	error = input_register_device(input);
++	if (error < 0) {
++		dev_err(&pdev->dev, "failed to register input device\n");
++		goto error_probe;
++	}
++
++	device_init_wakeup(&pdev->dev, bbnsm->wakeup);
++	error = dev_pm_set_wake_irq(&pdev->dev, bbnsm->irq);
++	if (error)
++		dev_err(&pdev->dev, "irq wake enable failed.\n");
++
++	return 0;
++
++error_probe:
++	return error;
++}
++
++static const struct of_device_id bbnsm_pwrkey_ids[] = {
++	{ .compatible = "nxp,bbnsm-pwrkey" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, bbnsm_pwrkey_ids);
++
++static struct platform_driver bbnsm_pwrkey_driver = {
++	.driver = {
++		.name = "bbnsm_pwrkey",
++		.of_match_table = bbnsm_pwrkey_ids,
++	},
++	.probe = bbnsm_pwrkey_probe,
++};
++module_platform_driver(bbnsm_pwrkey_driver);
++
++MODULE_AUTHOR("Jacky Bai <ping.bai@nxp.com>");
++MODULE_DESCRIPTION("NXP bbnsm power key Driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/tty/serial/fsl_lpuart.c b/drivers/tty/serial/fsl_lpuart.c
+index 00a941db8..900f9a0e4 100644
+--- a/drivers/tty/serial/fsl_lpuart.c
++++ b/drivers/tty/serial/fsl_lpuart.c
+@@ -12,12 +12,15 @@
+ #include <linux/dmaengine.h>
+ #include <linux/dmapool.h>
+ #include <linux/io.h>
+-#include <linux/iopoll.h>
+ #include <linux/irq.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/of_dma.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/pm_domain.h>
++#include <linux/pm_runtime.h>
++#include <linux/reset.h>
+ #include <linux/serial_core.h>
+ #include <linux/slab.h>
+ #include <linux/tty_flip.h>
+@@ -131,6 +134,7 @@
+ #define UARTBAUD_M10		0x20000000
+ #define UARTBAUD_TDMAE		0x00800000
+ #define UARTBAUD_RDMAE		0x00200000
++#define UARTBAUD_RIDMAE		0x00100000
+ #define UARTBAUD_MATCFG		0x00400000
+ #define UARTBAUD_BOTHEDGE	0x00020000
+ #define UARTBAUD_RESYNCDIS	0x00010000
+@@ -179,7 +183,7 @@
+ #define UARTCTRL_SBK		0x00010000
+ #define UARTCTRL_MA1IE		0x00008000
+ #define UARTCTRL_MA2IE		0x00004000
+-#define UARTCTRL_IDLECFG	0x00000100
++#define UARTCTRL_IDLECFG_OFF	0x8
+ #define UARTCTRL_LOOPS		0x00000080
+ #define UARTCTRL_DOZEEN		0x00000040
+ #define UARTCTRL_RSRC		0x00000020
+@@ -197,6 +201,7 @@
+ #define UARTDATA_MASK		0x3ff
+ 
+ #define UARTMODIR_IREN		0x00020000
++#define UARTMODIR_RTSWATER_S	0x8
+ #define UARTMODIR_TXCTSSRC	0x00000020
+ #define UARTMODIR_TXCTSC	0x00000010
+ #define UARTMODIR_RXRTSE	0x00000008
+@@ -210,6 +215,8 @@
+ #define UARTFIFO_RXUF		0x00010000
+ #define UARTFIFO_TXFLUSH	0x00008000
+ #define UARTFIFO_RXFLUSH	0x00004000
++#define UARTFIFO_RXIDEN_MASK	0x7
++#define UARTFIFO_RXIDEN_OFF	10
+ #define UARTFIFO_TXOFE		0x00000200
+ #define UARTFIFO_RXUFE		0x00000100
+ #define UARTFIFO_TXFE		0x00000080
+@@ -230,8 +237,12 @@
+ #define GLOBAL_RST_MIN_US	20
+ #define GLOBAL_RST_MAX_US	40
+ 
++#define UARTFIFO_RXIDEN_RDRF	0x3
++#define UARTCTRL_IDLECFG	0x7
++
+ /* Rx DMA timeout in ms, which is used to calculate Rx ring buffer size */
+ #define DMA_RX_TIMEOUT		(10)
++#define UART_AUTOSUSPEND_TIMEOUT	3000
+ 
+ #define DRIVER_NAME	"fsl-lpuart"
+ #define DEV_NAME	"ttyLP"
+@@ -245,6 +256,7 @@ enum lpuart_type {
+ 	LS1021A_LPUART,
+ 	LS1028A_LPUART,
+ 	IMX7ULP_LPUART,
++	IMX8ULP_LPUART,
+ 	IMX8QXP_LPUART,
+ };
+ 
+@@ -256,8 +268,11 @@ struct lpuart_port {
+ 	unsigned int		txfifo_size;
+ 	unsigned int		rxfifo_size;
+ 
++	u8			rx_watermark;
++	bool			dma_eeop;
+ 	bool			lpuart_dma_tx_use;
+ 	bool			lpuart_dma_rx_use;
++	bool			dma_rx_chan_active;
+ 	struct dma_chan		*dma_tx_chan;
+ 	struct dma_chan		*dma_rx_chan;
+ 	struct dma_async_tx_descriptor  *dma_tx_desc;
+@@ -272,41 +287,57 @@ struct lpuart_port {
+ 	struct scatterlist	rx_sgl, tx_sgl[2];
+ 	struct circ_buf		rx_ring;
+ 	int			rx_dma_rng_buf_len;
++	int			rx_dma_periods;
+ 	unsigned int		dma_tx_nents;
+ 	wait_queue_head_t	dma_wait;
++	bool		is_cs7; /* Set to true when character size is 7 */
++						/* and the parity is enabled			*/
+ };
+ 
+ struct lpuart_soc_data {
+ 	enum lpuart_type devtype;
+ 	char iotype;
+ 	u8 reg_off;
++	u8 rx_watermark;
+ };
+ 
+ static const struct lpuart_soc_data vf_data = {
+ 	.devtype = VF610_LPUART,
+ 	.iotype = UPIO_MEM,
++	.rx_watermark = 1,
+ };
+ 
+ static const struct lpuart_soc_data ls1021a_data = {
+ 	.devtype = LS1021A_LPUART,
+ 	.iotype = UPIO_MEM32BE,
++	.rx_watermark = 0,
+ };
+ 
+ static const struct lpuart_soc_data ls1028a_data = {
+ 	.devtype = LS1028A_LPUART,
+ 	.iotype = UPIO_MEM32,
++	.rx_watermark = 0,
+ };
+ 
+ static struct lpuart_soc_data imx7ulp_data = {
+ 	.devtype = IMX7ULP_LPUART,
+ 	.iotype = UPIO_MEM32,
+ 	.reg_off = IMX_REG_OFF,
++	.rx_watermark = 0,
++};
++
++static struct lpuart_soc_data imx8ulp_data = {
++	.devtype = IMX8ULP_LPUART,
++	.iotype = UPIO_MEM32,
++	.reg_off = IMX_REG_OFF,
++	.rx_watermark = 3,
+ };
+ 
+ static struct lpuart_soc_data imx8qxp_data = {
+ 	.devtype = IMX8QXP_LPUART,
+ 	.iotype = UPIO_MEM32,
+ 	.reg_off = IMX_REG_OFF,
++	.rx_watermark = 31,
+ };
+ 
+ static const struct of_device_id lpuart_dt_ids[] = {
+@@ -314,6 +345,7 @@ static const struct of_device_id lpuart_dt_ids[] = {
+ 	{ .compatible = "fsl,ls1021a-lpuart",	.data = &ls1021a_data, },
+ 	{ .compatible = "fsl,ls1028a-lpuart",	.data = &ls1028a_data, },
+ 	{ .compatible = "fsl,imx7ulp-lpuart",	.data = &imx7ulp_data, },
++	{ .compatible = "fsl,imx8ulp-lpuart",	.data = &imx8ulp_data, },
+ 	{ .compatible = "fsl,imx8qxp-lpuart",	.data = &imx8qxp_data, },
+ 	{ /* sentinel */ }
+ };
+@@ -321,6 +353,7 @@ MODULE_DEVICE_TABLE(of, lpuart_dt_ids);
+ 
+ /* Forward declare this for the dma callbacks*/
+ static void lpuart_dma_tx_complete(void *arg);
++static void lpuart_dma_rx_free(struct uart_port *port, bool dma_terminate);
+ 
+ static inline bool is_layerscape_lpuart(struct lpuart_port *sport)
+ {
+@@ -333,6 +366,11 @@ static inline bool is_imx7ulp_lpuart(struct lpuart_port *sport)
+ 	return sport->devtype == IMX7ULP_LPUART;
+ }
+ 
++static inline bool is_imx8ulp_lpuart(struct lpuart_port *sport)
++{
++	return sport->devtype == IMX8ULP_LPUART;
++}
++
+ static inline bool is_imx8qxp_lpuart(struct lpuart_port *sport)
+ {
+ 	return sport->devtype == IMX8QXP_LPUART;
+@@ -396,6 +434,33 @@ static unsigned int lpuart_get_baud_clk_rate(struct lpuart_port *sport)
+ #define lpuart_enable_clks(x)	__lpuart_enable_clks(x, true)
+ #define lpuart_disable_clks(x)	__lpuart_enable_clks(x, false)
+ 
++static int lpuart_global_reset(struct lpuart_port *sport)
++{
++	struct uart_port *port = &sport->port;
++	void __iomem *global_addr;
++	int ret;
++
++	if (uart_console(port))
++		return 0;
++
++	ret = clk_prepare_enable(sport->ipg_clk);
++	if (ret) {
++		dev_err(sport->port.dev, "failed to enable uart ipg clk: %d\n", ret);
++		return ret;
++	}
++
++	if (is_imx7ulp_lpuart(sport) || is_imx8ulp_lpuart(sport) || is_imx8qxp_lpuart(sport)) {
++		global_addr = port->membase + UART_GLOBAL - IMX_REG_OFF;
++		writel(UART_GLOBAL_RST, global_addr);
++		usleep_range(GLOBAL_RST_MIN_US, GLOBAL_RST_MAX_US);
++		writel(0, global_addr);
++		usleep_range(GLOBAL_RST_MIN_US, GLOBAL_RST_MAX_US);
++	}
++
++	clk_disable_unprepare(sport->ipg_clk);
++	return 0;
++}
++
+ static void lpuart_stop_tx(struct uart_port *port)
+ {
+ 	unsigned char temp;
+@@ -573,7 +638,7 @@ static void lpuart_flush_buffer(struct uart_port *port)
+ 				sport->dma_tx_nents, DMA_TO_DEVICE);
+ 			sport->dma_tx_in_progress = false;
+ 		}
+-		dmaengine_terminate_async(chan);
++		dmaengine_terminate_all(chan);
+ 	}
+ 
+ 	if (lpuart_is_32(sport)) {
+@@ -806,6 +871,20 @@ static void lpuart32_start_tx(struct uart_port *port)
+ 	}
+ }
+ 
++static void
++lpuart_uart_pm(struct uart_port *port, unsigned int state, unsigned int oldstate)
++{
++	switch (state) {
++	case UART_PM_STATE_OFF:
++		pm_runtime_mark_last_busy(port->dev);
++		pm_runtime_put_autosuspend(port->dev);
++		break;
++	default:
++		pm_runtime_get_sync(port->dev);
++		break;
++	}
++}
++
+ /* return TIOCSER_TEMT when transmitter is not busy */
+ static unsigned int lpuart_tx_empty(struct uart_port *port)
+ {
+@@ -829,17 +908,11 @@ static unsigned int lpuart32_tx_empty(struct uart_port *port)
+ 			struct lpuart_port, port);
+ 	unsigned long stat = lpuart32_read(port, UARTSTAT);
+ 	unsigned long sfifo = lpuart32_read(port, UARTFIFO);
+-	unsigned long ctrl = lpuart32_read(port, UARTCTRL);
+ 
+ 	if (sport->dma_tx_in_progress)
+ 		return 0;
+ 
+-	/*
+-	 * LPUART Transmission Complete Flag may never be set while queuing a break
+-	 * character, so avoid checking for transmission complete when UARTCTRL_SBK
+-	 * is asserted.
+-	 */
+-	if ((stat & UARTSTAT_TC && sfifo & UARTFIFO_TXEMPT) || ctrl & UARTCTRL_SBK)
++	if (stat & UARTSTAT_TC && sfifo & UARTFIFO_TXEMPT)
+ 		return TIOCSER_TEMT;
+ 
+ 	return 0;
+@@ -901,7 +974,8 @@ static void lpuart_rxint(struct lpuart_port *sport)
+ 			sport->port.sysrq = 0;
+ 		}
+ 
+-		tty_insert_flip_char(port, rx, flg);
++		if (tty_insert_flip_char(port, rx, flg) == 0)
++			sport->port.icount.buf_overrun++;
+ 	}
+ 
+ out:
+@@ -994,7 +1068,11 @@ static void lpuart32_rxint(struct lpuart_port *sport)
+ 				flg = TTY_OVERRUN;
+ 		}
+ 
+-		tty_insert_flip_char(port, rx, flg);
++		if (sport->is_cs7)
++			rx &= 0x7F;
++
++		if (tty_insert_flip_char(port, rx, flg) == 0)
++			sport->port.icount.buf_overrun++;
+ 	}
+ 
+ out:
+@@ -1043,11 +1121,13 @@ static irqreturn_t lpuart32_int(int irq, void *dev_id)
+ 	if ((sts & UARTSTAT_TDRE) && !sport->lpuart_dma_tx_use)
+ 		lpuart32_txint(sport);
+ 
++	if (sport->lpuart_dma_rx_use && sport->dma_eeop)
++		sts &= ~UARTSTAT_IDLE;
++
+ 	lpuart32_write(&sport->port, sts, UARTSTAT);
+ 	return IRQ_HANDLED;
+ }
+ 
+-
+ static inline void lpuart_handle_sysrq_chars(struct uart_port *port,
+ 					     unsigned char *p, int count)
+ {
+@@ -1078,6 +1158,18 @@ static void lpuart_handle_sysrq(struct lpuart_port *sport)
+ 	}
+ }
+ 
++static inline int lpuart_tty_insert_flip_string(struct tty_port *port,
++		unsigned char *chars, size_t size, bool is_cs7)
++{
++	int i;
++
++	if (is_cs7)
++		for (i = 0; i < size; i++)
++			chars[i] &= 0x7F;
++
++	return tty_insert_flip_string(port, chars, size);
++}
++
+ static void lpuart_copy_rx_to_tty(struct lpuart_port *sport)
+ {
+ 	struct tty_port *port = &sport->port.state->port;
+@@ -1086,7 +1178,7 @@ static void lpuart_copy_rx_to_tty(struct lpuart_port *sport)
+ 	struct dma_chan *chan = sport->dma_rx_chan;
+ 	struct circ_buf *ring = &sport->rx_ring;
+ 	unsigned long flags;
+-	int count = 0;
++	int count = 0, copied;
+ 
+ 	if (lpuart_is_32(sport)) {
+ 		unsigned long sr = lpuart32_read(&sport->port, UARTSTAT);
+@@ -1165,6 +1257,13 @@ static void lpuart_copy_rx_to_tty(struct lpuart_port *sport)
+ 	ring->head = sport->rx_sgl.length - state.residue;
+ 	BUG_ON(ring->head > sport->rx_sgl.length);
+ 
++	if (sport->dma_eeop) {
++		unsigned int tcd_size;
++
++		/* Calculate the tail. */
++		tcd_size = sg_dma_len(&sport->rx_sgl) / sport->rx_dma_periods;
++		ring->tail = ((ring->head - 1) / tcd_size) * tcd_size;
++	}
+ 	/*
+ 	 * Silent handling of keys pressed in the sysrq timeframe
+ 	 */
+@@ -1188,20 +1287,26 @@ static void lpuart_copy_rx_to_tty(struct lpuart_port *sport)
+ 	if (ring->head < ring->tail) {
+ 		count = sport->rx_sgl.length - ring->tail;
+ 
+-		tty_insert_flip_string(port, ring->buf + ring->tail, count);
++		copied = lpuart_tty_insert_flip_string(port, ring->buf + ring->tail,
++					count, sport->is_cs7);
++		if (copied != count)
++			sport->port.icount.buf_overrun++;
+ 		ring->tail = 0;
+-		sport->port.icount.rx += count;
++		sport->port.icount.rx += copied;
+ 	}
+ 
+ 	/* Finally we read data from tail to head */
+ 	if (ring->tail < ring->head) {
+ 		count = ring->head - ring->tail;
+-		tty_insert_flip_string(port, ring->buf + ring->tail, count);
++		copied = lpuart_tty_insert_flip_string(port, ring->buf + ring->tail,
++					count, sport->is_cs7);
++		if (copied != count)
++			sport->port.icount.buf_overrun++;
+ 		/* Wrap ring->head if needed */
+ 		if (ring->head >= sport->rx_sgl.length)
+ 			ring->head = 0;
+ 		ring->tail = ring->head;
+-		sport->port.icount.rx += count;
++		sport->port.icount.rx += copied;
+ 	}
+ 
+ exit:
+@@ -1211,7 +1316,10 @@ static void lpuart_copy_rx_to_tty(struct lpuart_port *sport)
+ 	spin_unlock_irqrestore(&sport->port.lock, flags);
+ 
+ 	tty_flip_buffer_push(port);
+-	mod_timer(&sport->lpuart_timer, jiffies + sport->dma_rx_timeout);
++
++	if (!sport->dma_eeop)
++		mod_timer(&sport->lpuart_timer,
++			  jiffies + sport->dma_rx_timeout);
+ }
+ 
+ static void lpuart_dma_rx_complete(void *arg)
+@@ -1228,16 +1336,50 @@ static void lpuart_timer_func(struct timer_list *t)
+ 	lpuart_copy_rx_to_tty(sport);
+ }
+ 
+-static inline int lpuart_start_rx_dma(struct lpuart_port *sport)
++static int lpuart_sched_rx_dma(struct lpuart_port *sport)
++{
++	unsigned long temp;
++
++	if (!sport->dma_rx_chan_active)
++		return -EINVAL;
++
++	sport->rx_dma_periods = 2;
++	sport->dma_rx_desc = dmaengine_prep_dma_cyclic(sport->dma_rx_chan,
++				 sg_dma_address(&sport->rx_sgl),
++				 sport->rx_sgl.length,
++				 sport->rx_sgl.length / sport->rx_dma_periods,
++				 DMA_DEV_TO_MEM,
++				 DMA_PREP_INTERRUPT);
++	if (!sport->dma_rx_desc) {
++		dev_err(sport->port.dev, "Cannot prepare cyclic DMA\n");
++		return -EFAULT;
++	}
++
++	sport->dma_rx_desc->callback = lpuart_dma_rx_complete;
++	sport->dma_rx_desc->callback_param = sport;
++	sport->dma_rx_cookie = dmaengine_submit(sport->dma_rx_desc);
++	dma_async_issue_pending(sport->dma_rx_chan);
++
++	if (lpuart_is_32(sport)) {
++		temp = lpuart32_read(&sport->port, UARTBAUD);
++		if (sport->dma_eeop)
++			temp |= UARTBAUD_RIDMAE;
++		temp |= UARTBAUD_RDMAE;
++		lpuart32_write(&sport->port, temp, UARTBAUD);
++	} else {
++		writeb(readb(sport->port.membase + UARTCR5) | UARTCR5_RDMAS,
++		       sport->port.membase + UARTCR5);
++	}
++
++	return 0;
++}
++
++static void lpuart_get_rx_dma_rng_len(struct lpuart_port *sport)
+ {
+-	struct dma_slave_config dma_rx_sconfig = {};
+-	struct circ_buf *ring = &sport->rx_ring;
+-	int ret, nent;
+ 	int bits, baud;
+ 	struct tty_port *port = &sport->port.state->port;
+ 	struct tty_struct *tty = port->tty;
+ 	struct ktermios *termios = &tty->termios;
+-	struct dma_chan *chan = sport->dma_rx_chan;
+ 
+ 	baud = tty_get_baud_rate(tty);
+ 
+@@ -1250,9 +1392,22 @@ static inline int lpuart_start_rx_dma(struct lpuart_port *sport)
+ 	 * 10ms at any baud rate.
+ 	 */
+ 	sport->rx_dma_rng_buf_len = (DMA_RX_TIMEOUT * baud /  bits / 1000) * 2;
+-	sport->rx_dma_rng_buf_len = (1 << fls(sport->rx_dma_rng_buf_len));
++	sport->rx_dma_rng_buf_len = (1 << (fls(sport->rx_dma_rng_buf_len) - 1));
+ 	if (sport->rx_dma_rng_buf_len < 16)
+ 		sport->rx_dma_rng_buf_len = 16;
++}
++
++static inline int lpuart_start_rx_dma(struct lpuart_port *sport)
++{
++	struct dma_slave_config dma_rx_sconfig = {};
++	struct circ_buf *ring = &sport->rx_ring;
++	struct dma_chan *chan = sport->dma_rx_chan;
++	int ret, nent;
++
++	if (!sport->dma_eeop)
++		lpuart_get_rx_dma_rng_len(sport);
++	else
++		sport->rx_dma_rng_buf_len = PAGE_SIZE;
+ 
+ 	ring->buf = kzalloc(sport->rx_dma_rng_buf_len, GFP_ATOMIC);
+ 	if (!ring->buf)
+@@ -1279,42 +1434,25 @@ static inline int lpuart_start_rx_dma(struct lpuart_port *sport)
+ 		return ret;
+ 	}
+ 
+-	sport->dma_rx_desc = dmaengine_prep_dma_cyclic(chan,
+-				 sg_dma_address(&sport->rx_sgl),
+-				 sport->rx_sgl.length,
+-				 sport->rx_sgl.length / 2,
+-				 DMA_DEV_TO_MEM,
+-				 DMA_PREP_INTERRUPT);
+-	if (!sport->dma_rx_desc) {
+-		dev_err(sport->port.dev, "Cannot prepare cyclic DMA\n");
+-		return -EFAULT;
+-	}
+-
+-	sport->dma_rx_desc->callback = lpuart_dma_rx_complete;
+-	sport->dma_rx_desc->callback_param = sport;
+-	sport->dma_rx_cookie = dmaengine_submit(sport->dma_rx_desc);
+-	dma_async_issue_pending(chan);
+-
+-	if (lpuart_is_32(sport)) {
+-		unsigned long temp = lpuart32_read(&sport->port, UARTBAUD);
+-
+-		lpuart32_write(&sport->port, temp | UARTBAUD_RDMAE, UARTBAUD);
+-	} else {
+-		writeb(readb(sport->port.membase + UARTCR5) | UARTCR5_RDMAS,
+-		       sport->port.membase + UARTCR5);
++	sport->dma_rx_chan_active = true;
++	ret = lpuart_sched_rx_dma(sport);
++	if (ret) {
++		sport->dma_rx_chan_active = false;
++		lpuart_dma_rx_free(&sport->port, false);
+ 	}
+ 
+-	return 0;
++	return ret;
+ }
+ 
+-static void lpuart_dma_rx_free(struct uart_port *port)
++static void lpuart_dma_rx_free(struct uart_port *port, bool dma_terminate)
+ {
+ 	struct lpuart_port *sport = container_of(port,
+ 					struct lpuart_port, port);
+ 	struct dma_chan *chan = sport->dma_rx_chan;
+ 
+-	dmaengine_terminate_sync(chan);
+-	del_timer_sync(&sport->lpuart_timer);
++	if (dma_terminate)
++		dmaengine_terminate_sync(sport->dma_rx_chan);
++
+ 	dma_unmap_sg(chan->device->dev, &sport->rx_sgl, 1, DMA_FROM_DEVICE);
+ 	kfree(sport->rx_ring.buf);
+ 	sport->rx_ring.tail = 0;
+@@ -1491,32 +1629,12 @@ static void lpuart_break_ctl(struct uart_port *port, int break_state)
+ 
+ static void lpuart32_break_ctl(struct uart_port *port, int break_state)
+ {
+-	unsigned long temp, modem;
+-	struct tty_struct *tty;
+-	unsigned int cflag = 0;
+-
+-	tty = tty_port_tty_get(&port->state->port);
+-	if (tty) {
+-		cflag = tty->termios.c_cflag;
+-		tty_kref_put(tty);
+-	}
++	unsigned long temp;
+ 
+ 	temp = lpuart32_read(port, UARTCTRL) & ~UARTCTRL_SBK;
+-	modem = lpuart32_read(port, UARTMODIR);
+ 
+-	if (break_state != 0) {
++	if (break_state != 0)
+ 		temp |= UARTCTRL_SBK;
+-		/*
+-		 * LPUART CTS has higher priority than SBK, need to disable CTS before
+-		 * asserting SBK to avoid any interference if flow control is enabled.
+-		 */
+-		if (cflag & CRTSCTS && modem & UARTMODIR_TXCTSE)
+-			lpuart32_write(port, modem & ~UARTMODIR_TXCTSE, UARTMODIR);
+-	} else {
+-		/* Re-enable the CTS when break off. */
+-		if (cflag & CRTSCTS && !(modem & UARTMODIR_TXCTSE))
+-			lpuart32_write(port, modem | UARTMODIR_TXCTSE, UARTMODIR);
+-	}
+ 
+ 	lpuart32_write(port, temp, UARTCTRL);
+ }
+@@ -1546,8 +1664,10 @@ static void lpuart_setup_watermark(struct lpuart_port *sport)
+ 		writeb(UARTSFIFO_RXUF, sport->port.membase + UARTSFIFO);
+ 	}
+ 
++	if (uart_console(&sport->port))
++		sport->rx_watermark = 1;
+ 	writeb(0, sport->port.membase + UARTTWFIFO);
+-	writeb(1, sport->port.membase + UARTRWFIFO);
++	writeb(sport->rx_watermark, sport->port.membase + UARTRWFIFO);
+ 
+ 	/* Restore cr2 */
+ 	writeb(cr2_saved, sport->port.membase + UARTCR2);
+@@ -1568,6 +1688,7 @@ static void lpuart32_setup_watermark(struct lpuart_port *sport)
+ {
+ 	unsigned long val, ctrl;
+ 	unsigned long ctrl_saved;
++	unsigned long rxiden_cnt;
+ 
+ 	ctrl = lpuart32_read(&sport->port, UARTCTRL);
+ 	ctrl_saved = ctrl;
+@@ -1579,12 +1700,26 @@ static void lpuart32_setup_watermark(struct lpuart_port *sport)
+ 	val = lpuart32_read(&sport->port, UARTFIFO);
+ 	val |= UARTFIFO_TXFE | UARTFIFO_RXFE;
+ 	val |= UARTFIFO_TXFLUSH | UARTFIFO_RXFLUSH;
++	val &= ~(UARTFIFO_RXIDEN_MASK << UARTFIFO_RXIDEN_OFF);
++	rxiden_cnt = sport->dma_eeop ? 0 : UARTFIFO_RXIDEN_RDRF;
++	val |= ((rxiden_cnt & UARTFIFO_RXIDEN_MASK) <<
++		UARTFIFO_RXIDEN_OFF);
+ 	lpuart32_write(&sport->port, val, UARTFIFO);
+ 
+ 	/* set the watermark */
+-	val = (0x1 << UARTWATER_RXWATER_OFF) | (0x0 << UARTWATER_TXWATER_OFF);
++	if (uart_console(&sport->port))
++		sport->rx_watermark = 1;
++	val = (sport->rx_watermark << UARTWATER_RXWATER_OFF) |
++	      (0x0 << UARTWATER_TXWATER_OFF);
+ 	lpuart32_write(&sport->port, val, UARTWATER);
+ 
++	/* set RTS watermark */
++	if (!uart_console(&sport->port)) {
++		val = lpuart32_read(&sport->port, UARTMODIR);
++		val = (sport->rxfifo_size >> 1) << UARTMODIR_RTSWATER_S;
++		lpuart32_write(&sport->port, val, UARTMODIR);
++	}
++
+ 	/* Restore cr2 */
+ 	lpuart32_write(&sport->port, ctrl_saved, UARTCTRL);
+ }
+@@ -1596,17 +1731,29 @@ static void lpuart32_setup_watermark_enable(struct lpuart_port *sport)
+ 	lpuart32_setup_watermark(sport);
+ 
+ 	temp = lpuart32_read(&sport->port, UARTCTRL);
+-	temp |= UARTCTRL_RE | UARTCTRL_TE | UARTCTRL_ILIE;
++	temp |= UARTCTRL_RE | UARTCTRL_TE;
++	temp |= UARTCTRL_IDLECFG << UARTCTRL_IDLECFG_OFF;
+ 	lpuart32_write(&sport->port, temp, UARTCTRL);
+ }
+ 
+ static void rx_dma_timer_init(struct lpuart_port *sport)
+ {
++	if (sport->dma_eeop)
++		return;
++
+ 	timer_setup(&sport->lpuart_timer, lpuart_timer_func, 0);
+ 	sport->lpuart_timer.expires = jiffies + sport->dma_rx_timeout;
+ 	add_timer(&sport->lpuart_timer);
+ }
+ 
++static void lpuart_del_timer_sync(struct lpuart_port *sport)
++{
++	if (sport->dma_eeop)
++		return;
++
++	del_timer_sync(&sport->lpuart_timer);
++}
++
+ static void lpuart_request_dma(struct lpuart_port *sport)
+ {
+ 	sport->dma_tx_chan = dma_request_chan(sport->port.dev, "tx");
+@@ -1693,10 +1840,23 @@ static void lpuart_rx_dma_startup(struct lpuart_port *sport)
+ 	sport->lpuart_dma_rx_use = false;
+ }
+ 
++static void lpuart_hw_setup(struct lpuart_port *sport)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&sport->port.lock, flags);
++
++	lpuart_setup_watermark_enable(sport);
++
++	lpuart_rx_dma_startup(sport);
++	lpuart_tx_dma_startup(sport);
++
++	spin_unlock_irqrestore(&sport->port.lock, flags);
++}
++
+ static int lpuart_startup(struct uart_port *port)
+ {
+ 	struct lpuart_port *sport = container_of(port, struct lpuart_port, port);
+-	unsigned long flags;
+ 	unsigned char temp;
+ 
+ 	/* determine FIFO size and enable FIFO mode */
+@@ -1710,17 +1870,19 @@ static int lpuart_startup(struct uart_port *port)
+ 					    UARTPFIFO_FIFOSIZE_MASK);
+ 
+ 	lpuart_request_dma(sport);
++	lpuart_hw_setup(sport);
+ 
+-	spin_lock_irqsave(&sport->port.lock, flags);
+-
+-	lpuart_setup_watermark_enable(sport);
+-
+-	lpuart_rx_dma_startup(sport);
+-	lpuart_tx_dma_startup(sport);
++	return 0;
++}
+ 
+-	spin_unlock_irqrestore(&sport->port.lock, flags);
++static void lpuart32_hw_disable(struct lpuart_port *sport)
++{
++	unsigned long temp;
+ 
+-	return 0;
++	temp = lpuart32_read(&sport->port, UARTCTRL);
++	temp &= ~(UARTCTRL_RIE | UARTCTRL_ILIE | UARTCTRL_RE |
++		  UARTCTRL_TIE | UARTCTRL_TE);
++	lpuart32_write(&sport->port, temp, UARTCTRL);
+ }
+ 
+ static void lpuart32_configure(struct lpuart_port *sport)
+@@ -1729,17 +1891,42 @@ static void lpuart32_configure(struct lpuart_port *sport)
+ 
+ 	temp = lpuart32_read(&sport->port, UARTCTRL);
+ 	if (!sport->lpuart_dma_rx_use)
+-		temp |= UARTCTRL_RIE;
++		temp |= UARTCTRL_RIE | UARTCTRL_ILIE;
+ 	if (!sport->lpuart_dma_tx_use)
+ 		temp |= UARTCTRL_TIE;
+ 	lpuart32_write(&sport->port, temp, UARTCTRL);
+ }
+ 
++static void lpuart32_hw_setup(struct lpuart_port *sport)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&sport->port.lock, flags);
++
++	lpuart32_hw_disable(sport);
++
++	lpuart_rx_dma_startup(sport);
++	lpuart_tx_dma_startup(sport);
++
++	lpuart32_setup_watermark_enable(sport);
++	lpuart32_configure(sport);
++
++	spin_unlock_irqrestore(&sport->port.lock, flags);
++}
++
+ static int lpuart32_startup(struct uart_port *port)
+ {
+ 	struct lpuart_port *sport = container_of(port, struct lpuart_port, port);
+-	unsigned long flags;
++	struct tty_port *tty_port = &sport->port.state->port;
+ 	unsigned long temp;
++	int ret;
++
++	/* some modem may need reset */
++	if (!tty_port_suspended(tty_port)) {
++		ret = device_reset(sport->port.dev);
++		if (ret && ret != -ENOENT)
++			return ret;
++	}
+ 
+ 	/* determine FIFO size */
+ 	temp = lpuart32_read(&sport->port, UARTFIFO);
+@@ -1763,30 +1950,22 @@ static int lpuart32_startup(struct uart_port *port)
+ 	}
+ 
+ 	lpuart_request_dma(sport);
++	lpuart32_hw_setup(sport);
+ 
+-	spin_lock_irqsave(&sport->port.lock, flags);
+-
+-	lpuart32_setup_watermark_enable(sport);
+-
+-	lpuart_rx_dma_startup(sport);
+-	lpuart_tx_dma_startup(sport);
+-
+-	lpuart32_configure(sport);
+-
+-	spin_unlock_irqrestore(&sport->port.lock, flags);
+ 	return 0;
+ }
+ 
+ static void lpuart_dma_shutdown(struct lpuart_port *sport)
+ {
+ 	if (sport->lpuart_dma_rx_use) {
+-		lpuart_dma_rx_free(&sport->port);
++		lpuart_del_timer_sync(sport);
++		lpuart_dma_rx_free(&sport->port, true);
+ 		sport->lpuart_dma_rx_use = false;
+ 	}
+ 
+ 	if (sport->lpuart_dma_tx_use) {
+-		if (wait_event_interruptible(sport->dma_wait,
+-			!sport->dma_tx_in_progress) != false) {
++		if (wait_event_interruptible_timeout(sport->dma_wait,
++			!sport->dma_tx_in_progress, msecs_to_jiffies(300)) <= 0) {
+ 			sport->dma_tx_in_progress = false;
+ 			dmaengine_terminate_sync(sport->dma_tx_chan);
+ 		}
+@@ -1813,6 +1992,8 @@ static void lpuart_shutdown(struct uart_port *port)
+ 			UARTCR2_TIE | UARTCR2_TCIE | UARTCR2_RIE);
+ 	writeb(temp, port->membase + UARTCR2);
+ 
++	if (sport->lpuart_dma_rx_use)
++		sport->dma_rx_chan_active = false;
+ 	spin_unlock_irqrestore(&port->lock, flags);
+ 
+ 	lpuart_dma_shutdown(sport);
+@@ -1827,21 +2008,25 @@ static void lpuart32_shutdown(struct uart_port *port)
+ 
+ 	spin_lock_irqsave(&port->lock, flags);
+ 
+-	/* clear status */
++	/* clear statue */
+ 	temp = lpuart32_read(&sport->port, UARTSTAT);
+ 	lpuart32_write(&sport->port, temp, UARTSTAT);
+ 
+ 	/* disable Rx/Tx DMA */
+ 	temp = lpuart32_read(port, UARTBAUD);
+-	temp &= ~(UARTBAUD_TDMAE | UARTBAUD_RDMAE);
++	temp &= ~(UARTBAUD_TDMAE | UARTBAUD_RDMAE | UARTBAUD_RIDMAE);
+ 	lpuart32_write(port, temp, UARTBAUD);
+ 
+ 	/* disable Rx/Tx and interrupts */
+ 	temp = lpuart32_read(port, UARTCTRL);
+-	temp &= ~(UARTCTRL_TE | UARTCTRL_RE |
+-			UARTCTRL_TIE | UARTCTRL_TCIE | UARTCTRL_RIE);
++	temp &= ~(UARTCTRL_TE | UARTCTRL_RE | UARTCTRL_TIE |
++		UARTCTRL_TCIE | UARTCTRL_RIE | UARTCTRL_ILIE |
++		UARTCTRL_LOOPS);
+ 	lpuart32_write(port, temp, UARTCTRL);
++	lpuart32_write(port, 0, UARTMODIR);
+ 
++	if (sport->lpuart_dma_rx_use)
++		sport->dma_rx_chan_active = false;
+ 	spin_unlock_irqrestore(&port->lock, flags);
+ 
+ 	lpuart_dma_shutdown(sport);
+@@ -1937,10 +2122,13 @@ lpuart_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	 * baud rate and restart Rx DMA path.
+ 	 *
+ 	 * Since timer function acqures sport->port.lock, need to stop before
+-	 * acquring same lock because otherwise del_timer_sync() can deadlock.
++	 * acquring same lock because otherwise lpuart_del_timer_sync() can deadlock.
+ 	 */
+-	if (old && sport->lpuart_dma_rx_use)
+-		lpuart_dma_rx_free(&sport->port);
++	if (old && sport->lpuart_dma_rx_use) {
++		sport->dma_rx_chan_active = false;
++		lpuart_del_timer_sync(sport);
++		lpuart_dma_rx_free(&sport->port, true);
++	}
+ 
+ 	spin_lock_irqsave(&sport->port.lock, flags);
+ 
+@@ -2098,6 +2286,8 @@ lpuart32_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	ctrl = old_ctrl = lpuart32_read(&sport->port, UARTCTRL);
+ 	bd = lpuart32_read(&sport->port, UARTBAUD);
+ 	modem = lpuart32_read(&sport->port, UARTMODIR);
++	sport->is_cs7 = false;
++
+ 	/*
+ 	 * only support CS8 and CS7, and for CS7 must enable PE.
+ 	 * supported mode:
+@@ -2173,10 +2363,13 @@ lpuart32_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	 * baud rate and restart Rx DMA path.
+ 	 *
+ 	 * Since timer function acqures sport->port.lock, need to stop before
+-	 * acquring same lock because otherwise del_timer_sync() can deadlock.
++	 * acquring same lock because otherwise lpuart_del_timer_sync() can deadlock.
+ 	 */
+-	if (old && sport->lpuart_dma_rx_use)
+-		lpuart_dma_rx_free(&sport->port);
++	if (old && sport->lpuart_dma_rx_use) {
++		sport->dma_rx_chan_active = false;
++		lpuart_del_timer_sync(sport);
++		lpuart_dma_rx_free(&sport->port, true);
++	}
+ 
+ 	spin_lock_irqsave(&sport->port.lock, flags);
+ 
+@@ -2203,15 +2396,9 @@ lpuart32_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	/* update the per-port timeout */
+ 	uart_update_timeout(port, termios->c_cflag, baud);
+ 
+-	/*
+-	 * LPUART Transmission Complete Flag may never be set while queuing a break
+-	 * character, so skip waiting for transmission complete when UARTCTRL_SBK is
+-	 * asserted.
+-	 */
+-	if (!(old_ctrl & UARTCTRL_SBK)) {
+-		lpuart32_write(&sport->port, 0, UARTMODIR);
+-		lpuart32_wait_bit_set(&sport->port, UARTSTAT, UARTSTAT_TC);
+-	}
++	/* wait transmit engin complete */
++	lpuart32_write(&sport->port, 0, UARTMODIR);
++	lpuart32_wait_bit_set(&sport->port, UARTSTAT, UARTSTAT_TC);
+ 
+ 	/* disable transmit and receive */
+ 	lpuart32_write(&sport->port, old_ctrl & ~(UARTCTRL_TE | UARTCTRL_RE),
+@@ -2223,6 +2410,9 @@ lpuart32_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	lpuart32_write(&sport->port, ctrl, UARTCTRL);
+ 	/* restore control register */
+ 
++	if ((ctrl & (UARTCTRL_PE | UARTCTRL_M)) == UARTCTRL_PE)
++		sport->is_cs7 = true;
++
+ 	if (old && sport->lpuart_dma_rx_use) {
+ 		if (!lpuart_start_rx_dma(sport))
+ 			rx_dma_timer_init(sport);
+@@ -2284,6 +2474,7 @@ static const struct uart_ops lpuart_pops = {
+ 	.break_ctl	= lpuart_break_ctl,
+ 	.startup	= lpuart_startup,
+ 	.shutdown	= lpuart_shutdown,
++	.pm		= lpuart_uart_pm,
+ 	.set_termios	= lpuart_set_termios,
+ 	.type		= lpuart_type,
+ 	.request_port	= lpuart_request_port,
+@@ -2308,6 +2499,7 @@ static const struct uart_ops lpuart32_pops = {
+ 	.break_ctl	= lpuart32_break_ctl,
+ 	.startup	= lpuart32_startup,
+ 	.shutdown	= lpuart32_shutdown,
++	.pm		= lpuart_uart_pm,
+ 	.set_termios	= lpuart32_set_termios,
+ 	.type		= lpuart_type,
+ 	.request_port	= lpuart_request_port,
+@@ -2649,56 +2841,26 @@ static struct uart_driver lpuart_reg = {
+ 	.cons		= LPUART_CONSOLE,
+ };
+ 
+-static const struct serial_rs485 lpuart_rs485_supported = {
+-	.flags = SER_RS485_ENABLED | SER_RS485_RTS_ON_SEND | SER_RS485_RTS_AFTER_SEND,
+-	/* delay_rts_* and RX_DURING_TX are not supported */
+-};
+-
+-static int lpuart_global_reset(struct lpuart_port *sport)
++static int lpuart_attach_pd(struct device *dev)
+ {
+-	struct uart_port *port = &sport->port;
+-	void __iomem *global_addr;
+-	unsigned long ctrl, bd;
+-	unsigned int val = 0;
+-	int ret;
++	struct device *pd_uart;
++	struct device_link *link;
+ 
+-	ret = clk_prepare_enable(sport->ipg_clk);
+-	if (ret) {
+-		dev_err(sport->port.dev, "failed to enable uart ipg clk: %d\n", ret);
+-		return ret;
+-	}
+-
+-	if (is_imx7ulp_lpuart(sport) || is_imx8qxp_lpuart(sport)) {
+-		/*
+-		 * If the transmitter is used by earlycon, wait for transmit engine to
+-		 * complete and then reset.
+-		 */
+-		ctrl = lpuart32_read(port, UARTCTRL);
+-		if (ctrl & UARTCTRL_TE) {
+-			bd = lpuart32_read(&sport->port, UARTBAUD);
+-			if (read_poll_timeout(lpuart32_tx_empty, val, val, 1, 100000, false,
+-					      port)) {
+-				dev_warn(sport->port.dev,
+-					 "timeout waiting for transmit engine to complete\n");
+-				clk_disable_unprepare(sport->ipg_clk);
+-				return 0;
+-			}
+-		}
+-
+-		global_addr = port->membase + UART_GLOBAL - IMX_REG_OFF;
+-		writel(UART_GLOBAL_RST, global_addr);
+-		usleep_range(GLOBAL_RST_MIN_US, GLOBAL_RST_MAX_US);
+-		writel(0, global_addr);
+-		usleep_range(GLOBAL_RST_MIN_US, GLOBAL_RST_MAX_US);
++	if (dev->pm_domain)
++		return 0;
+ 
+-		/* Recover the transmitter for earlycon. */
+-		if (ctrl & UARTCTRL_TE) {
+-			lpuart32_write(port, bd, UARTBAUD);
+-			lpuart32_write(port, ctrl, UARTCTRL);
+-		}
++	pd_uart = dev_pm_domain_attach_by_name(dev, "uart");
++	if (IS_ERR(pd_uart))
++		return PTR_ERR(pd_uart);
++	link = device_link_add(dev, pd_uart, DL_FLAG_STATELESS |
++					     DL_FLAG_PM_RUNTIME |
++					     DL_FLAG_RPM_ACTIVE);
++	if (IS_ERR(link)) {
++		dev_err(dev, "Failed to add device_link to uart pd: %ld\n",
++			PTR_ERR(link));
++		return PTR_ERR(link);
+ 	}
+ 
+-	clk_disable_unprepare(sport->ipg_clk);
+ 	return 0;
+ }
+ 
+@@ -2725,6 +2887,9 @@ static int lpuart_probe(struct platform_device *pdev)
+ 	sport->port.dev = &pdev->dev;
+ 	sport->port.type = PORT_LPUART;
+ 	sport->devtype = sdata->devtype;
++	sport->rx_watermark = sdata->rx_watermark;
++	sport->dma_eeop = false;
++
+ 	ret = platform_get_irq(pdev, 0);
+ 	if (ret < 0)
+ 		return ret;
+@@ -2741,7 +2906,10 @@ static int lpuart_probe(struct platform_device *pdev)
+ 		sport->port.rs485_config = lpuart32_config_rs485;
+ 	else
+ 		sport->port.rs485_config = lpuart_config_rs485;
+-	sport->port.rs485_supported = &lpuart_rs485_supported;
++
++	ret = lpuart_attach_pd(&pdev->dev);
++	if (ret)
++		return ret;
+ 
+ 	sport->ipg_clk = devm_clk_get(&pdev->dev, "ipg");
+ 	if (IS_ERR(sport->ipg_clk)) {
+@@ -2788,6 +2956,15 @@ static int lpuart_probe(struct platform_device *pdev)
+ 		handler = lpuart_int;
+ 	}
+ 
++	pm_runtime_use_autosuspend(&pdev->dev);
++	pm_runtime_set_autosuspend_delay(&pdev->dev, UART_AUTOSUSPEND_TIMEOUT);
++	pm_runtime_set_active(&pdev->dev);
++	pm_runtime_enable(&pdev->dev);
++
++	ret = uart_add_one_port(&lpuart_reg, &sport->port);
++	if (ret)
++		goto failed_attach_port;
++
+ 	ret = lpuart_global_reset(sport);
+ 	if (ret)
+ 		goto failed_reset;
+@@ -2803,9 +2980,7 @@ static int lpuart_probe(struct platform_device *pdev)
+ 	    sport->port.rs485.delay_rts_after_send)
+ 		dev_err(&pdev->dev, "driver doesn't support RTS delays\n");
+ 
+-	ret = uart_add_one_port(&lpuart_reg, &sport->port);
+-	if (ret)
+-		goto failed_attach_port;
++	sport->port.rs485_config(&sport->port, &sport->port.rs485);
+ 
+ 	ret = devm_request_irq(&pdev->dev, sport->port.irq, handler, 0,
+ 				DRIVER_NAME, sport);
+@@ -2815,10 +2990,13 @@ static int lpuart_probe(struct platform_device *pdev)
+ 	return 0;
+ 
+ failed_irq_request:
+-	uart_remove_one_port(&lpuart_reg, &sport->port);
+-failed_attach_port:
+ failed_get_rs485:
+ failed_reset:
++	uart_remove_one_port(&lpuart_reg, &sport->port);
++failed_attach_port:
++	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_dont_use_autosuspend(&pdev->dev);
+ 	lpuart_disable_clks(sport);
+ 	return ret;
+ }
+@@ -2837,99 +3015,243 @@ static int lpuart_remove(struct platform_device *pdev)
+ 	if (sport->dma_rx_chan)
+ 		dma_release_channel(sport->dma_rx_chan);
+ 
++	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_dont_use_autosuspend(&pdev->dev);
+ 	return 0;
+ }
+ 
+-static int __maybe_unused lpuart_suspend(struct device *dev)
++static int __maybe_unused lpuart_runtime_suspend(struct device *dev)
+ {
+-	struct lpuart_port *sport = dev_get_drvdata(dev);
+-	unsigned long temp;
+-	bool irq_wake;
++	struct platform_device *pdev = to_platform_device(dev);
++	struct lpuart_port *sport = platform_get_drvdata(pdev);
+ 
+-	if (lpuart_is_32(sport)) {
+-		/* disable Rx/Tx and interrupts */
+-		temp = lpuart32_read(&sport->port, UARTCTRL);
+-		temp &= ~(UARTCTRL_TE | UARTCTRL_TIE | UARTCTRL_TCIE);
+-		lpuart32_write(&sport->port, temp, UARTCTRL);
+-	} else {
+-		/* disable Rx/Tx and interrupts */
+-		temp = readb(sport->port.membase + UARTCR2);
+-		temp &= ~(UARTCR2_TE | UARTCR2_TIE | UARTCR2_TCIE);
+-		writeb(temp, sport->port.membase + UARTCR2);
+-	}
++	lpuart_disable_clks(sport);
+ 
+-	uart_suspend_port(&lpuart_reg, &sport->port);
++	return 0;
++};
+ 
+-	/* uart_suspend_port() might set wakeup flag */
+-	irq_wake = irqd_is_wakeup_set(irq_get_irq_data(sport->port.irq));
++static int __maybe_unused lpuart_runtime_resume(struct device *dev)
++{
++	struct platform_device *pdev = to_platform_device(dev);
++	struct lpuart_port *sport = platform_get_drvdata(pdev);
+ 
+-	if (sport->lpuart_dma_rx_use) {
+-		/*
+-		 * EDMA driver during suspend will forcefully release any
+-		 * non-idle DMA channels. If port wakeup is enabled or if port
+-		 * is console port or 'no_console_suspend' is set the Rx DMA
+-		 * cannot resume as expected, hence gracefully release the
+-		 * Rx DMA path before suspend and start Rx DMA path on resume.
+-		 */
+-		if (irq_wake) {
+-			lpuart_dma_rx_free(&sport->port);
+-		}
++	return lpuart_enable_clks(sport);
++};
+ 
+-		/* Disable Rx DMA to use UART port as wakeup source */
+-		if (lpuart_is_32(sport)) {
+-			temp = lpuart32_read(&sport->port, UARTBAUD);
+-			lpuart32_write(&sport->port, temp & ~UARTBAUD_RDMAE,
+-				       UARTBAUD);
++static void serial_lpuart_enable_wakeup(struct lpuart_port *sport, bool on)
++{
++	unsigned int val, baud;
++
++	if (lpuart_is_32(sport)) {
++		val = lpuart32_read(&sport->port, UARTCTRL);
++		baud = lpuart32_read(&sport->port, UARTBAUD);
++		if (on) {
++			/* set rx_watermark to 0 in wakeup source mode */
++			lpuart32_write(&sport->port, 0, UARTWATER);
++			val |= UARTCTRL_RIE;
++			/* clear RXEDGIF flag before enable RXEDGIE interrupt */
++			lpuart32_write(&sport->port, UARTSTAT_RXEDGIF, UARTSTAT);
++			baud |= UARTBAUD_RXEDGIE;
+ 		} else {
+-			writeb(readb(sport->port.membase + UARTCR5) &
+-			       ~UARTCR5_RDMAS, sport->port.membase + UARTCR5);
++			val &= ~UARTCTRL_RIE;
++			baud &= ~UARTBAUD_RXEDGIE;
+ 		}
++		lpuart32_write(&sport->port, val, UARTCTRL);
++		lpuart32_write(&sport->port, baud, UARTBAUD);
++	} else {
++		val = readb(sport->port.membase + UARTCR2);
++		if (on)
++			val |= UARTCR2_RIE;
++		else
++			val &= ~UARTCR2_RIE;
++		writeb(val, sport->port.membase + UARTCR2);
+ 	}
++}
+ 
+-	if (sport->lpuart_dma_tx_use) {
+-		sport->dma_tx_in_progress = false;
+-		dmaengine_terminate_all(sport->dma_tx_chan);
++static bool lpuart_uport_is_active(struct lpuart_port *sport)
++{
++	struct tty_port *port = &sport->port.state->port;
++	struct tty_struct *tty;
++	struct device *tty_dev;
++	int may_wake = 0;
++
++	tty = tty_port_tty_get(port);
++	if (tty) {
++		tty_dev = tty->dev;
++		may_wake = device_may_wakeup(tty_dev);
++		tty_kref_put(tty);
+ 	}
+ 
+-	if (sport->port.suspended && !irq_wake)
+-		lpuart_disable_clks(sport);
++	if ((tty_port_initialized(port) && may_wake) ||
++	    (!console_suspend_enabled && uart_console(&sport->port)))
++		return true;
+ 
+-	return 0;
++	return false;
+ }
+ 
+-static int __maybe_unused lpuart_resume(struct device *dev)
++static int lpuart_suspend_noirq(struct device *dev)
+ {
+ 	struct lpuart_port *sport = dev_get_drvdata(dev);
+ 	bool irq_wake = irqd_is_wakeup_set(irq_get_irq_data(sport->port.irq));
+ 
+-	if (sport->port.suspended && !irq_wake)
+-		lpuart_enable_clks(sport);
++	if (lpuart_uport_is_active(sport))
++		serial_lpuart_enable_wakeup(sport, !!irq_wake);
+ 
+-	if (lpuart_is_32(sport))
+-		lpuart32_setup_watermark_enable(sport);
+-	else
+-		lpuart_setup_watermark_enable(sport);
++	pinctrl_pm_select_sleep_state(dev);
+ 
+-	if (sport->lpuart_dma_rx_use) {
+-		if (irq_wake) {
+-			if (!lpuart_start_rx_dma(sport))
+-				rx_dma_timer_init(sport);
+-			else
+-				sport->lpuart_dma_rx_use = false;
++	return 0;
++}
++
++static int lpuart_resume_noirq(struct device *dev)
++{
++	struct lpuart_port *sport = dev_get_drvdata(dev);
++	unsigned int val;
++
++	pinctrl_pm_select_default_state(dev);
++
++	if (lpuart_uport_is_active(sport)) {
++		serial_lpuart_enable_wakeup(sport, false);
++
++		/* clear the wakeup flags */
++		if (lpuart_is_32(sport)) {
++			val = lpuart32_read(&sport->port, UARTSTAT);
++			lpuart32_write(&sport->port, val, UARTSTAT);
+ 		}
+ 	}
+ 
+-	lpuart_tx_dma_startup(sport);
++	return 0;
++}
+ 
+-	if (lpuart_is_32(sport))
+-		lpuart32_configure(sport);
++static int __maybe_unused lpuart_suspend(struct device *dev)
++{
++	struct lpuart_port *sport = dev_get_drvdata(dev);
++	unsigned long temp;
++	unsigned long flags;
++
++	uart_suspend_port(&lpuart_reg, &sport->port);
++
++	if (lpuart_uport_is_active(sport)) {
++		spin_lock_irqsave(&sport->port.lock, flags);
++		if (lpuart_is_32(sport)) {
++			temp = lpuart32_read(&sport->port, UARTCTRL);
++			temp &= ~(UARTCTRL_TE | UARTCTRL_TIE | UARTCTRL_TCIE);
++			lpuart32_write(&sport->port, temp, UARTCTRL);
++		} else {
++			temp = readb(sport->port.membase + UARTCR2);
++			temp &= ~(UARTCR2_TE | UARTCR2_TIE | UARTCR2_TCIE);
++			writeb(temp, sport->port.membase + UARTCR2);
++		}
++
++		if (sport->lpuart_dma_rx_use)
++			sport->dma_rx_chan_active = false;
++		spin_unlock_irqrestore(&sport->port.lock, flags);
++
++		if (sport->lpuart_dma_rx_use) {
++			/*
++			 * EDMA driver during suspend will forcefully release any
++			 * non-idle DMA channels. If port wakeup is enabled or if port
++			 * is console port or 'no_console_suspend' is set the Rx DMA
++			 * cannot resume as as expected, hence gracefully release the
++			 * Rx DMA path before suspend and start Rx DMA path on resume.
++			 */
++			lpuart_del_timer_sync(sport);
++			lpuart_dma_rx_free(&sport->port, true);
++
++			/* Disable Rx DMA to use UART port as wakeup source */
++			spin_lock_irqsave(&sport->port.lock, flags);
++			if (lpuart_is_32(sport)) {
++				temp = lpuart32_read(&sport->port, UARTBAUD);
++				lpuart32_write(&sport->port, temp & ~UARTBAUD_RDMAE,
++					       UARTBAUD);
++			} else {
++				writeb(readb(sport->port.membase + UARTCR5) &
++				       ~UARTCR5_RDMAS, sport->port.membase + UARTCR5);
++			}
++			spin_unlock_irqrestore(&sport->port.lock, flags);
++		}
++
++		if (sport->lpuart_dma_tx_use) {
++			spin_lock_irqsave(&sport->port.lock, flags);
++			if (lpuart_is_32(sport)) {
++				temp = lpuart32_read(&sport->port, UARTBAUD);
++				temp &= ~UARTBAUD_TDMAE;
++				lpuart32_write(&sport->port, temp, UARTBAUD);
++			} else {
++				temp = readb(sport->port.membase + UARTCR5);
++				temp &= ~UARTCR5_TDMAS;
++				writeb(temp, sport->port.membase + UARTCR5);
++			}
++			spin_unlock_irqrestore(&sport->port.lock, flags);
++			sport->dma_tx_in_progress = false;
++			dmaengine_terminate_sync(sport->dma_tx_chan);
++		}
++	} else if (pm_runtime_active(sport->port.dev)) {
++		lpuart_disable_clks(sport);
++		pm_runtime_disable(sport->port.dev);
++		pm_runtime_set_suspended(sport->port.dev);
++	}
+ 
++	return 0;
++}
++
++static void lpuart_console_fixup(struct lpuart_port *sport)
++{
++	struct tty_port *port = &sport->port.state->port;
++	struct uart_port *uport = &sport->port;
++	struct ktermios termios;
++
++	/* i.MX7ULP enter VLLS mode that lpuart module power off and registers
++	 * all lost no matter the port is wakeup source.
++	 * For console port, console baud rate setting lost and print messy
++	 * log when enable the console port as wakeup source. To avoid the
++	 * issue happen, user should not enable uart port as wakeup source
++	 * in VLLS mode, or restore console setting here.
++	 */
++	if (is_imx7ulp_lpuart(sport) && lpuart_uport_is_active(sport) &&
++	    console_suspend_enabled && uart_console(&sport->port)) {
++
++		mutex_lock(&port->mutex);
++		memset(&termios, 0, sizeof(struct ktermios));
++		termios.c_cflag = uport->cons->cflag;
++		if (port->tty && termios.c_cflag == 0)
++			termios = port->tty->termios;
++		uport->ops->set_termios(uport, &termios, NULL);
++		mutex_unlock(&port->mutex);
++	}
++}
++
++static int __maybe_unused lpuart_resume(struct device *dev)
++{
++	struct lpuart_port *sport = dev_get_drvdata(dev);
++	int ret;
++
++	if (lpuart_uport_is_active(sport)) {
++		if (lpuart_is_32(sport))
++			lpuart32_hw_setup(sport);
++		else
++			lpuart_hw_setup(sport);
++	} else if (pm_runtime_active(sport->port.dev)) {
++		ret = lpuart_enable_clks(sport);
++		if (ret)
++			return ret;
++		pm_runtime_set_active(sport->port.dev);
++		pm_runtime_enable(sport->port.dev);
++	}
++
++	lpuart_console_fixup(sport);
+ 	uart_resume_port(&lpuart_reg, &sport->port);
+ 
+ 	return 0;
+ }
+ 
+-static SIMPLE_DEV_PM_OPS(lpuart_pm_ops, lpuart_suspend, lpuart_resume);
++static const struct dev_pm_ops lpuart_pm_ops = {
++	SET_RUNTIME_PM_OPS(lpuart_runtime_suspend,
++			   lpuart_runtime_resume, NULL)
++	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(lpuart_suspend_noirq,
++				      lpuart_resume_noirq)
++	SET_SYSTEM_SLEEP_PM_OPS(lpuart_suspend, lpuart_resume)
++};
+ 
+ static struct platform_driver lpuart_driver = {
+ 	.probe		= lpuart_probe,
+-- 
+2.25.1
+

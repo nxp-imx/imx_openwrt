@@ -1,0 +1,973 @@
+From ae4032f5b5c4e9b15a0777987ec0a731cbeff7dc Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 11:36:49 +0800
+Subject: [PATCH 20/24] update rtc driver
+
+---
+ drivers/rtc/Kconfig         |  19 ++
+ drivers/rtc/Makefile        |   2 +
+ drivers/rtc/interface.c     |   2 +-
+ drivers/rtc/rtc-bbnsm.c     | 222 +++++++++++++++++++++
+ drivers/rtc/rtc-imx-rpmsg.c | 383 ++++++++++++++++++++++++++++++++++++
+ drivers/rtc/rtc-imx-sc.c    |  81 +++++++-
+ drivers/rtc/rtc-mxc_v2.c    |   4 +-
+ drivers/rtc/rtc-pic32.c     |   8 +-
+ drivers/rtc/rtc-snvs.c      |  16 +-
+ 9 files changed, 710 insertions(+), 27 deletions(-)
+ create mode 100644 drivers/rtc/rtc-bbnsm.c
+ create mode 100644 drivers/rtc/rtc-imx-rpmsg.c
+
+diff --git a/drivers/rtc/Kconfig b/drivers/rtc/Kconfig
+index e1bc52144..5dbb208cc 100644
+--- a/drivers/rtc/Kconfig
++++ b/drivers/rtc/Kconfig
+@@ -1773,6 +1773,18 @@ config RTC_DRV_SNVS
+ 	   This driver can also be built as a module, if so, the module
+ 	   will be called "rtc-snvs".
+ 
++config RTC_DRV_BBNSM
++	tristate "NXP BBNSM RTC support"
++	select REGMAP_MMIO
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on HAS_IOMEM
++	depends on OF
++	help
++	   If you say yes here you get support for the NXP BBNSM RTC module.
++
++	   This driver can also be built as a module, if so, the module
++	   will be called "rtc-bbnsm".
++
+ config RTC_DRV_IMX_SC
+ 	depends on IMX_SCU
+ 	depends on HAVE_ARM_SMCCC
+@@ -1781,6 +1793,13 @@ config RTC_DRV_IMX_SC
+ 	   If you say yes here you get support for the NXP i.MX System
+ 	   Controller RTC module.
+ 
++config RTC_DRV_IMX_RPMSG
++	tristate "NXP RPMSG RTC support"
++	depends on OF
++	help
++	   If you say yes here you get support for the NXP RPMSG
++	   RTC module.
++
+ config RTC_DRV_ST_LPC
+ 	tristate "STMicroelectronics LPC RTC"
+ 	depends on ARCH_STI
+diff --git a/drivers/rtc/Makefile b/drivers/rtc/Makefile
+index 5ceeafe4d..284ebaa44 100644
+--- a/drivers/rtc/Makefile
++++ b/drivers/rtc/Makefile
+@@ -33,6 +33,7 @@ obj-$(CONFIG_RTC_DRV_ASPEED)	+= rtc-aspeed.o
+ obj-$(CONFIG_RTC_DRV_AT91RM9200)+= rtc-at91rm9200.o
+ obj-$(CONFIG_RTC_DRV_AT91SAM9)	+= rtc-at91sam9.o
+ obj-$(CONFIG_RTC_DRV_AU1XXX)	+= rtc-au1xxx.o
++obj-$(CONFIG_RTC_DRV_BBNSM)	+= rtc-bbnsm.o
+ obj-$(CONFIG_RTC_DRV_BD70528)	+= rtc-bd70528.o
+ obj-$(CONFIG_RTC_DRV_BQ32K)	+= rtc-bq32k.o
+ obj-$(CONFIG_RTC_DRV_BQ4802)	+= rtc-bq4802.o
+@@ -75,6 +76,7 @@ obj-$(CONFIG_RTC_DRV_HID_SENSOR_TIME) += rtc-hid-sensor-time.o
+ obj-$(CONFIG_RTC_DRV_HYM8563)	+= rtc-hym8563.o
+ obj-$(CONFIG_RTC_DRV_IMXDI)	+= rtc-imxdi.o
+ obj-$(CONFIG_RTC_DRV_IMX_SC)	+= rtc-imx-sc.o
++obj-$(CONFIG_RTC_DRV_IMX_RPMSG)	+= rtc-imx-rpmsg.o
+ obj-$(CONFIG_RTC_DRV_ISL12022)	+= rtc-isl12022.o
+ obj-$(CONFIG_RTC_DRV_ISL12026)	+= rtc-isl12026.o
+ obj-$(CONFIG_RTC_DRV_ISL1208)	+= rtc-isl1208.o
+diff --git a/drivers/rtc/interface.c b/drivers/rtc/interface.c
+index f49ab4545..3ee17c4d7 100644
+--- a/drivers/rtc/interface.c
++++ b/drivers/rtc/interface.c
+@@ -392,7 +392,7 @@ int rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
+ 		return err;
+ 	if (!rtc->ops) {
+ 		err = -ENODEV;
+-	} else if (!test_bit(RTC_FEATURE_ALARM, rtc->features)) {
++	} else if (!test_bit(RTC_FEATURE_ALARM, rtc->features) || !rtc->ops->read_alarm) {
+ 		err = -EINVAL;
+ 	} else {
+ 		memset(alarm, 0, sizeof(struct rtc_wkalrm));
+diff --git a/drivers/rtc/rtc-bbnsm.c b/drivers/rtc/rtc-bbnsm.c
+new file mode 100644
+index 000000000..6939d808b
+--- /dev/null
++++ b/drivers/rtc/rtc-bbnsm.c
+@@ -0,0 +1,222 @@
++// SPDX-License-Identifier: GPL-2.0+
++//
++// Copyright 2022 NXP.
++
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeirq.h>
++#include <linux/rtc.h>
++#include <linux/mfd/syscon.h>
++#include <linux/regmap.h>
++
++#define BBNSM_CTRL	0x8
++#define BBNSM_INT_EN	0x10
++#define BBNSM_EVENTS	0x14
++#define BBNSM_RTC_LS	0x40
++#define BBNSM_RTC_MS	0x44
++#define BBNSM_TA	0x50
++
++#define RTC_EN		0x2
++#define RTC_EN_MSK	0x3
++#define TA_EN		(0x2 << 2)
++#define TA_EN_MSK	(0x3 << 2)
++#define RTC_INT_EN	0x2
++#define TA_INT_EN	(0x2 << 2)
++
++#define BBNSM_EVENT_TA	TA_EN
++
++#define CNTR_TO_SECS_SH	15
++
++struct bbnsm_rtc {
++	struct rtc_device *rtc;
++	struct regmap *regmap;
++	int irq;
++	struct clk *clk;
++};
++
++static u32 bbnsm_read_counter(struct bbnsm_rtc *bbnsm)
++{
++	u32 rtc_msb, rtc_lsb;
++	unsigned int timeout = 100;
++	u32 time;
++	u32 tmp = 0;
++
++	do {
++		time = tmp;
++		/* read the msb */
++		regmap_read(bbnsm->regmap, BBNSM_RTC_MS, &rtc_msb);
++		/* read the lsb */
++		regmap_read(bbnsm->regmap, BBNSM_RTC_LS, &rtc_lsb);
++		/* convert to seconds */
++		tmp = (rtc_msb << 17) | (rtc_lsb >> 15);
++	} while (tmp != time && --timeout);
++
++	return time;
++}
++
++static int bbnsm_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct bbnsm_rtc *bbnsm = dev_get_drvdata(dev);
++	unsigned long time;
++
++	time = bbnsm_read_counter(bbnsm);
++	rtc_time64_to_tm(time, tm);
++
++	return 0;
++}
++
++static int bbnsm_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct bbnsm_rtc *bbnsm = dev_get_drvdata(dev);
++	unsigned long time = rtc_tm_to_time64(tm);
++
++	/* disable the RTC first */
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, RTC_EN_MSK, 0);
++
++	/* write the 32bit sec time to 47 bit timer counter, leaving 15 LSBs blank */
++	regmap_write(bbnsm->regmap, BBNSM_RTC_LS, time << CNTR_TO_SECS_SH);
++	regmap_write(bbnsm->regmap, BBNSM_RTC_MS, time >> (32 - CNTR_TO_SECS_SH));
++
++	/* Enable the RTC again */
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, RTC_EN_MSK, RTC_EN);
++
++	return 0;
++}
++
++static int bbnsm_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
++{
++	struct bbnsm_rtc *bbnsm = dev_get_drvdata(dev);
++	u32 bbnsm_events, bbnsm_ta;
++
++	regmap_read(bbnsm->regmap, BBNSM_TA, &bbnsm_ta);
++	rtc_time64_to_tm(bbnsm_ta, &alrm->time);
++
++	regmap_read(bbnsm->regmap, BBNSM_EVENTS, &bbnsm_events);
++	alrm->pending = (bbnsm_events & BBNSM_EVENT_TA) ? 1 : 0;
++
++	return 0;
++}
++
++static int bbnsm_rtc_alarm_irq_enable(struct device *dev, unsigned int enable)
++{
++	struct bbnsm_rtc * bbnsm = dev_get_drvdata(dev);
++
++	/* enable the alarm event */
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, TA_EN_MSK, enable ? 0x2 << 2 : 0x1 << 2);
++	/* enable the alarm interrupt */
++	regmap_update_bits(bbnsm->regmap, BBNSM_INT_EN, TA_EN_MSK, enable ? 0x2 << 2 : 0x1 << 2);
++
++	return 0;
++}
++
++static int bbnsm_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
++{
++	struct bbnsm_rtc *bbnsm = dev_get_drvdata(dev);
++	unsigned long time = rtc_tm_to_time64(&alrm->time);
++
++	/* disable the alarm */
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, TA_EN, TA_EN);
++
++	/* write the seconds to TA */
++	regmap_write(bbnsm->regmap, BBNSM_TA, time);
++
++	return bbnsm_rtc_alarm_irq_enable(dev, alrm->enabled);
++}
++
++static struct rtc_class_ops bbnsm_rtc_ops = {
++	.read_time = bbnsm_rtc_read_time,
++	.set_time = bbnsm_rtc_set_time,
++	.read_alarm = bbnsm_rtc_read_alarm,
++	.set_alarm = bbnsm_rtc_set_alarm,
++	.alarm_irq_enable = bbnsm_rtc_alarm_irq_enable,
++};
++
++static irqreturn_t bbnsm_rtc_irq_handler(int irq, void *dev_id)
++{
++	struct device *dev = dev_id;
++	struct bbnsm_rtc  *bbnsm = dev_get_drvdata(dev);
++	u32 val;
++	u32 event = 0;
++
++	regmap_read(bbnsm->regmap, BBNSM_EVENTS, &val);
++	if (val & BBNSM_EVENT_TA) {
++		event |= (RTC_AF | RTC_IRQF);
++		bbnsm_rtc_alarm_irq_enable(dev, false);
++		/* clear the alarm event */
++		regmap_write_bits(bbnsm->regmap, BBNSM_EVENTS, TA_EN_MSK, BBNSM_EVENT_TA);
++		rtc_update_irq(bbnsm->rtc, 1, event);
++	}
++
++	return event ? IRQ_HANDLED : IRQ_NONE;
++}
++
++static int bbnsm_rtc_probe(struct platform_device *pdev)
++{
++	struct bbnsm_rtc *bbnsm;
++	int ret;
++
++	bbnsm = devm_kzalloc(&pdev->dev, sizeof(*bbnsm), GFP_KERNEL);
++	if (!bbnsm)
++		return -ENOMEM;
++
++	bbnsm->rtc = devm_rtc_allocate_device(&pdev->dev);
++
++	bbnsm->regmap = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "regmap");
++	if (IS_ERR(bbnsm->regmap)) {
++		dev_err(&pdev->dev, "bbnsm get regmap failed\n");
++		return PTR_ERR(bbnsm->regmap);
++	}
++
++	bbnsm->irq = platform_get_irq(pdev, 0);
++	if (bbnsm->irq < 0)
++		return bbnsm->irq;
++
++	platform_set_drvdata(pdev, bbnsm);
++
++	/* clear all the pending events */
++	regmap_write(bbnsm->regmap, BBNSM_EVENTS, 0x7A);
++
++	regmap_update_bits(bbnsm->regmap, BBNSM_CTRL, RTC_EN_MSK, RTC_EN);
++
++	/* Enable the Real-Time counter */
++	device_init_wakeup(&pdev->dev, true);
++	ret = dev_pm_set_wake_irq(&pdev->dev, bbnsm->irq);
++	if (ret)
++		dev_err(&pdev->dev, "Failed to enable the irq wakeup\n");
++
++	ret = devm_request_irq(&pdev->dev, bbnsm->irq, bbnsm_rtc_irq_handler,
++			IRQF_SHARED, "rtc alarm", &pdev->dev);
++	if (ret) {
++		dev_err(&pdev->dev, "failed to request irq %d: %d\n",
++			bbnsm->irq, ret);
++		return ret;
++	}
++
++	bbnsm->rtc->ops = &bbnsm_rtc_ops;
++	bbnsm->rtc->range_max = U32_MAX;
++
++	return devm_rtc_register_device(bbnsm->rtc);
++}
++
++static const struct of_device_id bbnsm_dt_ids[] = {
++	{ .compatible = "nxp,bbnsm-rtc", },
++	{ /* sentinel */ },
++};
++MODULE_DEVICE_TABLE(of, bbnsm_dt_ids);
++
++static struct platform_driver bbnsm_rtc_driver = {
++	.driver = {
++		.name = "bbnsm_rtc",
++		.of_match_table = bbnsm_dt_ids,
++	},
++	.probe = bbnsm_rtc_probe,
++};
++module_platform_driver(bbnsm_rtc_driver);
++
++MODULE_AUTHOR("Jacky Bai <ping.bai@nxp.com>");
++MODULE_DESCRIPTION("NXP BBNSM RTC Driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/rtc/rtc-imx-rpmsg.c b/drivers/rtc/rtc-imx-rpmsg.c
+new file mode 100644
+index 000000000..a84968e38
+--- /dev/null
++++ b/drivers/rtc/rtc-imx-rpmsg.c
+@@ -0,0 +1,383 @@
++/*
++ * Copyright 2017-2018 NXP
++ *
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/imx_rpmsg.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/pm_qos.h>
++#include <linux/rpmsg.h>
++#include <linux/rtc.h>
++
++#define RPMSG_TIMEOUT 1000
++
++#define RTC_RPMSG_SEND		0x0
++#define RTC_RPMSG_RECEIVE	0x1
++#define RTC_RPMSG_NOTIFY	0x2
++
++enum rtc_rpmsg_cmd {
++	RTC_RPMSG_SET_TIME,
++	RTC_RPMSG_GET_TIME,
++	RTC_RPMSG_SET_ALARM,
++	RTC_RPMSG_GET_ALARM,
++	RTC_RPMSG_ENABLE_ALARM,
++};
++
++struct rtc_rpmsg_data {
++	struct imx_rpmsg_head header;
++	u8 reserved0;
++	union {
++		u8 reserved1;
++		u8 ret;
++	};
++	union {
++		u32 reserved2;
++		u32 sec;
++	};
++	union {
++		u8 enable;
++		u8 reserved3;
++	};
++	union {
++		u8 pending;
++		u8 reserved4;
++	};
++} __attribute__ ((packed));
++
++struct rtc_rpmsg_info {
++	struct rpmsg_device *rpdev;
++	struct device *dev;
++	struct rtc_rpmsg_data *msg;
++	struct pm_qos_request pm_qos_req;
++	struct completion cmd_complete;
++	struct mutex lock;
++};
++
++static struct rtc_rpmsg_info rtc_rpmsg;
++
++struct imx_rpmsg_rtc_data {
++	struct rtc_device *rtc;
++	spinlock_t lock;
++};
++
++struct imx_rpmsg_rtc_data *data;
++
++static int rtc_send_message(struct rtc_rpmsg_data *msg,
++			struct rtc_rpmsg_info *info, bool ack)
++{
++	int err;
++
++	if (!info->rpdev) {
++		dev_dbg(info->dev,
++			"rpmsg channel not ready, m4 image ready?\n");
++		return -EINVAL;
++	}
++
++	mutex_lock(&info->lock);
++	cpu_latency_qos_add_request(&info->pm_qos_req,
++			0);
++
++	reinit_completion(&info->cmd_complete);
++
++	err = rpmsg_send(info->rpdev->ept, (void *)msg,
++			    sizeof(struct rtc_rpmsg_data));
++
++	if (err) {
++		dev_err(&info->rpdev->dev, "rpmsg_send failed: %d\n", err);
++		goto err_out;
++	}
++
++	if (ack) {
++		err = wait_for_completion_timeout(&info->cmd_complete,
++					msecs_to_jiffies(RPMSG_TIMEOUT));
++		if (!err) {
++			dev_err(&info->rpdev->dev, "rpmsg_send timeout!\n");
++			err = -ETIMEDOUT;
++			goto err_out;
++		}
++
++		if (info->msg->ret != 0) {
++			dev_err(&info->rpdev->dev, "rpmsg not ack %d!\n",
++				info->msg->ret);
++			err = -EINVAL;
++			goto err_out;
++		}
++
++		err = 0;
++	}
++
++err_out:
++	cpu_latency_qos_remove_request(&info->pm_qos_req);
++	mutex_unlock(&info->lock);
++
++	return err;
++}
++
++static int imx_rpmsg_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct rtc_rpmsg_data msg;
++	int ret;
++
++	memset(&msg, 0, sizeof(msg));
++	msg.header.cate = IMX_RPMSG_RTC;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RTC_RPMSG_SEND;
++	msg.header.cmd = RTC_RPMSG_GET_TIME;
++
++	ret = rtc_send_message(&msg, &rtc_rpmsg, true);
++	if (ret)
++		return ret;
++
++	rtc_time64_to_tm(rtc_rpmsg.msg->sec, tm);
++
++	return 0;
++}
++
++static int imx_rpmsg_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct rtc_rpmsg_data msg;
++	unsigned long time;
++	int ret;
++
++	time = rtc_tm_to_time64(tm);
++
++	memset(&msg, 0, sizeof(msg));
++	msg.header.cate = IMX_RPMSG_RTC;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RTC_RPMSG_SEND;
++	msg.header.cmd = RTC_RPMSG_SET_TIME;
++	msg.sec = time;
++
++	ret = rtc_send_message(&msg, &rtc_rpmsg, true);
++	if (ret)
++		return ret;
++
++	return rtc_rpmsg.msg->ret;
++}
++
++static int imx_rpmsg_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
++{
++	struct rtc_rpmsg_data msg;
++	int ret;
++
++	memset(&msg, 0, sizeof(msg));
++	msg.header.cate = IMX_RPMSG_RTC;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RTC_RPMSG_SEND;
++	msg.header.cmd = RTC_RPMSG_GET_ALARM;
++
++	ret = rtc_send_message(&msg, &rtc_rpmsg, true);
++	if (ret)
++		return ret;
++
++	rtc_time64_to_tm(rtc_rpmsg.msg->sec, &alrm->time);
++	alrm->pending = rtc_rpmsg.msg->pending;
++
++	return rtc_rpmsg.msg->ret;
++}
++
++static int imx_rpmsg_rtc_alarm_irq_enable(struct device *dev,
++	unsigned int enable)
++{
++	struct rtc_rpmsg_data msg;
++	int ret;
++
++	memset(&msg, 0, sizeof(msg));
++	msg.header.cate = IMX_RPMSG_RTC;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RTC_RPMSG_SEND;
++	msg.header.cmd = RTC_RPMSG_ENABLE_ALARM;
++	msg.enable = enable;
++
++	ret = rtc_send_message(&msg, &rtc_rpmsg, true);
++	if (ret)
++		return ret;
++
++	return rtc_rpmsg.msg->ret;
++}
++
++static int imx_rpmsg_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
++{
++	struct rtc_rpmsg_data msg;
++	unsigned long time;
++	int ret;
++
++	time = rtc_tm_to_time64(&alrm->time);
++
++	memset(&msg, 0, sizeof(msg));
++	msg.header.cate = IMX_RPMSG_RTC;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RTC_RPMSG_SEND;
++	msg.header.cmd = RTC_RPMSG_SET_ALARM;
++	msg.sec = time;
++	msg.enable = alrm->enabled;
++
++	ret = rtc_send_message(&msg, &rtc_rpmsg, true);
++	if (ret)
++		return ret;
++
++	return rtc_rpmsg.msg->ret;
++}
++
++static int imx_rpmsg_rtc_alarm_irq_update(void)
++{
++	rtc_update_irq(data->rtc, 1, RTC_IRQF);
++
++	return 0;
++}
++
++static const struct rtc_class_ops imx_rpmsg_rtc_ops = {
++	.read_time = imx_rpmsg_rtc_read_time,
++	.set_time = imx_rpmsg_rtc_set_time,
++	.read_alarm = imx_rpmsg_rtc_read_alarm,
++	.set_alarm = imx_rpmsg_rtc_set_alarm,
++	.alarm_irq_enable = imx_rpmsg_rtc_alarm_irq_enable,
++};
++
++static struct rpmsg_device_id rtc_rpmsg_id_table[] = {
++	{ .name	= "rpmsg-rtc-channel" },
++	{ },
++};
++
++static int imx_rpmsg_rtc_probe(struct platform_device *pdev)
++{
++	int ret = 0;
++
++	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, data);
++	device_init_wakeup(&pdev->dev, true);
++
++	data->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
++					&imx_rpmsg_rtc_ops, THIS_MODULE);
++	if (IS_ERR(data->rtc)) {
++		ret = PTR_ERR(data->rtc);
++		dev_err(&pdev->dev, "failed to register rtc: %d\n", ret);
++	}
++
++	return ret;
++}
++
++static const struct of_device_id imx_rpmsg_rtc_dt_ids[] = {
++	{ .compatible = "fsl,imx-rpmsg-rtc", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx_rpmsg_rtc_dt_ids);
++
++static int rtc_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
++			void *priv, u32 src)
++{
++	struct rtc_rpmsg_data *msg = (struct rtc_rpmsg_data *)data;
++
++	if (msg->header.type == RTC_RPMSG_RECEIVE) {
++		rtc_rpmsg.msg = msg;
++		complete(&rtc_rpmsg.cmd_complete);
++		return 0;
++	} else if (msg->header.type == RTC_RPMSG_NOTIFY) {
++		rtc_rpmsg.msg = msg;
++		imx_rpmsg_rtc_alarm_irq_update();
++	} else
++		dev_err(&rtc_rpmsg.rpdev->dev, "wrong command type!\n");
++
++	return 0;
++}
++
++static void rtc_rpmsg_remove(struct rpmsg_device *rpdev)
++{
++	dev_info(&rpdev->dev, "rtc rpmsg driver is removed\n");
++}
++
++#ifdef CONFIG_PM_SLEEP
++static int imx_rpmsg_rtc_suspend(struct device *dev)
++{
++	return 0;
++}
++
++static int imx_rpmsg_rtc_suspend_noirq(struct device *dev)
++{
++	return 0;
++}
++
++static int imx_rpmsg_rtc_resume(struct device *dev)
++{
++	return 0;
++}
++
++static int imx_rpmsg_rtc_resume_noirq(struct device *dev)
++{
++	return 0;
++}
++
++static const struct dev_pm_ops imx_rpmsg_rtc_pm_ops = {
++	.suspend = imx_rpmsg_rtc_suspend,
++	.suspend_noirq = imx_rpmsg_rtc_suspend_noirq,
++	.resume = imx_rpmsg_rtc_resume,
++	.resume_noirq = imx_rpmsg_rtc_resume_noirq,
++};
++
++#define IMX_RPMSG_RTC_PM_OPS	(&imx_rpmsg_rtc_pm_ops)
++
++#else
++
++#define IMX_RPMSG_RTC_PM_OPS	NULL
++
++#endif
++
++static struct platform_driver imx_rpmsg_rtc_driver = {
++	.driver = {
++		.name	= "imx_rpmsg_rtc",
++		.pm	= IMX_RPMSG_RTC_PM_OPS,
++		.of_match_table = imx_rpmsg_rtc_dt_ids,
++	},
++	.probe		= imx_rpmsg_rtc_probe,
++};
++
++static int rtc_rpmsg_probe(struct rpmsg_device *rpdev)
++{
++	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n",
++		rpdev->src, rpdev->dst);
++
++	rtc_rpmsg.rpdev = rpdev;
++	mutex_init(&rtc_rpmsg.lock);
++
++	init_completion(&rtc_rpmsg.cmd_complete);
++	return platform_driver_register(&imx_rpmsg_rtc_driver);
++}
++
++static struct rpmsg_driver rtc_rpmsg_driver = {
++	.drv.name	= "rtc_rpmsg",
++	.drv.owner	= THIS_MODULE,
++	.id_table	= rtc_rpmsg_id_table,
++	.probe		= rtc_rpmsg_probe,
++	.callback	= rtc_rpmsg_cb,
++	.remove		= rtc_rpmsg_remove,
++};
++
++static int __init rtc_imx_rpmsg_init(void)
++{
++	return register_rpmsg_driver(&rtc_rpmsg_driver);
++}
++late_initcall(rtc_imx_rpmsg_init);
++
++MODULE_AUTHOR("Anson Huang <Anson.Huang@nxp.com>");
++MODULE_DESCRIPTION("NXP i.MX RPMSG RTC Driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/rtc/rtc-imx-sc.c b/drivers/rtc/rtc-imx-sc.c
+index 814d51664..7239e7609 100644
+--- a/drivers/rtc/rtc-imx-sc.c
++++ b/drivers/rtc/rtc-imx-sc.c
+@@ -10,6 +10,7 @@
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/rtc.h>
++#include <linux/suspend.h>
+ 
+ #define IMX_SC_TIMER_FUNC_GET_RTC_SEC1970	9
+ #define IMX_SC_TIMER_FUNC_SET_RTC_ALARM		8
+@@ -18,11 +19,9 @@
+ #define IMX_SIP_SRTC			0xC2000002
+ #define IMX_SIP_SRTC_SET_TIME		0x0
+ 
+-#define SC_IRQ_GROUP_RTC    2
+-#define SC_IRQ_RTC          1
+-
+ static struct imx_sc_ipc *rtc_ipc_handle;
+ static struct rtc_device *imx_sc_rtc;
++static bool readonly; /* true if not authorised to set time */
+ 
+ struct imx_sc_msg_timer_get_rtc_time {
+ 	struct imx_sc_rpc_msg hdr;
+@@ -39,6 +38,11 @@ struct imx_sc_msg_timer_rtc_set_alarm {
+ 	u8 sec;
+ } __packed __aligned(4);
+ 
++#define RTC_NORMAL_MODE		 0
++#define RTC_IN_SUSPEND		 1
++#define RTC_ABORT_SUSPEND	 2
++static int rtc_state = RTC_NORMAL_MODE;
++
+ static int imx_sc_rtc_read_time(struct device *dev, struct rtc_time *tm)
+ {
+ 	struct imx_sc_msg_timer_get_rtc_time msg;
+@@ -65,6 +69,9 @@ static int imx_sc_rtc_set_time(struct device *dev, struct rtc_time *tm)
+ {
+ 	struct arm_smccc_res res;
+ 
++	if (readonly)
++		return 0;
++
+ 	/* pack 2 time parameters into 1 register, 16 bits for each */
+ 	arm_smccc_smc(IMX_SIP_SRTC, IMX_SIP_SRTC_SET_TIME,
+ 		      ((tm->tm_year + 1900) << 16) | (tm->tm_mon + 1),
+@@ -77,7 +84,7 @@ static int imx_sc_rtc_set_time(struct device *dev, struct rtc_time *tm)
+ 
+ static int imx_sc_rtc_alarm_irq_enable(struct device *dev, unsigned int enable)
+ {
+-	return imx_scu_irq_group_enable(SC_IRQ_GROUP_RTC, SC_IRQ_RTC, enable);
++	return imx_scu_irq_group_enable(IMX_SC_IRQ_GROUP_RTC, IMX_SC_IRQ_RTC, enable);
+ }
+ 
+ static int imx_sc_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+@@ -99,6 +106,8 @@ static int imx_sc_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+ 	msg.min = alrm_tm->tm_min;
+ 	msg.sec = alrm_tm->tm_sec;
+ 
++	rtc_state = RTC_NORMAL_MODE;
++
+ 	ret = imx_scu_call_rpc(rtc_ipc_handle, &msg, true);
+ 	if (ret) {
+ 		dev_err(dev, "set rtc alarm failed, ret %d\n", ret);
+@@ -121,13 +130,56 @@ static const struct rtc_class_ops imx_sc_rtc_ops = {
+ 	.alarm_irq_enable = imx_sc_rtc_alarm_irq_enable,
+ };
+ 
++static int imx_sc_rtc_suspend(struct device *dev)
++{
++	int err = 0;
++
++	mutex_lock(&imx_sc_rtc->ops_lock);
++	/* Abort suspend if the RTC wakeup interrupt triggered during suspend. */
++	if (rtc_state == RTC_ABORT_SUSPEND)
++		err = -EBUSY;
++
++	rtc_state = RTC_NORMAL_MODE;
++	mutex_unlock(&imx_sc_rtc->ops_lock);
++
++	return err;
++}
++
++static int imx_sc_rtc_resume(struct device *dev)
++{
++	return 0;
++}
++
++static int imx_sc_rtc_pm_notify(struct notifier_block *nb,
++					unsigned long event, void *group)
++{
++	mutex_lock(&imx_sc_rtc->ops_lock);
++	switch (event) {
++		case PM_SUSPEND_PREPARE:
++			rtc_state = RTC_IN_SUSPEND;
++			break;
++		case PM_POST_SUSPEND:
++			rtc_state = RTC_NORMAL_MODE;
++			break;
++		default:
++			break;
++	}
++	mutex_unlock(&imx_sc_rtc->ops_lock);
++	return 0;
++}
++
+ static int imx_sc_rtc_alarm_notify(struct notifier_block *nb,
+ 					unsigned long event, void *group)
+ {
+ 	/* ignore non-rtc irq */
+-	if (!((event & SC_IRQ_RTC) && (*(u8 *)group == SC_IRQ_GROUP_RTC)))
++	if (!((event & IMX_SC_IRQ_RTC) && (*(u8 *)group == IMX_SC_IRQ_GROUP_RTC)))
+ 		return 0;
+ 
++	/* Abort the suspend process if the alarm expired during suspend. */
++	mutex_lock(&imx_sc_rtc->ops_lock);
++	if (rtc_state == RTC_IN_SUSPEND)
++		rtc_state = RTC_ABORT_SUSPEND;
++	mutex_unlock(&imx_sc_rtc->ops_lock);
+ 	rtc_update_irq(imx_sc_rtc, 1, RTC_IRQF | RTC_AF);
+ 
+ 	return 0;
+@@ -137,6 +189,10 @@ static struct notifier_block imx_sc_rtc_alarm_sc_notifier = {
+ 	.notifier_call = imx_sc_rtc_alarm_notify,
+ };
+ 
++static struct notifier_block imx_sc_rtc_pm_notifier = {
++	.notifier_call = imx_sc_rtc_pm_notify,
++};
++
+ static int imx_sc_rtc_probe(struct platform_device *pdev)
+ {
+ 	int ret;
+@@ -160,12 +216,26 @@ static int imx_sc_rtc_probe(struct platform_device *pdev)
+ 		return ret;
+ 
+ 	imx_scu_irq_register_notifier(&imx_sc_rtc_alarm_sc_notifier);
++	/* Register for PM calls. */
++	ret = register_pm_notifier(&imx_sc_rtc_pm_notifier);
++	if(ret)
++		pr_warn("iMX_SC_RTC: Cannot register suspend notifier, ret = %d\n", ret);
++
++	if (of_property_read_bool(pdev->dev.of_node, "read-only")) {
++		readonly = true;
++		dev_info(&pdev->dev, "not allowed to change time\n");
++	} else {
++		readonly = false;
++	}
+ 
+ 	return 0;
+ }
+ 
++static SIMPLE_DEV_PM_OPS(imx_sc_rtc_pm_ops, imx_sc_rtc_suspend, imx_sc_rtc_resume);
++
+ static const struct of_device_id imx_sc_dt_ids[] = {
+ 	{ .compatible = "fsl,imx8qxp-sc-rtc", },
++	{ .compatible = "fsl,imx8qm-sc-rtc", },
+ 	{}
+ };
+ MODULE_DEVICE_TABLE(of, imx_sc_dt_ids);
+@@ -174,6 +244,7 @@ static struct platform_driver imx_sc_rtc_driver = {
+ 	.driver = {
+ 		.name	= "imx-sc-rtc",
+ 		.of_match_table = imx_sc_dt_ids,
++		.pm = &imx_sc_rtc_pm_ops,
+ 	},
+ 	.probe		= imx_sc_rtc_probe,
+ };
+diff --git a/drivers/rtc/rtc-mxc_v2.c b/drivers/rtc/rtc-mxc_v2.c
+index f6d2ad91f..5e0383401 100644
+--- a/drivers/rtc/rtc-mxc_v2.c
++++ b/drivers/rtc/rtc-mxc_v2.c
+@@ -336,10 +336,8 @@ static int mxc_rtc_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	pdata->rtc = devm_rtc_allocate_device(&pdev->dev);
+-	if (IS_ERR(pdata->rtc)) {
+-		clk_disable_unprepare(pdata->clk);
++	if (IS_ERR(pdata->rtc))
+ 		return PTR_ERR(pdata->rtc);
+-	}
+ 
+ 	pdata->rtc->ops = &mxc_rtc_ops;
+ 	pdata->rtc->range_max = U32_MAX;
+diff --git a/drivers/rtc/rtc-pic32.c b/drivers/rtc/rtc-pic32.c
+index fa351ac20..7fb9145c4 100644
+--- a/drivers/rtc/rtc-pic32.c
++++ b/drivers/rtc/rtc-pic32.c
+@@ -324,16 +324,16 @@ static int pic32_rtc_probe(struct platform_device *pdev)
+ 
+ 	spin_lock_init(&pdata->alarm_lock);
+ 
+-	pdata->rtc = devm_rtc_allocate_device(&pdev->dev);
+-	if (IS_ERR(pdata->rtc))
+-		return PTR_ERR(pdata->rtc);
+-
+ 	clk_prepare_enable(pdata->clk);
+ 
+ 	pic32_rtc_enable(pdata, 1);
+ 
+ 	device_init_wakeup(&pdev->dev, 1);
+ 
++	pdata->rtc = devm_rtc_allocate_device(&pdev->dev);
++	if (IS_ERR(pdata->rtc))
++		return PTR_ERR(pdata->rtc);
++
+ 	pdata->rtc->ops = &pic32_rtcops;
+ 	pdata->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
+ 	pdata->rtc->range_max = RTC_TIMESTAMP_END_2099;
+diff --git a/drivers/rtc/rtc-snvs.c b/drivers/rtc/rtc-snvs.c
+index d82acf1af..bd929b0e7 100644
+--- a/drivers/rtc/rtc-snvs.c
++++ b/drivers/rtc/rtc-snvs.c
+@@ -32,14 +32,6 @@
+ #define SNVS_LPPGDR_INIT	0x41736166
+ #define CNTR_TO_SECS_SH		15
+ 
+-/* The maximum RTC clock cycles that are allowed to pass between two
+- * consecutive clock counter register reads. If the values are corrupted a
+- * bigger difference is expected. The RTC frequency is 32kHz. With 320 cycles
+- * we end at 10ms which should be enough for most cases. If it once takes
+- * longer than expected we do a retry.
+- */
+-#define MAX_RTC_READ_DIFF_CYCLES	320
+-
+ struct snvs_rtc_data {
+ 	struct rtc_device *rtc;
+ 	struct regmap *regmap;
+@@ -64,7 +56,6 @@ static u64 rtc_read_lpsrt(struct snvs_rtc_data *data)
+ static u32 rtc_read_lp_counter(struct snvs_rtc_data *data)
+ {
+ 	u64 read1, read2;
+-	s64 diff;
+ 	unsigned int timeout = 100;
+ 
+ 	/* As expected, the registers might update between the read of the LSB
+@@ -75,8 +66,7 @@ static u32 rtc_read_lp_counter(struct snvs_rtc_data *data)
+ 	do {
+ 		read2 = read1;
+ 		read1 = rtc_read_lpsrt(data);
+-		diff = read1 - read2;
+-	} while (((diff < 0) || (diff > MAX_RTC_READ_DIFF_CYCLES)) && --timeout);
++	} while (read1 != read2 && --timeout);
+ 	if (!timeout)
+ 		dev_err(&data->rtc->dev, "Timeout trying to get valid LPSRT Counter read\n");
+ 
+@@ -88,15 +78,13 @@ static u32 rtc_read_lp_counter(struct snvs_rtc_data *data)
+ static int rtc_read_lp_counter_lsb(struct snvs_rtc_data *data, u32 *lsb)
+ {
+ 	u32 count1, count2;
+-	s32 diff;
+ 	unsigned int timeout = 100;
+ 
+ 	regmap_read(data->regmap, data->offset + SNVS_LPSRTCLR, &count1);
+ 	do {
+ 		count2 = count1;
+ 		regmap_read(data->regmap, data->offset + SNVS_LPSRTCLR, &count1);
+-		diff = count1 - count2;
+-	} while (((diff < 0) || (diff > MAX_RTC_READ_DIFF_CYCLES)) && --timeout);
++	} while (count1 != count2 && --timeout);
+ 	if (!timeout) {
+ 		dev_err(&data->rtc->dev, "Timeout trying to get valid LPSRT Counter read\n");
+ 		return -ETIMEDOUT;
+-- 
+2.25.1
+

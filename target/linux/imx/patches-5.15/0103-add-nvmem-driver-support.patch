@@ -1,0 +1,2161 @@
+From 67e38f65c32a37e52f73ffa22e56f44bc53744dc Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 14:20:46 +0800
+Subject: [PATCH 03/24] add nvmem driver support
+
+---
+ drivers/nvmem/Kconfig              | 302 ++++++----------
+ drivers/nvmem/Makefile             | 118 +++---
+ drivers/nvmem/core.c               | 557 ++++++++++-------------------
+ drivers/nvmem/imx-ocotp-fsb-s400.c | 269 ++++++++++++++
+ drivers/nvmem/imx-ocotp.c          |  33 --
+ drivers/nvmem/rmem.c               |   4 +-
+ include/linux/nvmem-consumer.h     |  16 +-
+ include/linux/nvmem-provider.h     | 106 +-----
+ 8 files changed, 640 insertions(+), 765 deletions(-)
+ create mode 100644 drivers/nvmem/imx-ocotp-fsb-s400.c
+
+diff --git a/drivers/nvmem/Kconfig b/drivers/nvmem/Kconfig
+index 688b70ba4..c57192105 100644
+--- a/drivers/nvmem/Kconfig
++++ b/drivers/nvmem/Kconfig
+@@ -21,45 +21,6 @@ config NVMEM_SYSFS
+ 	 This interface is mostly used by userspace applications to
+ 	 read/write directly into nvmem.
+ 
+-# Layouts
+-
+-source "drivers/nvmem/layouts/Kconfig"
+-
+-# Devices
+-
+-config NVMEM_APPLE_EFUSES
+-	tristate "Apple eFuse support"
+-	depends on ARCH_APPLE || COMPILE_TEST
+-	default ARCH_APPLE
+-	help
+-	  Say y here to enable support for reading eFuses on Apple SoCs
+-	  such as the M1. These are e.g. used to store factory programmed
+-	  calibration data required for the PCIe or the USB-C PHY.
+-
+-	  This driver can also be built as a module. If so, the module will
+-	  be called nvmem-apple-efuses.
+-
+-config NVMEM_BCM_OCOTP
+-	tristate "Broadcom On-Chip OTP Controller support"
+-	depends on ARCH_BCM_IPROC || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	default ARCH_BCM_IPROC
+-	help
+-	  Say y here to enable read/write access to the Broadcom OTP
+-	  controller.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-bcm-ocotp.
+-
+-config NVMEM_BRCM_NVRAM
+-	tristate "Broadcom's NVRAM support"
+-	depends on ARCH_BCM_5301X || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	select GENERIC_NET_UTILS
+-	help
+-	  This driver provides support for Broadcom's NVRAM that can be accessed
+-	  using I/O mapping.
+-
+ config NVMEM_IMX_IIM
+ 	tristate "i.MX IC Identification Module support"
+ 	depends on ARCH_MXC || COMPILE_TEST
+@@ -91,7 +52,7 @@ config NVMEM_IMX_OCOTP_SCU
+ 	  This is a driver for the SCU On-Chip OTP Controller (OCOTP)
+ 	  available on i.MX8 SoCs.
+ 
+-config NVMEM_JZ4780_EFUSE
++config JZ4780_EFUSE
+ 	tristate "JZ4780 EFUSE Memory Support"
+ 	depends on MACH_INGENIC || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -103,27 +64,6 @@ config NVMEM_JZ4780_EFUSE
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called nvmem_jz4780_efuse.
+ 
+-config NVMEM_LAN9662_OTPC
+-	tristate "Microchip LAN9662 OTP controller support"
+-	depends on SOC_LAN966 || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	help
+-	  This driver enables the OTP controller available on Microchip LAN9662
+-	  SoCs. It controls the access to the OTP memory connected to it.
+-
+-config NVMEM_LAYERSCAPE_SFP
+-	tristate "Layerscape SFP (Security Fuse Processor) support"
+-	depends on ARCH_LAYERSCAPE || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	select REGMAP_MMIO
+-	help
+-	  This driver provides support to read the eFuses on Freescale
+-	  Layerscape SoC's. For example, the vendor provides a per part
+-	  unique ID there.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called layerscape-sfp.
+-
+ config NVMEM_LPC18XX_EEPROM
+ 	tristate "NXP LPC18XX EEPROM Memory Support"
+ 	depends on ARCH_LPC18XX || COMPILE_TEST
+@@ -144,34 +84,19 @@ config NVMEM_LPC18XX_OTP
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called nvmem_lpc18xx_otp.
+ 
+-config NVMEM_MESON_EFUSE
+-	tristate "Amlogic Meson GX eFuse Support"
+-	depends on (ARCH_MESON || COMPILE_TEST) && MESON_SM
+-	help
+-	  This is a driver to retrieve specific values from the eFuse found on
+-	  the Amlogic Meson GX SoCs.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem_meson_efuse.
+-
+-config NVMEM_MESON_MX_EFUSE
+-	tristate "Amlogic Meson6/Meson8/Meson8b eFuse Support"
+-	depends on ARCH_MESON || COMPILE_TEST
++config NVMEM_MXS_OCOTP
++	tristate "Freescale MXS On-Chip OTP Memory Support"
++	depends on ARCH_MXS || COMPILE_TEST
++	depends on HAS_IOMEM
+ 	help
+-	  This is a driver to retrieve specific values from the eFuse found on
+-	  the Amlogic Meson6, Meson8 and Meson8b SoCs.
++	  If you say Y here, you will get readonly access to the
++	  One Time Programmable memory pages that are stored
++	  on the Freescale i.MX23/i.MX28 processor.
+ 
+ 	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem_meson_mx_efuse.
+-
+-config NVMEM_MICROCHIP_OTPC
+-	tristate "Microchip OTPC support"
+-	depends on ARCH_AT91 || COMPILE_TEST
+-	help
+-	  This driver enable the OTP controller available on Microchip SAMA7G5
+-	  SoCs. It controls the access to the OTP memory connected to it.
++	  will be called nvmem-mxs-ocotp.
+ 
+-config NVMEM_MTK_EFUSE
++config MTK_EFUSE
+ 	tristate "Mediatek SoCs EFUSE support"
+ 	depends on ARCH_MEDIATEK || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -182,18 +107,6 @@ config NVMEM_MTK_EFUSE
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called efuse-mtk.
+ 
+-config NVMEM_MXS_OCOTP
+-	tristate "Freescale MXS On-Chip OTP Memory Support"
+-	depends on ARCH_MXS || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	help
+-	  If you say Y here, you will get readonly access to the
+-	  One Time Programmable memory pages that are stored
+-	  on the Freescale i.MX23/i.MX28 processor.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-mxs-ocotp.
+-
+ config NVMEM_NINTENDO_OTP
+ 	tristate "Nintendo Wii and Wii U OTP Support"
+ 	depends on WII || COMPILE_TEST
+@@ -206,7 +119,7 @@ config NVMEM_NINTENDO_OTP
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem-nintendo-otp.
+ 
+-config NVMEM_QCOM_QFPROM
++config QCOM_QFPROM
+ 	tristate "QCOM QFPROM Support"
+ 	depends on ARCH_QCOM || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -217,23 +130,15 @@ config NVMEM_QCOM_QFPROM
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem_qfprom.
+ 
+-config NVMEM_RAVE_SP_EEPROM
+-	tristate "Rave SP EEPROM Support"
+-	depends on RAVE_SP_CORE
+-	help
+-	  Say y here to enable Rave SP EEPROM support.
+-
+-config NVMEM_RMEM
+-	tristate "Reserved Memory Based Driver Support"
+-	depends on HAS_IOMEM
++config NVMEM_SPMI_SDAM
++	tristate "SPMI SDAM Support"
++	depends on SPMI
+ 	help
+-	  This driver maps reserved memory into an nvmem device. It might be
+-	  useful to expose information left by firmware in memory.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-rmem.
++	  This driver supports the Shared Direct Access Memory Module on
++	  Qualcomm Technologies, Inc. PMICs. It provides the clients
++	  an interface to read/write to the SDAM module's shared memory.
+ 
+-config NVMEM_ROCKCHIP_EFUSE
++config ROCKCHIP_EFUSE
+ 	tristate "Rockchip eFuse Support"
+ 	depends on ARCH_ROCKCHIP || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -244,7 +149,7 @@ config NVMEM_ROCKCHIP_EFUSE
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem_rockchip_efuse.
+ 
+-config NVMEM_ROCKCHIP_OTP
++config ROCKCHIP_OTP
+ 	tristate "Rockchip OTP controller support"
+ 	depends on ARCH_ROCKCHIP || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -255,59 +160,21 @@ config NVMEM_ROCKCHIP_OTP
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem_rockchip_otp.
+ 
+-config NVMEM_SC27XX_EFUSE
+-	tristate "Spreadtrum SC27XX eFuse Support"
+-	depends on MFD_SC27XX_PMIC || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	help
+-	  This is a simple driver to dump specified values of Spreadtrum
+-	  SC27XX PMICs from eFuse.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-sc27xx-efuse.
+-
+-config NVMEM_SNVS_LPGPR
+-	tristate "Support for Low Power General Purpose Register"
+-	depends on ARCH_MXC || COMPILE_TEST
+-	help
+-	  This is a driver for Low Power General Purpose Register (LPGPR) available on
+-	  i.MX6 and i.MX7 SoCs in Secure Non-Volatile Storage (SNVS) of this chip.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-snvs-lpgpr.
+-
+-config NVMEM_SPMI_SDAM
+-	tristate "SPMI SDAM Support"
+-	depends on SPMI
+-	help
+-	  This driver supports the Shared Direct Access Memory Module on
+-	  Qualcomm Technologies, Inc. PMICs. It provides the clients
+-	  an interface to read/write to the SDAM module's shared memory.
+-
+-config NVMEM_SPRD_EFUSE
+-	tristate "Spreadtrum SoC eFuse Support"
+-	depends on ARCH_SPRD || COMPILE_TEST
++config NVMEM_BCM_OCOTP
++	tristate "Broadcom On-Chip OTP Controller support"
++	depends on ARCH_BCM_IPROC || COMPILE_TEST
+ 	depends on HAS_IOMEM
++	default ARCH_BCM_IPROC
+ 	help
+-	  This is a simple driver to dump specified values of Spreadtrum
+-	  SoCs from eFuse.
++	  Say y here to enable read/write access to the Broadcom OTP
++	  controller.
+ 
+ 	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-sprd-efuse.
+-
+-config NVMEM_STM32_BSEC_OPTEE_TA
+-	def_bool NVMEM_STM32_ROMEM && OPTEE
+-	help
+-	  Say y here to enable the accesses to STM32MP SoC OTPs by the OP-TEE
+-	  trusted application STM32MP BSEC.
+-
+-	  This library is a used by stm32-romem driver or included in the module
+-	  called nvmem-stm32-romem.
++	  will be called nvmem-bcm-ocotp.
+ 
+ config NVMEM_STM32_ROMEM
+ 	tristate "STMicroelectronics STM32 factory-programmed memory support"
+ 	depends on ARCH_STM32 || COMPILE_TEST
+-	depends on OPTEE || !OPTEE
+ 	help
+ 	  Say y here to enable read-only access for STMicroelectronics STM32
+ 	  factory-programmed memory area.
+@@ -315,18 +182,6 @@ config NVMEM_STM32_ROMEM
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem-stm32-romem.
+ 
+-config NVMEM_SUNPLUS_OCOTP
+-	tristate "Sunplus SoC OTP support"
+-	depends on SOC_SP7021 || COMPILE_TEST
+-	depends on HAS_IOMEM
+-	help
+-	  This is a driver for the On-chip OTP controller (OCOTP) available
+-	  on Sunplus SoCs. It provides access to 128 bytes of one-time
+-	  programmable eFuse.
+-
+-	  This driver can also be built as a module. If so, the module
+-	  will be called nvmem-sunplus-ocotp.
+-
+ config NVMEM_SUNXI_SID
+ 	tristate "Allwinner SoCs SID support"
+ 	depends on ARCH_SUNXI
+@@ -337,21 +192,7 @@ config NVMEM_SUNXI_SID
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem_sunxi_sid.
+ 
+-config NVMEM_U_BOOT_ENV
+-	tristate "U-Boot environment variables support"
+-	depends on OF && MTD
+-	select CRC32
+-	select GENERIC_NET_UTILS
+-	help
+-	  U-Boot stores its setup as environment variables. This driver adds
+-	  support for verifying & exporting such data. It also exposes variables
+-	  as NVMEM cells so they can be referenced by other drivers.
+-
+-	  Currently this drivers works only with env variables on top of MTD.
+-
+-	  If compiled as module it will be called nvmem_u-boot-env.
+-
+-config NVMEM_UNIPHIER_EFUSE
++config UNIPHIER_EFUSE
+ 	tristate "UniPhier SoCs eFuse support"
+ 	depends on ARCH_UNIPHIER || COMPILE_TEST
+ 	depends on HAS_IOMEM
+@@ -373,8 +214,55 @@ config NVMEM_VF610_OCOTP
+ 	  This driver can also be build as a module. If so, the module will
+ 	  be called nvmem-vf610-ocotp.
+ 
++config MESON_EFUSE
++	tristate "Amlogic Meson GX eFuse Support"
++	depends on (ARCH_MESON || COMPILE_TEST) && MESON_SM
++	help
++	  This is a driver to retrieve specific values from the eFuse found on
++	  the Amlogic Meson GX SoCs.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem_meson_efuse.
++
++config MESON_MX_EFUSE
++	tristate "Amlogic Meson6/Meson8/Meson8b eFuse Support"
++	depends on ARCH_MESON || COMPILE_TEST
++	help
++	  This is a driver to retrieve specific values from the eFuse found on
++	  the Amlogic Meson6, Meson8 and Meson8b SoCs.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem_meson_mx_efuse.
++
++config NVMEM_SNVS_LPGPR
++	tristate "Support for Low Power General Purpose Register"
++	depends on ARCH_MXC || COMPILE_TEST
++	help
++	  This is a driver for Low Power General Purpose Register (LPGPR) available on
++	  i.MX6 and i.MX7 SoCs in Secure Non-Volatile Storage (SNVS) of this chip.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem-snvs-lpgpr.
++
++config RAVE_SP_EEPROM
++	tristate "Rave SP EEPROM Support"
++	depends on RAVE_SP_CORE
++	help
++	  Say y here to enable Rave SP EEPROM support.
++
++config SC27XX_EFUSE
++	tristate "Spreadtrum SC27XX eFuse Support"
++	depends on MFD_SC27XX_PMIC || COMPILE_TEST
++	depends on HAS_IOMEM
++	help
++	  This is a simple driver to dump specified values of Spreadtrum
++	  SC27XX PMICs from eFuse.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem-sc27xx-efuse.
++
+ config NVMEM_ZYNQMP
+-	tristate "Xilinx ZYNQMP SoC nvmem firmware support"
++	bool "Xilinx ZYNQMP SoC nvmem firmware support"
+ 	depends on ARCH_ZYNQMP
+ 	help
+ 	  This is a driver to access hardware related data like
+@@ -383,4 +271,44 @@ config NVMEM_ZYNQMP
+ 
+ 	  If sure, say yes. If unsure, say no.
+ 
++config SPRD_EFUSE
++	tristate "Spreadtrum SoC eFuse Support"
++	depends on ARCH_SPRD || COMPILE_TEST
++	depends on HAS_IOMEM
++	help
++	  This is a simple driver to dump specified values of Spreadtrum
++	  SoCs from eFuse.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem-sprd-efuse.
++
++config NVMEM_RMEM
++	tristate "Reserved Memory Based Driver Support"
++	depends on HAS_IOMEM
++	help
++	  This driver maps reserved memory into an nvmem device. It might be
++	  useful to expose information left by firmware in memory.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem-rmem.
++
++config NVMEM_BRCM_NVRAM
++	tristate "Broadcom's NVRAM support"
++	depends on ARCH_BCM_5301X || COMPILE_TEST
++	depends on HAS_IOMEM
++	help
++	  This driver provides support for Broadcom's NVRAM that can be accessed
++	  using I/O mapping.
++
++config NVMEM_IMX_OCOTP_FSB_S400
++	tristate "i.MX FSB/S400-API ocotp fuse box support"
++	depends on IMX_EL_ENCLAVE
++	default y
++	help
++	  This is a driver for the ocotp fuse box which can be accessed by
++	  FSB and S400-API.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called nvmem-imx-ocotp-fsb-s400.
++
+ endif
+diff --git a/drivers/nvmem/Makefile b/drivers/nvmem/Makefile
+index f82431ec8..51e9bc310 100644
+--- a/drivers/nvmem/Makefile
++++ b/drivers/nvmem/Makefile
+@@ -5,73 +5,61 @@
+ 
+ obj-$(CONFIG_NVMEM)		+= nvmem_core.o
+ nvmem_core-y			:= core.o
+-obj-y				+= layouts/
+ 
+ # Devices
+-obj-$(CONFIG_NVMEM_APPLE_EFUSES)	+= nvmem-apple-efuses.o
+-nvmem-apple-efuses-y 			:= apple-efuses.o
+-obj-$(CONFIG_NVMEM_BCM_OCOTP)		+= nvmem-bcm-ocotp.o
+-nvmem-bcm-ocotp-y			:= bcm-ocotp.o
+-obj-$(CONFIG_NVMEM_BRCM_NVRAM)		+= nvmem_brcm_nvram.o
+-nvmem_brcm_nvram-y			:= brcm_nvram.o
+-obj-$(CONFIG_NVMEM_IMX_IIM)		+= nvmem-imx-iim.o
+-nvmem-imx-iim-y				:= imx-iim.o
+-obj-$(CONFIG_NVMEM_IMX_OCOTP)		+= nvmem-imx-ocotp.o
+-nvmem-imx-ocotp-y			:= imx-ocotp.o
++obj-$(CONFIG_NVMEM_BCM_OCOTP)	+= nvmem-bcm-ocotp.o
++nvmem-bcm-ocotp-y		:= bcm-ocotp.o
++obj-$(CONFIG_NVMEM_IMX_IIM)	+= nvmem-imx-iim.o
++nvmem-imx-iim-y			:= imx-iim.o
++obj-$(CONFIG_NVMEM_IMX_OCOTP)	+= nvmem-imx-ocotp.o
++nvmem-imx-ocotp-y		:= imx-ocotp.o
+ obj-$(CONFIG_NVMEM_IMX_OCOTP_SCU)	+= nvmem-imx-ocotp-scu.o
+-nvmem-imx-ocotp-scu-y			:= imx-ocotp-scu.o
+-obj-$(CONFIG_NVMEM_JZ4780_EFUSE)	+= nvmem_jz4780_efuse.o
+-nvmem_jz4780_efuse-y			:= jz4780-efuse.o
+-obj-$(CONFIG_NVMEM_LAN9662_OTPC)	+= nvmem-lan9662-otpc.o
+-nvmem-lan9662-otpc-y		:= lan9662-otpc.o
+-obj-$(CONFIG_NVMEM_LAYERSCAPE_SFP)	+= nvmem-layerscape-sfp.o
+-nvmem-layerscape-sfp-y			:= layerscape-sfp.o
++nvmem-imx-ocotp-scu-y		:= imx-ocotp-scu.o
++obj-$(CONFIG_JZ4780_EFUSE)		+= nvmem_jz4780_efuse.o
++nvmem_jz4780_efuse-y		:= jz4780-efuse.o
+ obj-$(CONFIG_NVMEM_LPC18XX_EEPROM)	+= nvmem_lpc18xx_eeprom.o
+-nvmem_lpc18xx_eeprom-y			:= lpc18xx_eeprom.o
+-obj-$(CONFIG_NVMEM_LPC18XX_OTP)		+= nvmem_lpc18xx_otp.o
+-nvmem_lpc18xx_otp-y			:= lpc18xx_otp.o
+-obj-$(CONFIG_NVMEM_MESON_EFUSE)		+= nvmem_meson_efuse.o
+-nvmem_meson_efuse-y			:= meson-efuse.o
+-obj-$(CONFIG_NVMEM_MESON_MX_EFUSE)	+= nvmem_meson_mx_efuse.o
+-nvmem_meson_mx_efuse-y			:= meson-mx-efuse.o
+-obj-$(CONFIG_NVMEM_MICROCHIP_OTPC)	+= nvmem-microchip-otpc.o
+-nvmem-microchip-otpc-y			:= microchip-otpc.o
+-obj-$(CONFIG_NVMEM_MTK_EFUSE)		+= nvmem_mtk-efuse.o
+-nvmem_mtk-efuse-y			:= mtk-efuse.o
+-obj-$(CONFIG_NVMEM_MXS_OCOTP)		+= nvmem-mxs-ocotp.o
+-nvmem-mxs-ocotp-y			:= mxs-ocotp.o
++nvmem_lpc18xx_eeprom-y	:= lpc18xx_eeprom.o
++obj-$(CONFIG_NVMEM_LPC18XX_OTP)	+= nvmem_lpc18xx_otp.o
++nvmem_lpc18xx_otp-y		:= lpc18xx_otp.o
++obj-$(CONFIG_NVMEM_MXS_OCOTP)	+= nvmem-mxs-ocotp.o
++nvmem-mxs-ocotp-y		:= mxs-ocotp.o
+ obj-$(CONFIG_NVMEM_NINTENDO_OTP)	+= nvmem-nintendo-otp.o
+-nvmem-nintendo-otp-y			:= nintendo-otp.o
+-obj-$(CONFIG_NVMEM_QCOM_QFPROM)		+= nvmem_qfprom.o
+-nvmem_qfprom-y				:= qfprom.o
+-obj-$(CONFIG_NVMEM_RAVE_SP_EEPROM)	+= nvmem-rave-sp-eeprom.o
+-nvmem-rave-sp-eeprom-y			:= rave-sp-eeprom.o
+-obj-$(CONFIG_NVMEM_RMEM) 		+= nvmem-rmem.o
+-nvmem-rmem-y				:= rmem.o
+-obj-$(CONFIG_NVMEM_ROCKCHIP_EFUSE)	+= nvmem_rockchip_efuse.o
+-nvmem_rockchip_efuse-y			:= rockchip-efuse.o
+-obj-$(CONFIG_NVMEM_ROCKCHIP_OTP)	+= nvmem-rockchip-otp.o
+-nvmem-rockchip-otp-y			:= rockchip-otp.o
+-obj-$(CONFIG_NVMEM_SC27XX_EFUSE)	+= nvmem-sc27xx-efuse.o
+-nvmem-sc27xx-efuse-y			:= sc27xx-efuse.o
+-obj-$(CONFIG_NVMEM_SNVS_LPGPR)		+= nvmem_snvs_lpgpr.o
+-nvmem_snvs_lpgpr-y			:= snvs_lpgpr.o
+-obj-$(CONFIG_NVMEM_SPMI_SDAM)		+= nvmem_qcom-spmi-sdam.o
+-nvmem_qcom-spmi-sdam-y			+= qcom-spmi-sdam.o
+-obj-$(CONFIG_NVMEM_SPRD_EFUSE)		+= nvmem_sprd_efuse.o
+-nvmem_sprd_efuse-y			:= sprd-efuse.o
+-obj-$(CONFIG_NVMEM_STM32_ROMEM)		+= nvmem_stm32_romem.o
+-nvmem_stm32_romem-y 			:= stm32-romem.o
+-nvmem_stm32_romem-$(CONFIG_NVMEM_STM32_BSEC_OPTEE_TA) += stm32-bsec-optee-ta.o
+-obj-$(CONFIG_NVMEM_SUNPLUS_OCOTP)	+= nvmem_sunplus_ocotp.o
+-nvmem_sunplus_ocotp-y			:= sunplus-ocotp.o
+-obj-$(CONFIG_NVMEM_SUNXI_SID)		+= nvmem_sunxi_sid.o
+-nvmem_sunxi_sid-y			:= sunxi_sid.o
+-obj-$(CONFIG_NVMEM_U_BOOT_ENV)		+= nvmem_u-boot-env.o
+-nvmem_u-boot-env-y			:= u-boot-env.o
+-obj-$(CONFIG_NVMEM_UNIPHIER_EFUSE)	+= nvmem-uniphier-efuse.o
+-nvmem-uniphier-efuse-y			:= uniphier-efuse.o
+-obj-$(CONFIG_NVMEM_VF610_OCOTP)		+= nvmem-vf610-ocotp.o
+-nvmem-vf610-ocotp-y			:= vf610-ocotp.o
+-obj-$(CONFIG_NVMEM_ZYNQMP)		+= nvmem_zynqmp_nvmem.o
+-nvmem_zynqmp_nvmem-y			:= zynqmp_nvmem.o
++nvmem-nintendo-otp-y		:= nintendo-otp.o
++obj-$(CONFIG_MTK_EFUSE)		+= nvmem_mtk-efuse.o
++nvmem_mtk-efuse-y		:= mtk-efuse.o
++obj-$(CONFIG_QCOM_QFPROM)	+= nvmem_qfprom.o
++nvmem_qfprom-y			:= qfprom.o
++obj-$(CONFIG_NVMEM_SPMI_SDAM)	+= nvmem_qcom-spmi-sdam.o
++nvmem_qcom-spmi-sdam-y		+= qcom-spmi-sdam.o
++obj-$(CONFIG_ROCKCHIP_EFUSE)	+= nvmem_rockchip_efuse.o
++nvmem_rockchip_efuse-y		:= rockchip-efuse.o
++obj-$(CONFIG_ROCKCHIP_OTP)	+= nvmem-rockchip-otp.o
++nvmem-rockchip-otp-y		:= rockchip-otp.o
++obj-$(CONFIG_NVMEM_SUNXI_SID)	+= nvmem_sunxi_sid.o
++nvmem_stm32_romem-y 		:= stm32-romem.o
++obj-$(CONFIG_NVMEM_STM32_ROMEM) += nvmem_stm32_romem.o
++nvmem_sunxi_sid-y		:= sunxi_sid.o
++obj-$(CONFIG_UNIPHIER_EFUSE)	+= nvmem-uniphier-efuse.o
++nvmem-uniphier-efuse-y		:= uniphier-efuse.o
++obj-$(CONFIG_NVMEM_VF610_OCOTP)	+= nvmem-vf610-ocotp.o
++nvmem-vf610-ocotp-y		:= vf610-ocotp.o
++obj-$(CONFIG_MESON_EFUSE)	+= nvmem_meson_efuse.o
++nvmem_meson_efuse-y		:= meson-efuse.o
++obj-$(CONFIG_MESON_MX_EFUSE)	+= nvmem_meson_mx_efuse.o
++nvmem_meson_mx_efuse-y		:= meson-mx-efuse.o
++obj-$(CONFIG_NVMEM_SNVS_LPGPR)	+= nvmem_snvs_lpgpr.o
++nvmem_snvs_lpgpr-y		:= snvs_lpgpr.o
++obj-$(CONFIG_RAVE_SP_EEPROM)	+= nvmem-rave-sp-eeprom.o
++nvmem-rave-sp-eeprom-y		:= rave-sp-eeprom.o
++obj-$(CONFIG_SC27XX_EFUSE)	+= nvmem-sc27xx-efuse.o
++nvmem-sc27xx-efuse-y		:= sc27xx-efuse.o
++obj-$(CONFIG_NVMEM_ZYNQMP)	+= nvmem_zynqmp_nvmem.o
++nvmem_zynqmp_nvmem-y		:= zynqmp_nvmem.o
++obj-$(CONFIG_SPRD_EFUSE)	+= nvmem_sprd_efuse.o
++nvmem_sprd_efuse-y		:= sprd-efuse.o
++obj-$(CONFIG_NVMEM_RMEM) 	+= nvmem-rmem.o
++nvmem-rmem-y			:= rmem.o
++obj-$(CONFIG_NVMEM_BRCM_NVRAM)	+= nvmem_brcm_nvram.o
++nvmem_brcm_nvram-y		:= brcm_nvram.o
++obj-$(CONFIG_NVMEM_IMX_OCOTP_FSB_S400) += nvmem-imx-ocotp-fsb-s400.o
++nvmem-imx-ocotp-fsb-s400-y		:= imx-ocotp-fsb-s400.o
+diff --git a/drivers/nvmem/core.c b/drivers/nvmem/core.c
+index 27589d606..fb7840c73 100644
+--- a/drivers/nvmem/core.c
++++ b/drivers/nvmem/core.c
+@@ -17,7 +17,6 @@
+ #include <linux/nvmem-provider.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/of.h>
+-#include <linux/of_device.h>
+ #include <linux/slab.h>
+ 
+ struct nvmem_device {
+@@ -40,33 +39,24 @@ struct nvmem_device {
+ 	nvmem_reg_read_t	reg_read;
+ 	nvmem_reg_write_t	reg_write;
+ 	struct gpio_desc	*wp_gpio;
+-	struct nvmem_layout	*layout;
+ 	void *priv;
+ };
+ 
+ #define to_nvmem_device(d) container_of(d, struct nvmem_device, dev)
+ 
+ #define FLAG_COMPAT		BIT(0)
+-struct nvmem_cell_entry {
++
++struct nvmem_cell {
+ 	const char		*name;
+ 	int			offset;
+-	size_t			raw_len;
+ 	int			bytes;
+ 	int			bit_offset;
+ 	int			nbits;
+-	nvmem_cell_post_process_t read_post_process;
+-	void			*priv;
+ 	struct device_node	*np;
+ 	struct nvmem_device	*nvmem;
+ 	struct list_head	node;
+ };
+ 
+-struct nvmem_cell {
+-	struct nvmem_cell_entry *entry;
+-	const char		*id;
+-	int			index;
+-};
+-
+ static DEFINE_MUTEX(nvmem_mutex);
+ static DEFINE_IDA(nvmem_ida);
+ 
+@@ -78,9 +68,6 @@ static LIST_HEAD(nvmem_lookup_list);
+ 
+ static BLOCKING_NOTIFIER_HEAD(nvmem_notifier);
+ 
+-static DEFINE_SPINLOCK(nvmem_layout_lock);
+-static LIST_HEAD(nvmem_layouts);
+-
+ static int __nvmem_reg_read(struct nvmem_device *nvmem, unsigned int offset,
+ 			    void *val, size_t bytes)
+ {
+@@ -437,7 +424,7 @@ static struct bus_type nvmem_bus_type = {
+ 	.name		= "nvmem",
+ };
+ 
+-static void nvmem_cell_entry_drop(struct nvmem_cell_entry *cell)
++static void nvmem_cell_drop(struct nvmem_cell *cell)
+ {
+ 	blocking_notifier_call_chain(&nvmem_notifier, NVMEM_CELL_REMOVE, cell);
+ 	mutex_lock(&nvmem_mutex);
+@@ -450,13 +437,13 @@ static void nvmem_cell_entry_drop(struct nvmem_cell_entry *cell)
+ 
+ static void nvmem_device_remove_all_cells(const struct nvmem_device *nvmem)
+ {
+-	struct nvmem_cell_entry *cell, *p;
++	struct nvmem_cell *cell, *p;
+ 
+ 	list_for_each_entry_safe(cell, p, &nvmem->cells, node)
+-		nvmem_cell_entry_drop(cell);
++		nvmem_cell_drop(cell);
+ }
+ 
+-static void nvmem_cell_entry_add(struct nvmem_cell_entry *cell)
++static void nvmem_cell_add(struct nvmem_cell *cell)
+ {
+ 	mutex_lock(&nvmem_mutex);
+ 	list_add_tail(&cell->node, &cell->nvmem->cells);
+@@ -464,21 +451,17 @@ static void nvmem_cell_entry_add(struct nvmem_cell_entry *cell)
+ 	blocking_notifier_call_chain(&nvmem_notifier, NVMEM_CELL_ADD, cell);
+ }
+ 
+-static int nvmem_cell_info_to_nvmem_cell_entry_nodup(struct nvmem_device *nvmem,
+-						     const struct nvmem_cell_info *info,
+-						     struct nvmem_cell_entry *cell)
++static int nvmem_cell_info_to_nvmem_cell_nodup(struct nvmem_device *nvmem,
++					const struct nvmem_cell_info *info,
++					struct nvmem_cell *cell)
+ {
+ 	cell->nvmem = nvmem;
+ 	cell->offset = info->offset;
+-	cell->raw_len = info->raw_len ?: info->bytes;
+ 	cell->bytes = info->bytes;
+ 	cell->name = info->name;
+-	cell->read_post_process = info->read_post_process;
+-	cell->priv = info->priv;
+ 
+ 	cell->bit_offset = info->bit_offset;
+ 	cell->nbits = info->nbits;
+-	cell->np = info->np;
+ 
+ 	if (cell->nbits)
+ 		cell->bytes = DIV_ROUND_UP(cell->nbits + cell->bit_offset,
+@@ -494,13 +477,13 @@ static int nvmem_cell_info_to_nvmem_cell_entry_nodup(struct nvmem_device *nvmem,
+ 	return 0;
+ }
+ 
+-static int nvmem_cell_info_to_nvmem_cell_entry(struct nvmem_device *nvmem,
+-					       const struct nvmem_cell_info *info,
+-					       struct nvmem_cell_entry *cell)
++static int nvmem_cell_info_to_nvmem_cell(struct nvmem_device *nvmem,
++				const struct nvmem_cell_info *info,
++				struct nvmem_cell *cell)
+ {
+ 	int err;
+ 
+-	err = nvmem_cell_info_to_nvmem_cell_entry_nodup(nvmem, info, cell);
++	err = nvmem_cell_info_to_nvmem_cell_nodup(nvmem, info, cell);
+ 	if (err)
+ 		return err;
+ 
+@@ -511,36 +494,6 @@ static int nvmem_cell_info_to_nvmem_cell_entry(struct nvmem_device *nvmem,
+ 	return 0;
+ }
+ 
+-/**
+- * nvmem_add_one_cell() - Add one cell information to an nvmem device
+- *
+- * @nvmem: nvmem device to add cells to.
+- * @info: nvmem cell info to add to the device
+- *
+- * Return: 0 or negative error code on failure.
+- */
+-int nvmem_add_one_cell(struct nvmem_device *nvmem,
+-		       const struct nvmem_cell_info *info)
+-{
+-	struct nvmem_cell_entry *cell;
+-	int rval;
+-
+-	cell = kzalloc(sizeof(*cell), GFP_KERNEL);
+-	if (!cell)
+-		return -ENOMEM;
+-
+-	rval = nvmem_cell_info_to_nvmem_cell_entry(nvmem, info, cell);
+-	if (rval) {
+-		kfree(cell);
+-		return rval;
+-	}
+-
+-	nvmem_cell_entry_add(cell);
+-
+-	return 0;
+-}
+-EXPORT_SYMBOL_GPL(nvmem_add_one_cell);
+-
+ /**
+  * nvmem_add_cells() - Add cell information to an nvmem device
+  *
+@@ -554,15 +507,40 @@ static int nvmem_add_cells(struct nvmem_device *nvmem,
+ 		    const struct nvmem_cell_info *info,
+ 		    int ncells)
+ {
++	struct nvmem_cell **cells;
+ 	int i, rval;
+ 
++	cells = kcalloc(ncells, sizeof(*cells), GFP_KERNEL);
++	if (!cells)
++		return -ENOMEM;
++
+ 	for (i = 0; i < ncells; i++) {
+-		rval = nvmem_add_one_cell(nvmem, &info[i]);
+-		if (rval)
+-			return rval;
++		cells[i] = kzalloc(sizeof(**cells), GFP_KERNEL);
++		if (!cells[i]) {
++			rval = -ENOMEM;
++			goto err;
++		}
++
++		rval = nvmem_cell_info_to_nvmem_cell(nvmem, &info[i], cells[i]);
++		if (rval) {
++			kfree(cells[i]);
++			goto err;
++		}
++
++		nvmem_cell_add(cells[i]);
+ 	}
+ 
++	/* remove tmp array */
++	kfree(cells);
++
+ 	return 0;
++err:
++	while (i--)
++		nvmem_cell_drop(cells[i]);
++
++	kfree(cells);
++
++	return rval;
+ }
+ 
+ /**
+@@ -595,7 +573,7 @@ static int nvmem_add_cells_from_table(struct nvmem_device *nvmem)
+ {
+ 	const struct nvmem_cell_info *info;
+ 	struct nvmem_cell_table *table;
+-	struct nvmem_cell_entry *cell;
++	struct nvmem_cell *cell;
+ 	int rval = 0, i;
+ 
+ 	mutex_lock(&nvmem_cell_mutex);
+@@ -610,13 +588,15 @@ static int nvmem_add_cells_from_table(struct nvmem_device *nvmem)
+ 					goto out;
+ 				}
+ 
+-				rval = nvmem_cell_info_to_nvmem_cell_entry(nvmem, info, cell);
++				rval = nvmem_cell_info_to_nvmem_cell(nvmem,
++								     info,
++								     cell);
+ 				if (rval) {
+ 					kfree(cell);
+ 					goto out;
+ 				}
+ 
+-				nvmem_cell_entry_add(cell);
++				nvmem_cell_add(cell);
+ 			}
+ 		}
+ 	}
+@@ -626,10 +606,10 @@ static int nvmem_add_cells_from_table(struct nvmem_device *nvmem)
+ 	return rval;
+ }
+ 
+-static struct nvmem_cell_entry *
+-nvmem_find_cell_entry_by_name(struct nvmem_device *nvmem, const char *cell_id)
++static struct nvmem_cell *
++nvmem_find_cell_by_name(struct nvmem_device *nvmem, const char *cell_id)
+ {
+-	struct nvmem_cell_entry *iter, *cell = NULL;
++	struct nvmem_cell *iter, *cell = NULL;
+ 
+ 	mutex_lock(&nvmem_mutex);
+ 	list_for_each_entry(iter, &nvmem->cells, node) {
+@@ -698,15 +678,15 @@ static int nvmem_validate_keepouts(struct nvmem_device *nvmem)
+ 
+ static int nvmem_add_cells_from_of(struct nvmem_device *nvmem)
+ {
+-	struct nvmem_layout *layout = nvmem->layout;
++	struct device_node *parent, *child;
+ 	struct device *dev = &nvmem->dev;
+-	struct device_node *child;
++	struct nvmem_cell *cell;
+ 	const __be32 *addr;
+-	int len, ret;
++	int len;
+ 
+-	for_each_child_of_node(dev->of_node, child) {
+-		struct nvmem_cell_info info = {0};
++	parent = dev->of_node;
+ 
++	for_each_child_of_node(parent, child) {
+ 		addr = of_get_property(child, "reg", &len);
+ 		if (!addr)
+ 			continue;
+@@ -716,134 +696,45 @@ static int nvmem_add_cells_from_of(struct nvmem_device *nvmem)
+ 			return -EINVAL;
+ 		}
+ 
+-		info.offset = be32_to_cpup(addr++);
+-		info.bytes = be32_to_cpup(addr);
+-		info.name = kasprintf(GFP_KERNEL, "%pOFn", child);
++		cell = kzalloc(sizeof(*cell), GFP_KERNEL);
++		if (!cell) {
++			of_node_put(child);
++			return -ENOMEM;
++		}
++
++		cell->nvmem = nvmem;
++		cell->offset = be32_to_cpup(addr++);
++		cell->bytes = be32_to_cpup(addr);
++		cell->name = kasprintf(GFP_KERNEL, "%pOFn", child);
+ 
+ 		addr = of_get_property(child, "bits", &len);
+ 		if (addr && len == (2 * sizeof(u32))) {
+-			info.bit_offset = be32_to_cpup(addr++);
+-			info.nbits = be32_to_cpup(addr);
++			cell->bit_offset = be32_to_cpup(addr++);
++			cell->nbits = be32_to_cpup(addr);
+ 		}
+ 
+-		info.np = of_node_get(child);
++		if (cell->nbits)
++			cell->bytes = DIV_ROUND_UP(
++					cell->nbits + cell->bit_offset,
++					BITS_PER_BYTE);
+ 
+-		if (layout && layout->fixup_cell_info)
+-			layout->fixup_cell_info(nvmem, layout, &info);
+-
+-		ret = nvmem_add_one_cell(nvmem, &info);
+-		kfree(info.name);
+-		if (ret) {
++		if (!IS_ALIGNED(cell->offset, nvmem->stride)) {
++			dev_err(dev, "cell %s unaligned to nvmem stride %d\n",
++				cell->name, nvmem->stride);
++			/* Cells already added will be freed later. */
++			kfree_const(cell->name);
++			kfree(cell);
+ 			of_node_put(child);
+-			return ret;
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-int __nvmem_layout_register(struct nvmem_layout *layout, struct module *owner)
+-{
+-	layout->owner = owner;
+-
+-	spin_lock(&nvmem_layout_lock);
+-	list_add(&layout->node, &nvmem_layouts);
+-	spin_unlock(&nvmem_layout_lock);
+-
+-	return 0;
+-}
+-EXPORT_SYMBOL_GPL(__nvmem_layout_register);
+-
+-void nvmem_layout_unregister(struct nvmem_layout *layout)
+-{
+-	spin_lock(&nvmem_layout_lock);
+-	list_del(&layout->node);
+-	spin_unlock(&nvmem_layout_lock);
+-}
+-EXPORT_SYMBOL_GPL(nvmem_layout_unregister);
+-
+-static struct nvmem_layout *nvmem_layout_get(struct nvmem_device *nvmem)
+-{
+-	struct device_node *layout_np, *np = nvmem->dev.of_node;
+-	struct nvmem_layout *l, *layout = ERR_PTR(-EPROBE_DEFER);
+-
+-	layout_np = of_get_child_by_name(np, "nvmem-layout");
+-	if (!layout_np)
+-		return NULL;
+-
+-	/*
+-	 * In case the nvmem device was built-in while the layout was built as a
+-	 * module, we shall manually request the layout driver loading otherwise
+-	 * we'll never have any match.
+-	 */
+-	of_request_module(layout_np);
+-
+-	spin_lock(&nvmem_layout_lock);
+-
+-	list_for_each_entry(l, &nvmem_layouts, node) {
+-		if (of_match_node(l->of_match_table, layout_np)) {
+-			if (try_module_get(l->owner))
+-				layout = l;
+-
+-			break;
++			return -EINVAL;
+ 		}
+-	}
+-
+-	spin_unlock(&nvmem_layout_lock);
+-	of_node_put(layout_np);
+-
+-	return layout;
+-}
+-
+-static void nvmem_layout_put(struct nvmem_layout *layout)
+-{
+-	if (layout)
+-		module_put(layout->owner);
+-}
+ 
+-static int nvmem_add_cells_from_layout(struct nvmem_device *nvmem)
+-{
+-	struct nvmem_layout *layout = nvmem->layout;
+-	int ret;
+-
+-	if (layout && layout->add_cells) {
+-		ret = layout->add_cells(&nvmem->dev, nvmem, layout);
+-		if (ret)
+-			return ret;
++		cell->np = of_node_get(child);
++		nvmem_cell_add(cell);
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-#if IS_ENABLED(CONFIG_OF)
+-/**
+- * of_nvmem_layout_get_container() - Get OF node to layout container.
+- *
+- * @nvmem: nvmem device.
+- *
+- * Return: a node pointer with refcount incremented or NULL if no
+- * container exists. Use of_node_put() on it when done.
+- */
+-struct device_node *of_nvmem_layout_get_container(struct nvmem_device *nvmem)
+-{
+-	return of_get_child_by_name(nvmem->dev.of_node, "nvmem-layout");
+-}
+-EXPORT_SYMBOL_GPL(of_nvmem_layout_get_container);
+-#endif
+-
+-const void *nvmem_layout_get_match_data(struct nvmem_device *nvmem,
+-					struct nvmem_layout *layout)
+-{
+-	struct device_node __maybe_unused *layout_np;
+-	const struct of_device_id *match;
+-
+-	layout_np = of_nvmem_layout_get_container(nvmem);
+-	match = of_match_node(layout->of_match_table, layout_np);
+-
+-	return match ? match->data : NULL;
+-}
+-EXPORT_SYMBOL_GPL(nvmem_layout_get_match_data);
+-
+ /**
+  * nvmem_register() - Register a nvmem device for given nvmem_config.
+  * Also creates a binary entry in /sys/bus/nvmem/devices/dev-name/nvmem
+@@ -869,38 +760,37 @@ struct nvmem_device *nvmem_register(const struct nvmem_config *config)
+ 	if (!nvmem)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	rval = ida_alloc(&nvmem_ida, GFP_KERNEL);
++	rval  = ida_alloc(&nvmem_ida, GFP_KERNEL);
+ 	if (rval < 0) {
+ 		kfree(nvmem);
+ 		return ERR_PTR(rval);
+ 	}
+ 
+-	nvmem->id = rval;
+-
+-	nvmem->dev.type = &nvmem_provider_type;
+-	nvmem->dev.bus = &nvmem_bus_type;
+-	nvmem->dev.parent = config->dev;
+-
+-	device_initialize(&nvmem->dev);
+-
+-	if (!config->ignore_wp)
++	if (config->wp_gpio)
++		nvmem->wp_gpio = config->wp_gpio;
++	else if (!config->ignore_wp)
+ 		nvmem->wp_gpio = gpiod_get_optional(config->dev, "wp",
+ 						    GPIOD_OUT_HIGH);
+ 	if (IS_ERR(nvmem->wp_gpio)) {
++		ida_free(&nvmem_ida, nvmem->id);
+ 		rval = PTR_ERR(nvmem->wp_gpio);
+-		nvmem->wp_gpio = NULL;
+-		goto err_put_device;
++		kfree(nvmem);
++		return ERR_PTR(rval);
+ 	}
+ 
+ 	kref_init(&nvmem->refcnt);
+ 	INIT_LIST_HEAD(&nvmem->cells);
+ 
++	nvmem->id = rval;
+ 	nvmem->owner = config->owner;
+ 	if (!nvmem->owner && config->dev->driver)
+ 		nvmem->owner = config->dev->driver->owner;
+ 	nvmem->stride = config->stride ?: 1;
+ 	nvmem->word_size = config->word_size ?: 1;
+ 	nvmem->size = config->size;
++	nvmem->dev.type = &nvmem_provider_type;
++	nvmem->dev.bus = &nvmem_bus_type;
++	nvmem->dev.parent = config->dev;
+ 	nvmem->root_only = config->root_only;
+ 	nvmem->priv = config->priv;
+ 	nvmem->type = config->type;
+@@ -915,21 +805,18 @@ struct nvmem_device *nvmem_register(const struct nvmem_config *config)
+ 
+ 	switch (config->id) {
+ 	case NVMEM_DEVID_NONE:
+-		rval = dev_set_name(&nvmem->dev, "%s", config->name);
++		dev_set_name(&nvmem->dev, "%s", config->name);
+ 		break;
+ 	case NVMEM_DEVID_AUTO:
+-		rval = dev_set_name(&nvmem->dev, "%s%d", config->name, nvmem->id);
++		dev_set_name(&nvmem->dev, "%s%d", config->name, nvmem->id);
+ 		break;
+ 	default:
+-		rval = dev_set_name(&nvmem->dev, "%s%d",
++		dev_set_name(&nvmem->dev, "%s%d",
+ 			     config->name ? : "nvmem",
+ 			     config->name ? config->id : nvmem->id);
+ 		break;
+ 	}
+ 
+-	if (rval)
+-		goto err_put_device;
+-
+ 	nvmem->read_only = device_property_present(config->dev, "read-only") ||
+ 			   config->read_only || !nvmem->reg_write;
+ 
+@@ -939,33 +826,29 @@ struct nvmem_device *nvmem_register(const struct nvmem_config *config)
+ 
+ 	if (nvmem->nkeepout) {
+ 		rval = nvmem_validate_keepouts(nvmem);
+-		if (rval)
+-			goto err_put_device;
++		if (rval) {
++			ida_free(&nvmem_ida, nvmem->id);
++			kfree(nvmem);
++			return ERR_PTR(rval);
++		}
+ 	}
+ 
++	dev_dbg(&nvmem->dev, "Registering nvmem device %s\n", config->name);
++
++	rval = device_register(&nvmem->dev);
++	if (rval)
++		goto err_put_device;
++
+ 	if (config->compat) {
+ 		rval = nvmem_sysfs_setup_compat(nvmem, config);
+ 		if (rval)
+-			goto err_put_device;
+-	}
+-
+-	/*
+-	 * If the driver supplied a layout by config->layout, the module
+-	 * pointer will be NULL and nvmem_layout_put() will be a noop.
+-	 */
+-	nvmem->layout = config->layout ?: nvmem_layout_get(nvmem);
+-	if (IS_ERR(nvmem->layout)) {
+-		rval = PTR_ERR(nvmem->layout);
+-		nvmem->layout = NULL;
+-
+-		if (rval == -EPROBE_DEFER)
+-			goto err_teardown_compat;
++			goto err_device_del;
+ 	}
+ 
+ 	if (config->cells) {
+ 		rval = nvmem_add_cells(nvmem, config->cells, config->ncells);
+ 		if (rval)
+-			goto err_remove_cells;
++			goto err_teardown_compat;
+ 	}
+ 
+ 	rval = nvmem_add_cells_from_table(nvmem);
+@@ -976,26 +859,17 @@ struct nvmem_device *nvmem_register(const struct nvmem_config *config)
+ 	if (rval)
+ 		goto err_remove_cells;
+ 
+-	dev_dbg(&nvmem->dev, "Registering nvmem device %s\n", config->name);
+-
+-	rval = device_add(&nvmem->dev);
+-	if (rval)
+-		goto err_remove_cells;
+-
+-	rval = nvmem_add_cells_from_layout(nvmem);
+-	if (rval)
+-		goto err_remove_cells;
+-
+ 	blocking_notifier_call_chain(&nvmem_notifier, NVMEM_ADD, nvmem);
+ 
+ 	return nvmem;
+ 
+ err_remove_cells:
+ 	nvmem_device_remove_all_cells(nvmem);
+-	nvmem_layout_put(nvmem->layout);
+ err_teardown_compat:
+ 	if (config->compat)
+ 		nvmem_sysfs_remove_compat(nvmem, config);
++err_device_del:
++	device_del(&nvmem->dev);
+ err_put_device:
+ 	put_device(&nvmem->dev);
+ 
+@@ -1015,7 +889,6 @@ static void nvmem_device_release(struct kref *kref)
+ 		device_remove_bin_file(nvmem->base_dev, &nvmem->eeprom);
+ 
+ 	nvmem_device_remove_all_cells(nvmem);
+-	nvmem_layout_put(nvmem->layout);
+ 	device_unregister(&nvmem->dev);
+ }
+ 
+@@ -1026,14 +899,13 @@ static void nvmem_device_release(struct kref *kref)
+  */
+ void nvmem_unregister(struct nvmem_device *nvmem)
+ {
+-	if (nvmem)
+-		kref_put(&nvmem->refcnt, nvmem_device_release);
++	kref_put(&nvmem->refcnt, nvmem_device_release);
+ }
+ EXPORT_SYMBOL_GPL(nvmem_unregister);
+ 
+-static void devm_nvmem_unregister(void *nvmem)
++static void devm_nvmem_release(struct device *dev, void *res)
+ {
+-	nvmem_unregister(nvmem);
++	nvmem_unregister(*(struct nvmem_device **)res);
+ }
+ 
+ /**
+@@ -1050,21 +922,47 @@ static void devm_nvmem_unregister(void *nvmem)
+ struct nvmem_device *devm_nvmem_register(struct device *dev,
+ 					 const struct nvmem_config *config)
+ {
+-	struct nvmem_device *nvmem;
+-	int ret;
++	struct nvmem_device **ptr, *nvmem;
++
++	ptr = devres_alloc(devm_nvmem_release, sizeof(*ptr), GFP_KERNEL);
++	if (!ptr)
++		return ERR_PTR(-ENOMEM);
+ 
+ 	nvmem = nvmem_register(config);
+-	if (IS_ERR(nvmem))
+-		return nvmem;
+ 
+-	ret = devm_add_action_or_reset(dev, devm_nvmem_unregister, nvmem);
+-	if (ret)
+-		return ERR_PTR(ret);
++	if (!IS_ERR(nvmem)) {
++		*ptr = nvmem;
++		devres_add(dev, ptr);
++	} else {
++		devres_free(ptr);
++	}
+ 
+ 	return nvmem;
+ }
+ EXPORT_SYMBOL_GPL(devm_nvmem_register);
+ 
++static int devm_nvmem_match(struct device *dev, void *res, void *data)
++{
++	struct nvmem_device **r = res;
++
++	return *r == data;
++}
++
++/**
++ * devm_nvmem_unregister() - Unregister previously registered managed nvmem
++ * device.
++ *
++ * @dev: Device that uses the nvmem device.
++ * @nvmem: Pointer to previously registered nvmem device.
++ *
++ * Return: Will be negative on error or zero on success.
++ */
++int devm_nvmem_unregister(struct device *dev, struct nvmem_device *nvmem)
++{
++	return devres_release(dev, devm_nvmem_release, devm_nvmem_match, nvmem);
++}
++EXPORT_SYMBOL(devm_nvmem_unregister);
++
+ static struct nvmem_device *__nvmem_device_get(void *data,
+ 			int (*match)(struct device *dev, const void *data))
+ {
+@@ -1246,35 +1144,9 @@ struct nvmem_device *devm_nvmem_device_get(struct device *dev, const char *id)
+ }
+ EXPORT_SYMBOL_GPL(devm_nvmem_device_get);
+ 
+-static struct nvmem_cell *nvmem_create_cell(struct nvmem_cell_entry *entry,
+-					    const char *id, int index)
+-{
+-	struct nvmem_cell *cell;
+-	const char *name = NULL;
+-
+-	cell = kzalloc(sizeof(*cell), GFP_KERNEL);
+-	if (!cell)
+-		return ERR_PTR(-ENOMEM);
+-
+-	if (id) {
+-		name = kstrdup_const(id, GFP_KERNEL);
+-		if (!name) {
+-			kfree(cell);
+-			return ERR_PTR(-ENOMEM);
+-		}
+-	}
+-
+-	cell->id = name;
+-	cell->entry = entry;
+-	cell->index = index;
+-
+-	return cell;
+-}
+-
+ static struct nvmem_cell *
+ nvmem_cell_get_from_lookup(struct device *dev, const char *con_id)
+ {
+-	struct nvmem_cell_entry *cell_entry;
+ 	struct nvmem_cell *cell = ERR_PTR(-ENOENT);
+ 	struct nvmem_cell_lookup *lookup;
+ 	struct nvmem_device *nvmem;
+@@ -1299,15 +1171,11 @@ nvmem_cell_get_from_lookup(struct device *dev, const char *con_id)
+ 				break;
+ 			}
+ 
+-			cell_entry = nvmem_find_cell_entry_by_name(nvmem,
+-								   lookup->cell_name);
+-			if (!cell_entry) {
++			cell = nvmem_find_cell_by_name(nvmem,
++						       lookup->cell_name);
++			if (!cell) {
+ 				__nvmem_device_put(nvmem);
+ 				cell = ERR_PTR(-ENOENT);
+-			} else {
+-				cell = nvmem_create_cell(cell_entry, con_id, 0);
+-				if (IS_ERR(cell))
+-					__nvmem_device_put(nvmem);
+ 			}
+ 			break;
+ 		}
+@@ -1318,10 +1186,10 @@ nvmem_cell_get_from_lookup(struct device *dev, const char *con_id)
+ }
+ 
+ #if IS_ENABLED(CONFIG_OF)
+-static struct nvmem_cell_entry *
+-nvmem_find_cell_entry_by_node(struct nvmem_device *nvmem, struct device_node *np)
++static struct nvmem_cell *
++nvmem_find_cell_by_node(struct nvmem_device *nvmem, struct device_node *np)
+ {
+-	struct nvmem_cell_entry *iter, *cell = NULL;
++	struct nvmem_cell *iter, *cell = NULL;
+ 
+ 	mutex_lock(&nvmem_mutex);
+ 	list_for_each_entry(iter, &nvmem->cells, node) {
+@@ -1351,63 +1219,32 @@ struct nvmem_cell *of_nvmem_cell_get(struct device_node *np, const char *id)
+ {
+ 	struct device_node *cell_np, *nvmem_np;
+ 	struct nvmem_device *nvmem;
+-	struct nvmem_cell_entry *cell_entry;
+ 	struct nvmem_cell *cell;
+-	struct of_phandle_args cell_spec;
+ 	int index = 0;
+-	int cell_index = 0;
+-	int ret;
+ 
+ 	/* if cell name exists, find index to the name */
+ 	if (id)
+ 		index = of_property_match_string(np, "nvmem-cell-names", id);
+ 
+-	ret = of_parse_phandle_with_optional_args(np, "nvmem-cells",
+-						  "#nvmem-cell-cells",
+-						  index, &cell_spec);
+-	if (ret)
+-		return ERR_PTR(ret);
+-
+-	if (cell_spec.args_count > 1)
+-		return ERR_PTR(-EINVAL);
+-
+-	cell_np = cell_spec.np;
+-	if (cell_spec.args_count)
+-		cell_index = cell_spec.args[0];
++	cell_np = of_parse_phandle(np, "nvmem-cells", index);
++	if (!cell_np)
++		return ERR_PTR(-ENOENT);
+ 
+-	nvmem_np = of_get_parent(cell_np);
+-	if (!nvmem_np) {
+-		of_node_put(cell_np);
++	nvmem_np = of_get_next_parent(cell_np);
++	if (!nvmem_np)
+ 		return ERR_PTR(-EINVAL);
+-	}
+-
+-	/* nvmem layouts produce cells within the nvmem-layout container */
+-	if (of_node_name_eq(nvmem_np, "nvmem-layout")) {
+-		nvmem_np = of_get_next_parent(nvmem_np);
+-		if (!nvmem_np) {
+-			of_node_put(cell_np);
+-			return ERR_PTR(-EINVAL);
+-		}
+-	}
+ 
+ 	nvmem = __nvmem_device_get(nvmem_np, device_match_of_node);
+ 	of_node_put(nvmem_np);
+-	if (IS_ERR(nvmem)) {
+-		of_node_put(cell_np);
++	if (IS_ERR(nvmem))
+ 		return ERR_CAST(nvmem);
+-	}
+ 
+-	cell_entry = nvmem_find_cell_entry_by_node(nvmem, cell_np);
+-	of_node_put(cell_np);
+-	if (!cell_entry) {
++	cell = nvmem_find_cell_by_node(nvmem, cell_np);
++	if (!cell) {
+ 		__nvmem_device_put(nvmem);
+ 		return ERR_PTR(-ENOENT);
+ 	}
+ 
+-	cell = nvmem_create_cell(cell_entry, id, cell_index);
+-	if (IS_ERR(cell))
+-		__nvmem_device_put(nvmem);
+-
+ 	return cell;
+ }
+ EXPORT_SYMBOL_GPL(of_nvmem_cell_get);
+@@ -1513,17 +1350,13 @@ EXPORT_SYMBOL(devm_nvmem_cell_put);
+  */
+ void nvmem_cell_put(struct nvmem_cell *cell)
+ {
+-	struct nvmem_device *nvmem = cell->entry->nvmem;
+-
+-	if (cell->id)
+-		kfree_const(cell->id);
++	struct nvmem_device *nvmem = cell->nvmem;
+ 
+-	kfree(cell);
+ 	__nvmem_device_put(nvmem);
+ }
+ EXPORT_SYMBOL_GPL(nvmem_cell_put);
+ 
+-static void nvmem_shift_read_buffer_in_place(struct nvmem_cell_entry *cell, void *buf)
++static void nvmem_shift_read_buffer_in_place(struct nvmem_cell *cell, void *buf)
+ {
+ 	u8 *p, *b;
+ 	int i, extra, bit_offset = cell->bit_offset;
+@@ -1557,12 +1390,12 @@ static void nvmem_shift_read_buffer_in_place(struct nvmem_cell_entry *cell, void
+ }
+ 
+ static int __nvmem_cell_read(struct nvmem_device *nvmem,
+-			     struct nvmem_cell_entry *cell,
+-			     void *buf, size_t *len, const char *id, int index)
++		      struct nvmem_cell *cell,
++		      void *buf, size_t *len)
+ {
+ 	int rc;
+ 
+-	rc = nvmem_reg_read(nvmem, cell->offset, buf, cell->raw_len);
++	rc = nvmem_reg_read(nvmem, cell->offset, buf, cell->bytes);
+ 
+ 	if (rc)
+ 		return rc;
+@@ -1571,13 +1404,6 @@ static int __nvmem_cell_read(struct nvmem_device *nvmem,
+ 	if (cell->bit_offset || cell->nbits)
+ 		nvmem_shift_read_buffer_in_place(cell, buf);
+ 
+-	if (cell->read_post_process) {
+-		rc = cell->read_post_process(cell->priv, id, index,
+-					     cell->offset, buf, cell->raw_len);
+-		if (rc)
+-			return rc;
+-	}
+-
+ 	if (len)
+ 		*len = cell->bytes;
+ 
+@@ -1596,19 +1422,18 @@ static int __nvmem_cell_read(struct nvmem_device *nvmem,
+  */
+ void *nvmem_cell_read(struct nvmem_cell *cell, size_t *len)
+ {
+-	struct nvmem_cell_entry *entry = cell->entry;
+-	struct nvmem_device *nvmem = entry->nvmem;
++	struct nvmem_device *nvmem = cell->nvmem;
+ 	u8 *buf;
+ 	int rc;
+ 
+ 	if (!nvmem)
+ 		return ERR_PTR(-EINVAL);
+ 
+-	buf = kzalloc(max_t(size_t, entry->raw_len, entry->bytes), GFP_KERNEL);
++	buf = kzalloc(cell->bytes, GFP_KERNEL);
+ 	if (!buf)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	rc = __nvmem_cell_read(nvmem, cell->entry, buf, len, cell->id, cell->index);
++	rc = __nvmem_cell_read(nvmem, cell, buf, len);
+ 	if (rc) {
+ 		kfree(buf);
+ 		return ERR_PTR(rc);
+@@ -1618,7 +1443,7 @@ void *nvmem_cell_read(struct nvmem_cell *cell, size_t *len)
+ }
+ EXPORT_SYMBOL_GPL(nvmem_cell_read);
+ 
+-static void *nvmem_cell_prepare_write_buffer(struct nvmem_cell_entry *cell,
++static void *nvmem_cell_prepare_write_buffer(struct nvmem_cell *cell,
+ 					     u8 *_buf, int len)
+ {
+ 	struct nvmem_device *nvmem = cell->nvmem;
+@@ -1671,7 +1496,16 @@ static void *nvmem_cell_prepare_write_buffer(struct nvmem_cell_entry *cell,
+ 	return ERR_PTR(rc);
+ }
+ 
+-static int __nvmem_cell_entry_write(struct nvmem_cell_entry *cell, void *buf, size_t len)
++/**
++ * nvmem_cell_write() - Write to a given nvmem cell
++ *
++ * @cell: nvmem cell to be written.
++ * @buf: Buffer to be written.
++ * @len: length of buffer to be written to nvmem cell.
++ *
++ * Return: length of bytes written or negative on failure.
++ */
++int nvmem_cell_write(struct nvmem_cell *cell, void *buf, size_t len)
+ {
+ 	struct nvmem_device *nvmem = cell->nvmem;
+ 	int rc;
+@@ -1680,14 +1514,6 @@ static int __nvmem_cell_entry_write(struct nvmem_cell_entry *cell, void *buf, si
+ 	    (cell->bit_offset == 0 && len != cell->bytes))
+ 		return -EINVAL;
+ 
+-	/*
+-	 * Any cells which have a read_post_process hook are read-only because
+-	 * we cannot reverse the operation and it might affect other cells,
+-	 * too.
+-	 */
+-	if (cell->read_post_process)
+-		return -EINVAL;
+-
+ 	if (cell->bit_offset || cell->nbits) {
+ 		buf = nvmem_cell_prepare_write_buffer(cell, buf, len);
+ 		if (IS_ERR(buf))
+@@ -1705,21 +1531,6 @@ static int __nvmem_cell_entry_write(struct nvmem_cell_entry *cell, void *buf, si
+ 
+ 	return len;
+ }
+-
+-/**
+- * nvmem_cell_write() - Write to a given nvmem cell
+- *
+- * @cell: nvmem cell to be written.
+- * @buf: Buffer to be written.
+- * @len: length of buffer to be written to nvmem cell.
+- *
+- * Return: length of bytes written or negative on failure.
+- */
+-int nvmem_cell_write(struct nvmem_cell *cell, void *buf, size_t len)
+-{
+-	return __nvmem_cell_entry_write(cell->entry, buf, len);
+-}
+-
+ EXPORT_SYMBOL_GPL(nvmem_cell_write);
+ 
+ static int nvmem_cell_read_common(struct device *dev, const char *cell_id,
+@@ -1822,7 +1633,7 @@ static const void *nvmem_cell_read_variable_common(struct device *dev,
+ 	if (IS_ERR(cell))
+ 		return cell;
+ 
+-	nbits = cell->entry->nbits;
++	nbits = cell->nbits;
+ 	buf = nvmem_cell_read(cell, len);
+ 	nvmem_cell_put(cell);
+ 	if (IS_ERR(buf))
+@@ -1918,18 +1729,18 @@ EXPORT_SYMBOL_GPL(nvmem_cell_read_variable_le_u64);
+ ssize_t nvmem_device_cell_read(struct nvmem_device *nvmem,
+ 			   struct nvmem_cell_info *info, void *buf)
+ {
+-	struct nvmem_cell_entry cell;
++	struct nvmem_cell cell;
+ 	int rc;
+ 	ssize_t len;
+ 
+ 	if (!nvmem)
+ 		return -EINVAL;
+ 
+-	rc = nvmem_cell_info_to_nvmem_cell_entry_nodup(nvmem, info, &cell);
++	rc = nvmem_cell_info_to_nvmem_cell_nodup(nvmem, info, &cell);
+ 	if (rc)
+ 		return rc;
+ 
+-	rc = __nvmem_cell_read(nvmem, &cell, buf, &len, NULL, 0);
++	rc = __nvmem_cell_read(nvmem, &cell, buf, &len);
+ 	if (rc)
+ 		return rc;
+ 
+@@ -1949,17 +1760,17 @@ EXPORT_SYMBOL_GPL(nvmem_device_cell_read);
+ int nvmem_device_cell_write(struct nvmem_device *nvmem,
+ 			    struct nvmem_cell_info *info, void *buf)
+ {
+-	struct nvmem_cell_entry cell;
++	struct nvmem_cell cell;
+ 	int rc;
+ 
+ 	if (!nvmem)
+ 		return -EINVAL;
+ 
+-	rc = nvmem_cell_info_to_nvmem_cell_entry_nodup(nvmem, info, &cell);
++	rc = nvmem_cell_info_to_nvmem_cell_nodup(nvmem, info, &cell);
+ 	if (rc)
+ 		return rc;
+ 
+-	return __nvmem_cell_entry_write(&cell, buf, cell.bytes);
++	return nvmem_cell_write(&cell, buf, cell.bytes);
+ }
+ EXPORT_SYMBOL_GPL(nvmem_device_cell_write);
+ 
+diff --git a/drivers/nvmem/imx-ocotp-fsb-s400.c b/drivers/nvmem/imx-ocotp-fsb-s400.c
+new file mode 100644
+index 000000000..ef043a27e
+--- /dev/null
++++ b/drivers/nvmem/imx-ocotp-fsb-s400.c
+@@ -0,0 +1,269 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2021 NXP
++ * Author: Alice Guo <alice.guo@nxp.com>
++ */
++
++#include <linux/dev_printk.h>
++#include <linux/errno.h>
++#include <linux/firmware/imx/ele_base_msg.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/nvmem-consumer.h>
++#include <linux/nvmem-provider.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++
++#define LOCK_CFG	0x01
++#define ECID		0x02
++#define UNIQ_ID		0x07
++#define OTFAD_CFG	0x17
++#define MAPPING_SIZE	0x20
++
++enum soc_type {
++	IMX8ULP,
++	IMX93,
++};
++
++struct bank_2_reg {
++	unsigned int bank;
++	unsigned int reg;
++	bool flag;
++};
++
++struct imx_fsb_s400_hw {
++	enum soc_type soc;
++	unsigned int fsb_otp_shadow;
++	const struct bank_2_reg fsb_bank_reg[MAPPING_SIZE];
++};
++
++struct imx_fsb_s400_fuse {
++	void __iomem *regs;
++	struct nvmem_config config;
++	struct mutex lock;
++	const struct imx_fsb_s400_hw *hw;
++};
++
++static int read_words_via_s400_api(u32 *buf, unsigned int fuse_base, unsigned int num)
++{
++	unsigned int i;
++	int err = 0;
++
++	for (i = 0; i < num; i++)
++		err = read_common_fuse(fuse_base + i, buf + i);
++
++	return err;
++}
++
++static int read_words_via_fsb(void *priv, unsigned int bank, u32 *buf)
++{
++	struct imx_fsb_s400_fuse *fuse = priv;
++	void __iomem *regs = fuse->regs + fuse->hw->fsb_otp_shadow;
++	unsigned int i;
++	unsigned int reg_id = UINT_MAX;
++	unsigned int size = ARRAY_SIZE(fuse->hw->fsb_bank_reg);
++
++	for (i = 0; i < size; i++) {
++		if (fuse->hw->fsb_bank_reg[i].bank == bank) {
++			reg_id = fuse->hw->fsb_bank_reg[i].reg;
++			break;
++		}
++	}
++
++	if (reg_id != UINT_MAX) {
++		size = fuse->hw->fsb_bank_reg[i].flag ? 4 : 8;
++
++		for (i = 0; i < size; i++) {
++			*buf = readl_relaxed(regs + (reg_id + i) * 4);
++			buf = buf + 1;
++		}
++	}
++
++	return 0;
++}
++
++static int read_nwords_via_fsb(void __iomem *regs, u32 *buf, u32 fuse_base, u32 num)
++{
++	unsigned int i;
++
++	for (i = 0; i < num; i++) {
++		*buf = readl_relaxed(regs + (fuse_base + i) * 4);
++		buf = buf + 1;
++	}
++
++	return 0;
++}
++
++static int fsb_s400_fuse_read(void *priv, unsigned int offset, void *val,
++			      size_t bytes)
++{
++	struct imx_fsb_s400_fuse *fuse = priv;
++	void __iomem *regs = fuse->regs + fuse->hw->fsb_otp_shadow;
++	unsigned int num_bytes, bank;
++	u32 *buf;
++	int err;
++
++	num_bytes = round_up(2048, 4);
++	buf = kzalloc(num_bytes, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	err = -EINVAL;
++
++	mutex_lock(&fuse->lock);
++	if (fuse->hw->soc == IMX8ULP) {
++		for (bank = 0; bank < 63; bank++) {
++			switch (bank) {
++			case 0:
++				break;
++			case LOCK_CFG:
++				err = read_words_via_s400_api(&buf[8], 8, 8);
++				if (err)
++					goto ret;
++				break;
++			case ECID:
++				err = read_words_via_s400_api(&buf[16], 16, 8);
++				if (err)
++					goto ret;
++				break;
++			case UNIQ_ID:
++				err = read_common_fuse(OTP_UNIQ_ID, &buf[56]);
++				if (err)
++					goto ret;
++				break;
++			case OTFAD_CFG:
++				err = read_common_fuse(OTFAD_CONFIG, &buf[184]);
++				if (err)
++					goto ret;
++				break;
++			default:
++				err = read_words_via_fsb(priv, bank, &buf[bank * 8]);
++				break;
++			}
++		}
++	} else if (fuse->hw->soc == IMX93) {
++		for (bank = 0; bank < 6; bank++)
++			read_nwords_via_fsb(regs, &buf[bank * 8], bank * 8, 8);
++
++		read_nwords_via_fsb(regs, &buf[48], 48, 4); /* OTP_UNIQ_ID */
++
++		err = read_words_via_s400_api(&buf[63], 63, 1);
++		if (err)
++			goto ret;
++
++		err = read_words_via_s400_api(&buf[128], 128, 16);
++		if (err)
++			goto ret;
++
++		err = read_words_via_s400_api(&buf[182], 182, 1);
++		if (err)
++			goto ret;
++
++		err = read_words_via_s400_api(&buf[188], 188, 1);
++		if (err)
++			goto ret;
++
++		for (bank = 39; bank < 64; bank++)
++			read_nwords_via_fsb(regs, &buf[bank * 8], bank * 8, 8);
++	}
++
++	memcpy(val, (u8 *)(buf + offset), bytes);
++
++ret:
++	kfree(buf);
++	mutex_unlock(&fuse->lock);
++
++	return err;
++}
++
++static int imx_fsb_s400_fuse_probe(struct platform_device *pdev)
++{
++	struct imx_fsb_s400_fuse *fuse;
++	struct nvmem_device *nvmem;
++
++	fuse = devm_kzalloc(&pdev->dev, sizeof(*fuse), GFP_KERNEL);
++	if (!fuse)
++		return -ENOMEM;
++
++	fuse->regs = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(fuse->regs))
++		return PTR_ERR(fuse->regs);
++
++	fuse->config.dev = &pdev->dev;
++	fuse->config.name = "fsb_s400_fuse";
++	fuse->config.id = NVMEM_DEVID_AUTO;
++	fuse->config.owner = THIS_MODULE;
++	fuse->config.size = 2048; /* 64 Banks */
++	fuse->config.reg_read = fsb_s400_fuse_read;
++	fuse->config.priv = fuse;
++
++	nvmem = devm_nvmem_register(&pdev->dev, &fuse->config);
++	if (IS_ERR(nvmem)) {
++		dev_err(&pdev->dev, "failed to register fuse nvmem device\n");
++		return PTR_ERR(nvmem);
++	}
++
++	mutex_init(&fuse->lock);
++	fuse->hw = of_device_get_match_data(&pdev->dev);
++
++	dev_dbg(&pdev->dev, "fuse nvmem device registered successfully\n");
++
++	return 0;
++}
++
++static const struct imx_fsb_s400_hw imx8ulp_fsb_s400_hw = {
++	.soc = IMX8ULP,
++	.fsb_otp_shadow = 0x800,
++	.fsb_bank_reg = {
++		[0] = { 3, 0 },
++		[1] = { 4, 8 },
++		[2] = { 5, 16 },
++		[3] = { 6, 24 },
++		[4] = { 8, 80, true },
++		[5] = { 24, 84, true },
++		[6] = { 26, 88, true },
++		[7] = { 27, 92, true },
++		[8] = { 28, 96 },
++		[9] = { 29, 104 },
++		[10] = { 30, 112 },
++		[11] = { 31, 120 },
++		[12] = { 37, 128 },
++		[13] = { 38, 136 },
++		[14] = { 39, 144 },
++		[15] = { 40, 152 },
++		[16] = { 41, 160 },
++		[17] = { 42, 168 },
++		[18] = { 43, 176 },
++		[19] = { 44, 184 },
++		[20] = { 45, 192 },
++		[21] = { 46, 200 },
++	},
++};
++
++static const struct imx_fsb_s400_hw imx93_fsb_s400_hw = {
++	.soc = IMX93,
++	.fsb_otp_shadow = 0x8000,
++};
++
++static const struct of_device_id imx_fsb_s400_fuse_match[] = {
++	{ .compatible = "fsl,imx8ulp-ocotp", .data = &imx8ulp_fsb_s400_hw, },
++	{ .compatible = "fsl,imx93-ocotp", .data = &imx93_fsb_s400_hw, },
++	{},
++};
++
++static struct platform_driver imx_fsb_s400_fuse_driver = {
++	.driver = {
++		.name = "fsl-ocotp-fsb-s400",
++		.of_match_table = imx_fsb_s400_fuse_match,
++	},
++	.probe = imx_fsb_s400_fuse_probe,
++};
++MODULE_DEVICE_TABLE(of, imx_fsb_s400_fuse_match);
++module_platform_driver(imx_fsb_s400_fuse_driver);
++
++MODULE_AUTHOR("Alice Guo <alice.guo@nxp.com>");
++MODULE_DESCRIPTION("i.MX FSB/S400-API ocotp fuse box driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/nvmem/imx-ocotp.c b/drivers/nvmem/imx-ocotp.c
+index 57b2b2926..20c6157fc 100644
+--- a/drivers/nvmem/imx-ocotp.c
++++ b/drivers/nvmem/imx-ocotp.c
+@@ -98,7 +98,6 @@ struct ocotp_params {
+ 	unsigned int bank_address_words;
+ 	void (*set_timing)(struct ocotp_priv *priv);
+ 	struct ocotp_ctrl_reg ctrl;
+-	bool reverse_mac_address;
+ };
+ 
+ static int imx_ocotp_wait_for_busy(struct ocotp_priv *priv, u32 flags)
+@@ -223,20 +222,6 @@ static int imx_ocotp_read(void *context, unsigned int offset,
+ 	return ret;
+ }
+ 
+-static int imx_ocotp_cell_pp(void *context, const char *id, int index,
+-			     unsigned int offset, void *data, size_t bytes)
+-{
+-	u8 *buf = data;
+-	int i;
+-
+-	/* Deal with some post processing of nvmem cell data */
+-	if (id && !strcmp(id, "mac-address"))
+-		for (i = 0; i < bytes / 2; i++)
+-			swap(buf[i], buf[bytes - i - 1]);
+-
+-	return 0;
+-}
+-
+ static void imx_ocotp_set_imx6_timing(struct ocotp_priv *priv)
+ {
+ 	unsigned long clk_rate;
+@@ -550,7 +535,6 @@ static const struct ocotp_params imx8mq_params = {
+ 	.bank_address_words = 0,
+ 	.set_timing = imx_ocotp_set_imx6_timing,
+ 	.ctrl = IMX_OCOTP_BM_CTRL_DEFAULT,
+-	.reverse_mac_address = true,
+ };
+ 
+ static const struct ocotp_params imx8mm_params = {
+@@ -558,7 +542,6 @@ static const struct ocotp_params imx8mm_params = {
+ 	.bank_address_words = 0,
+ 	.set_timing = imx_ocotp_set_imx6_timing,
+ 	.ctrl = IMX_OCOTP_BM_CTRL_DEFAULT,
+-	.reverse_mac_address = true,
+ };
+ 
+ static const struct ocotp_params imx8mn_params = {
+@@ -566,7 +549,6 @@ static const struct ocotp_params imx8mn_params = {
+ 	.bank_address_words = 0,
+ 	.set_timing = imx_ocotp_set_imx6_timing,
+ 	.ctrl = IMX_OCOTP_BM_CTRL_DEFAULT,
+-	.reverse_mac_address = true,
+ };
+ 
+ static const struct ocotp_params imx8mp_params = {
+@@ -574,7 +556,6 @@ static const struct ocotp_params imx8mp_params = {
+ 	.bank_address_words = 0,
+ 	.set_timing = imx_ocotp_set_imx6_timing,
+ 	.ctrl = IMX_OCOTP_BM_CTRL_8MP,
+-	.reverse_mac_address = true,
+ };
+ 
+ static const struct of_device_id imx_ocotp_dt_ids[] = {
+@@ -594,17 +575,6 @@ static const struct of_device_id imx_ocotp_dt_ids[] = {
+ };
+ MODULE_DEVICE_TABLE(of, imx_ocotp_dt_ids);
+ 
+-static void imx_ocotp_fixup_cell_info(struct nvmem_device *nvmem,
+-				      struct nvmem_layout *layout,
+-				      struct nvmem_cell_info *cell)
+-{
+-	cell->read_post_process = imx_ocotp_cell_pp;
+-}
+-
+-struct nvmem_layout imx_ocotp_layout = {
+-	.fixup_cell_info = imx_ocotp_fixup_cell_info,
+-};
+-
+ static int imx_ocotp_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -629,9 +599,6 @@ static int imx_ocotp_probe(struct platform_device *pdev)
+ 	imx_ocotp_nvmem_config.size = 4 * priv->params->nregs;
+ 	imx_ocotp_nvmem_config.dev = dev;
+ 	imx_ocotp_nvmem_config.priv = priv;
+-	if (priv->params->reverse_mac_address)
+-		imx_ocotp_nvmem_config.layout = &imx_ocotp_layout;
+-
+ 	priv->config = &imx_ocotp_nvmem_config;
+ 
+ 	clk_prepare_enable(priv->clk);
+diff --git a/drivers/nvmem/rmem.c b/drivers/nvmem/rmem.c
+index 80cb187f1..b11c3c974 100644
+--- a/drivers/nvmem/rmem.c
++++ b/drivers/nvmem/rmem.c
+@@ -37,9 +37,9 @@ static int rmem_read(void *context, unsigned int offset,
+ 	 * but as of Dec 2020 this isn't possible on arm64.
+ 	 */
+ 	addr = memremap(priv->mem->base, available, MEMREMAP_WB);
+-	if (!addr) {
++	if (IS_ERR(addr)) {
+ 		dev_err(priv->dev, "Failed to remap memory region\n");
+-		return -ENOMEM;
++		return PTR_ERR(addr);
+ 	}
+ 
+ 	count = memory_read_from_buffer(val, bytes, &off, addr, available);
+diff --git a/include/linux/nvmem-consumer.h b/include/linux/nvmem-consumer.h
+index fa030d93b..c0c0cefc3 100644
+--- a/include/linux/nvmem-consumer.h
++++ b/include/linux/nvmem-consumer.h
+@@ -18,7 +18,14 @@ struct device_node;
+ /* consumer cookie */
+ struct nvmem_cell;
+ struct nvmem_device;
+-struct nvmem_cell_info;
++
++struct nvmem_cell_info {
++	const char		*name;
++	unsigned int		offset;
++	unsigned int		bytes;
++	unsigned int		bit_offset;
++	unsigned int		nbits;
++};
+ 
+ /**
+  * struct nvmem_cell_lookup - cell lookup entry
+@@ -239,7 +246,6 @@ struct nvmem_cell *of_nvmem_cell_get(struct device_node *np,
+ 				     const char *id);
+ struct nvmem_device *of_nvmem_device_get(struct device_node *np,
+ 					 const char *name);
+-struct device_node *of_nvmem_layout_get_container(struct nvmem_device *nvmem);
+ #else
+ static inline struct nvmem_cell *of_nvmem_cell_get(struct device_node *np,
+ 						   const char *id)
+@@ -252,12 +258,6 @@ static inline struct nvmem_device *of_nvmem_device_get(struct device_node *np,
+ {
+ 	return ERR_PTR(-EOPNOTSUPP);
+ }
+-
+-static inline struct device_node *
+-of_nvmem_layout_get_container(struct nvmem_device *nvmem)
+-{
+-	return ERR_PTR(-EOPNOTSUPP);
+-}
+ #endif /* CONFIG_NVMEM && CONFIG_OF */
+ 
+ #endif  /* ifndef _LINUX_NVMEM_CONSUMER_H */
+diff --git a/include/linux/nvmem-provider.h b/include/linux/nvmem-provider.h
+index dae26295e..87932bdb2 100644
+--- a/include/linux/nvmem-provider.h
++++ b/include/linux/nvmem-provider.h
+@@ -9,20 +9,16 @@
+ #ifndef _LINUX_NVMEM_PROVIDER_H
+ #define _LINUX_NVMEM_PROVIDER_H
+ 
+-#include <linux/device/driver.h>
+ #include <linux/err.h>
+ #include <linux/errno.h>
+ #include <linux/gpio/consumer.h>
+ 
+ struct nvmem_device;
++struct nvmem_cell_info;
+ typedef int (*nvmem_reg_read_t)(void *priv, unsigned int offset,
+ 				void *val, size_t bytes);
+ typedef int (*nvmem_reg_write_t)(void *priv, unsigned int offset,
+ 				 void *val, size_t bytes);
+-/* used for vendor specific post processing of cell data */
+-typedef int (*nvmem_cell_post_process_t)(void *priv, const char *id, int index,
+-					 unsigned int offset, void *buf,
+-					 size_t bytes);
+ 
+ enum nvmem_type {
+ 	NVMEM_TYPE_UNKNOWN = 0,
+@@ -48,31 +44,6 @@ struct nvmem_keepout {
+ 	unsigned char value;
+ };
+ 
+-/**
+- * struct nvmem_cell_info - NVMEM cell description
+- * @name:	Name.
+- * @offset:	Offset within the NVMEM device.
+- * @raw_len:	Length of raw data (without post processing).
+- * @bytes:	Length of the cell.
+- * @bit_offset:	Bit offset if cell is smaller than a byte.
+- * @nbits:	Number of bits.
+- * @np:		Optional device_node pointer.
+- * @read_post_process:	Callback for optional post processing of cell data
+- *			on reads.
+- * @priv:	Opaque data passed to the read_post_process hook.
+- */
+-struct nvmem_cell_info {
+-	const char		*name;
+-	unsigned int		offset;
+-	size_t			raw_len;
+-	unsigned int		bytes;
+-	unsigned int		bit_offset;
+-	unsigned int		nbits;
+-	struct device_node	*np;
+-	nvmem_cell_post_process_t read_post_process;
+-	void			*priv;
+-};
+-
+ /**
+  * struct nvmem_config - NVMEM device configuration
+  *
+@@ -95,8 +66,8 @@ struct nvmem_cell_info {
+  * @word_size:	Minimum read/write access granularity.
+  * @stride:	Minimum read/write access stride.
+  * @priv:	User context passed to read/write callbacks.
++ * @wp-gpio:	Write protect pin
+  * @ignore_wp:  Write Protect pin is managed by the provider.
+- * @layout:	Fixed layout associated with this nvmem device.
+  *
+  * Note: A default "nvmem<id>" name will be assigned to the device if
+  * no name is specified in its configuration. In such case "<id>" is
+@@ -110,6 +81,7 @@ struct nvmem_config {
+ 	const char		*name;
+ 	int			id;
+ 	struct module		*owner;
++	struct gpio_desc	*wp_gpio;
+ 	const struct nvmem_cell_info	*cells;
+ 	int			ncells;
+ 	const struct nvmem_keepout *keepout;
+@@ -118,7 +90,6 @@ struct nvmem_config {
+ 	bool			read_only;
+ 	bool			root_only;
+ 	bool			ignore_wp;
+-	struct nvmem_layout	*layout;
+ 	struct device_node	*of_node;
+ 	bool			no_of_node;
+ 	nvmem_reg_read_t	reg_read;
+@@ -151,38 +122,6 @@ struct nvmem_cell_table {
+ 	struct list_head	node;
+ };
+ 
+-/**
+- * struct nvmem_layout - NVMEM layout definitions
+- *
+- * @name:		Layout name.
+- * @of_match_table:	Open firmware match table.
+- * @add_cells:		Will be called if a nvmem device is found which
+- *			has this layout. The function will add layout
+- *			specific cells with nvmem_add_one_cell().
+- * @fixup_cell_info:	Will be called before a cell is added. Can be
+- *			used to modify the nvmem_cell_info.
+- * @owner:		Pointer to struct module.
+- * @node:		List node.
+- *
+- * A nvmem device can hold a well defined structure which can just be
+- * evaluated during runtime. For example a TLV list, or a list of "name=val"
+- * pairs. A nvmem layout can parse the nvmem device and add appropriate
+- * cells.
+- */
+-struct nvmem_layout {
+-	const char *name;
+-	const struct of_device_id *of_match_table;
+-	int (*add_cells)(struct device *dev, struct nvmem_device *nvmem,
+-			 struct nvmem_layout *layout);
+-	void (*fixup_cell_info)(struct nvmem_device *nvmem,
+-				struct nvmem_layout *layout,
+-				struct nvmem_cell_info *cell);
+-
+-	/* private */
+-	struct module *owner;
+-	struct list_head node;
+-};
+-
+ #if IS_ENABLED(CONFIG_NVMEM)
+ 
+ struct nvmem_device *nvmem_register(const struct nvmem_config *cfg);
+@@ -191,20 +130,11 @@ void nvmem_unregister(struct nvmem_device *nvmem);
+ struct nvmem_device *devm_nvmem_register(struct device *dev,
+ 					 const struct nvmem_config *cfg);
+ 
++int devm_nvmem_unregister(struct device *dev, struct nvmem_device *nvmem);
++
+ void nvmem_add_cell_table(struct nvmem_cell_table *table);
+ void nvmem_del_cell_table(struct nvmem_cell_table *table);
+ 
+-int nvmem_add_one_cell(struct nvmem_device *nvmem,
+-		       const struct nvmem_cell_info *info);
+-
+-int __nvmem_layout_register(struct nvmem_layout *layout, struct module *owner);
+-#define nvmem_layout_register(layout) \
+-	__nvmem_layout_register(layout, THIS_MODULE)
+-void nvmem_layout_unregister(struct nvmem_layout *layout);
+-
+-const void *nvmem_layout_get_match_data(struct nvmem_device *nvmem,
+-					struct nvmem_layout *layout);
+-
+ #else
+ 
+ static inline struct nvmem_device *nvmem_register(const struct nvmem_config *c)
+@@ -220,32 +150,14 @@ devm_nvmem_register(struct device *dev, const struct nvmem_config *c)
+ 	return nvmem_register(c);
+ }
+ 
+-static inline void nvmem_add_cell_table(struct nvmem_cell_table *table) {}
+-static inline void nvmem_del_cell_table(struct nvmem_cell_table *table) {}
+-static inline int nvmem_add_one_cell(struct nvmem_device *nvmem,
+-				     const struct nvmem_cell_info *info)
+-{
+-	return -EOPNOTSUPP;
+-}
+-
+-static inline int nvmem_layout_register(struct nvmem_layout *layout)
++static inline int
++devm_nvmem_unregister(struct device *dev, struct nvmem_device *nvmem)
+ {
+ 	return -EOPNOTSUPP;
+ }
+ 
+-static inline void nvmem_layout_unregister(struct nvmem_layout *layout) {}
+-
+-static inline const void *
+-nvmem_layout_get_match_data(struct nvmem_device *nvmem,
+-			    struct nvmem_layout *layout)
+-{
+-	return NULL;
+-}
++static inline void nvmem_add_cell_table(struct nvmem_cell_table *table) {}
++static inline void nvmem_del_cell_table(struct nvmem_cell_table *table) {}
+ 
+ #endif /* CONFIG_NVMEM */
+-
+-#define module_nvmem_layout_driver(__layout_driver)		\
+-	module_driver(__layout_driver, nvmem_layout_register,	\
+-		      nvmem_layout_unregister)
+-
+ #endif  /* ifndef _LINUX_NVMEM_PROVIDER_H */
+-- 
+2.25.1
+

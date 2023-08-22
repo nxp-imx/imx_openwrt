@@ -1,0 +1,574 @@
+From ddee2a2b307ee817a6a31ea07520e1cfb912a8fe Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 11:50:16 +0800
+Subject: [PATCH 01/24] dpaa2: add fsl-mc support
+
+---
+ drivers/bus/fsl-mc/Makefile           |   3 +-
+ drivers/bus/fsl-mc/dprc-driver.c      |  76 ++++++++++++-------
+ drivers/bus/fsl-mc/fsl-mc-allocator.c |  24 ------
+ drivers/bus/fsl-mc/fsl-mc-bus.c       |  48 ++++++++----
+ drivers/bus/fsl-mc/fsl-mc-private.h   |  41 ++++++++--
+ drivers/bus/fsl-mc/fsl-mc-uapi.c      |   7 ++
+ drivers/bus/fsl-mc/mc-sys.c           |   2 +-
+ drivers/bus/fsl-mc/obj-api.c          | 104 ++++++++++++++++++++++++++
+ 8 files changed, 230 insertions(+), 75 deletions(-)
+ create mode 100644 drivers/bus/fsl-mc/obj-api.c
+
+diff --git a/drivers/bus/fsl-mc/Makefile b/drivers/bus/fsl-mc/Makefile
+index 4ae292a30..892946245 100644
+--- a/drivers/bus/fsl-mc/Makefile
++++ b/drivers/bus/fsl-mc/Makefile
+@@ -15,7 +15,8 @@ mc-bus-driver-objs := fsl-mc-bus.o \
+ 		      dprc-driver.o \
+ 		      fsl-mc-allocator.o \
+ 		      fsl-mc-msi.o \
+-		      dpmcp.o
++		      dpmcp.o \
++		      obj-api.o
+ 
+ # MC userspace support
+ obj-$(CONFIG_FSL_MC_UAPI_SUPPORT) += fsl-mc-uapi.o
+diff --git a/drivers/bus/fsl-mc/dprc-driver.c b/drivers/bus/fsl-mc/dprc-driver.c
+index 315e830b6..2fcf33a9b 100644
+--- a/drivers/bus/fsl-mc/dprc-driver.c
++++ b/drivers/bus/fsl-mc/dprc-driver.c
+@@ -618,7 +618,6 @@ int dprc_setup(struct fsl_mc_device *mc_dev)
+ 	struct irq_domain *mc_msi_domain;
+ 	bool mc_io_created = false;
+ 	bool msi_domain_set = false;
+-	bool uapi_created = false;
+ 	u16 major_ver, minor_ver;
+ 	size_t region_size;
+ 	int error;
+@@ -651,11 +650,6 @@ int dprc_setup(struct fsl_mc_device *mc_dev)
+ 			return error;
+ 
+ 		mc_io_created = true;
+-	} else {
+-		error = fsl_mc_uapi_create_device_file(mc_bus);
+-		if (error < 0)
+-			return -EPROBE_DEFER;
+-		uapi_created = true;
+ 	}
+ 
+ 	mc_msi_domain = fsl_mc_find_msi_domain(&mc_dev->dev);
+@@ -713,9 +707,6 @@ int dprc_setup(struct fsl_mc_device *mc_dev)
+ 		mc_dev->mc_io = NULL;
+ 	}
+ 
+-	if (uapi_created)
+-		fsl_mc_uapi_remove_device_file(mc_bus);
+-
+ 	return error;
+ }
+ EXPORT_SYMBOL_GPL(dprc_setup);
+@@ -734,9 +725,15 @@ static int dprc_probe(struct fsl_mc_device *mc_dev)
+ {
+ 	int error;
+ 
++	if (fsl_mc_is_root_dprc(&mc_dev->dev)) {
++		error = fsl_mc_uapi_create_device_file(to_fsl_mc_bus(mc_dev));
++		if (error < 0)
++			return -EPROBE_DEFER;
++	}
++
+ 	error = dprc_setup(mc_dev);
+ 	if (error < 0)
+-		return error;
++		goto uapi_cleanup;
+ 
+ 	/*
+ 	 * Discover MC objects in DPRC object:
+@@ -759,6 +756,10 @@ static int dprc_probe(struct fsl_mc_device *mc_dev)
+ 	device_for_each_child(&mc_dev->dev, NULL, __fsl_mc_device_remove);
+ dprc_cleanup:
+ 	dprc_cleanup(mc_dev);
++uapi_cleanup:
++	if (fsl_mc_is_root_dprc(&mc_dev->dev))
++		fsl_mc_uapi_remove_device_file(to_fsl_mc_bus(mc_dev));
++
+ 	return error;
+ }
+ 
+@@ -767,7 +768,12 @@ static int dprc_probe(struct fsl_mc_device *mc_dev)
+  */
+ static void dprc_teardown_irq(struct fsl_mc_device *mc_dev)
+ {
+-	struct fsl_mc_device_irq *irq = mc_dev->irqs[0];
++	struct fsl_mc_device_irq *irq;
++
++	if (!mc_dev->irqs)
++		return;
++
++	irq = mc_dev->irqs[0];
+ 
+ 	(void)disable_dprc_irq(mc_dev);
+ 
+@@ -787,7 +793,6 @@ static void dprc_teardown_irq(struct fsl_mc_device *mc_dev)
+ 
+ int dprc_cleanup(struct fsl_mc_device *mc_dev)
+ {
+-	struct fsl_mc_bus *mc_bus = to_fsl_mc_bus(mc_dev);
+ 	int error;
+ 
+ 	/* this function should be called only for DPRCs, it
+@@ -797,12 +802,11 @@ int dprc_cleanup(struct fsl_mc_device *mc_dev)
+ 		return -EINVAL;
+ 
+ 	if (dev_get_msi_domain(&mc_dev->dev)) {
++		dprc_teardown_irq(mc_dev);
+ 		fsl_mc_cleanup_irq_pool(mc_dev);
+ 		dev_set_msi_domain(&mc_dev->dev, NULL);
+ 	}
+ 
+-	fsl_mc_cleanup_all_resource_pools(mc_dev);
+-
+ 	/* if this step fails we cannot go further with cleanup as there is no way of
+ 	 * communicating with the firmware
+ 	 */
+@@ -818,8 +822,6 @@ int dprc_cleanup(struct fsl_mc_device *mc_dev)
+ 	if (!fsl_mc_is_root_dprc(&mc_dev->dev)) {
+ 		fsl_destroy_mc_io(mc_dev->mc_io);
+ 		mc_dev->mc_io = NULL;
+-	} else {
+-		fsl_mc_uapi_remove_device_file(mc_bus);
+ 	}
+ 
+ 	return 0;
+@@ -831,32 +833,49 @@ EXPORT_SYMBOL_GPL(dprc_cleanup);
+  *
+  * @mc_dev: Pointer to fsl-mc device representing the DPRC
+  *
+- * It removes the DPRC's child objects from Linux (not from the MC) and
+- * closes the DPRC device in the MC.
+- * It tears down the interrupts that were configured for the DPRC device.
+- * It destroys the interrupt pool associated with this MC bus.
++ * It removes the DPRC's child objects from Linux (not from the MC).
+  */
+ static int dprc_remove(struct fsl_mc_device *mc_dev)
+ {
+-	struct fsl_mc_bus *mc_bus = to_fsl_mc_bus(mc_dev);
+-
+ 	if (!is_fsl_mc_bus_dprc(mc_dev))
+ 		return -EINVAL;
+ 
+-	if (!mc_bus->irq_resources)
+-		return -EINVAL;
+-
+-	if (dev_get_msi_domain(&mc_dev->dev))
+-		dprc_teardown_irq(mc_dev);
+-
+ 	device_for_each_child(&mc_dev->dev, NULL, __fsl_mc_device_remove);
+ 
+ 	dprc_cleanup(mc_dev);
+ 
++	if (fsl_mc_is_root_dprc(&mc_dev->dev))
++		fsl_mc_uapi_remove_device_file(to_fsl_mc_bus(mc_dev));
++
+ 	dev_info(&mc_dev->dev, "DPRC device unbound from driver");
++
+ 	return 0;
+ }
+ 
++/**
++ * dprc_shutdown - callback invoked when a DPRC should be quiesced
++ *
++ * @mc_dev: Pointer to fsl-mc device representing the DPRC
++ *
++ * Closes the DPRC device in the MC.
++ * It tears down the interrupts that were configured for the DPRC device.
++ * It destroys the interrupt pool associated with this MC bus.
++ */
++static void dprc_shutdown(struct fsl_mc_device *mc_dev)
++{
++	struct fsl_mc_bus *mc_bus = to_fsl_mc_bus(mc_dev);
++
++	if (!is_fsl_mc_bus_dprc(mc_dev))
++		return;
++
++	if (!mc_bus->irq_resources)
++		return;
++
++	dprc_cleanup(mc_dev);
++
++	dev_info(&mc_dev->dev, "DPRC device shutdown");
++}
++
+ static const struct fsl_mc_device_id match_id_table[] = {
+ 	{
+ 	 .vendor = FSL_MC_VENDOR_FREESCALE,
+@@ -873,6 +892,7 @@ static struct fsl_mc_driver dprc_driver = {
+ 	.match_id_table = match_id_table,
+ 	.probe = dprc_probe,
+ 	.remove = dprc_remove,
++	.shutdown = dprc_shutdown,
+ };
+ 
+ int __init dprc_driver_init(void)
+diff --git a/drivers/bus/fsl-mc/fsl-mc-allocator.c b/drivers/bus/fsl-mc/fsl-mc-allocator.c
+index 6c5135569..52c064fcc 100644
+--- a/drivers/bus/fsl-mc/fsl-mc-allocator.c
++++ b/drivers/bus/fsl-mc/fsl-mc-allocator.c
+@@ -554,30 +554,6 @@ void fsl_mc_init_all_resource_pools(struct fsl_mc_device *mc_bus_dev)
+ 	}
+ }
+ 
+-static void fsl_mc_cleanup_resource_pool(struct fsl_mc_device *mc_bus_dev,
+-					 enum fsl_mc_pool_type pool_type)
+-{
+-	struct fsl_mc_resource *resource;
+-	struct fsl_mc_resource *next;
+-	struct fsl_mc_bus *mc_bus = to_fsl_mc_bus(mc_bus_dev);
+-	struct fsl_mc_resource_pool *res_pool =
+-					&mc_bus->resource_pools[pool_type];
+-	int free_count = 0;
+-
+-	list_for_each_entry_safe(resource, next, &res_pool->free_list, node) {
+-		free_count++;
+-		devm_kfree(&mc_bus_dev->dev, resource);
+-	}
+-}
+-
+-void fsl_mc_cleanup_all_resource_pools(struct fsl_mc_device *mc_bus_dev)
+-{
+-	int pool_type;
+-
+-	for (pool_type = 0; pool_type < FSL_MC_NUM_POOL_TYPES; pool_type++)
+-		fsl_mc_cleanup_resource_pool(mc_bus_dev, pool_type);
+-}
+-
+ /*
+  * fsl_mc_allocator_probe - callback invoked when an allocatable device is
+  * being added to the system
+diff --git a/drivers/bus/fsl-mc/fsl-mc-bus.c b/drivers/bus/fsl-mc/fsl-mc-bus.c
+index 74593a172..b807b21c4 100644
+--- a/drivers/bus/fsl-mc/fsl-mc-bus.c
++++ b/drivers/bus/fsl-mc/fsl-mc-bus.c
+@@ -454,10 +454,12 @@ static int fsl_mc_driver_remove(struct device *dev)
+ 	struct fsl_mc_device *mc_dev = to_fsl_mc_device(dev);
+ 	int error;
+ 
+-	error = mc_drv->remove(mc_dev);
+-	if (error < 0) {
+-		dev_err(dev, "%s failed: %d\n", __func__, error);
+-		return error;
++	if (mc_drv->remove) {
++		error = mc_drv->remove(mc_dev);
++		if (error < 0) {
++			dev_err(dev, "%s failed: %d\n", __func__, error);
++			return error;
++		}
+ 	}
+ 
+ 	return 0;
+@@ -465,10 +467,16 @@ static int fsl_mc_driver_remove(struct device *dev)
+ 
+ static void fsl_mc_driver_shutdown(struct device *dev)
+ {
+-	struct fsl_mc_driver *mc_drv = to_fsl_mc_driver(dev->driver);
+ 	struct fsl_mc_device *mc_dev = to_fsl_mc_device(dev);
++	struct fsl_mc_driver *mc_drv;
+ 
+-	mc_drv->shutdown(mc_dev);
++	if (!dev->driver)
++		return;
++
++	mc_drv = to_fsl_mc_driver(dev->driver);
++
++	if (mc_drv->shutdown)
++		mc_drv->shutdown(mc_dev);
+ }
+ 
+ /*
+@@ -1230,19 +1238,18 @@ static int fsl_mc_bus_probe(struct platform_device *pdev)
+ }
+ 
+ /*
+- * fsl_mc_bus_remove - callback invoked when the root MC bus is being
+- * removed
++ * fsl_mc_bus_shutdown - callback invoked when the root MC bus is being
++ * shutdown
+  */
+-static int fsl_mc_bus_remove(struct platform_device *pdev)
++static void fsl_mc_bus_shutdown(struct platform_device *pdev)
+ {
+ 	struct fsl_mc *mc = platform_get_drvdata(pdev);
+ 	struct fsl_mc_io *mc_io;
+ 
+ 	if (!fsl_mc_is_root_dprc(&mc->root_mc_bus_dev->dev))
+-		return -EINVAL;
++		return;
+ 
+ 	mc_io = mc->root_mc_bus_dev->mc_io;
+-	fsl_mc_device_remove(mc->root_mc_bus_dev);
+ 	fsl_destroy_mc_io(mc_io);
+ 
+ 	bus_unregister_notifier(&fsl_mc_bus_type, &fsl_mc_nb);
+@@ -1256,13 +1263,24 @@ static int fsl_mc_bus_remove(struct platform_device *pdev)
+ 		       (GCR1_P1_STOP | GCR1_P2_STOP),
+ 		       mc->fsl_mc_regs + FSL_MC_GCR1);
+ 	}
+-
+-	return 0;
+ }
+ 
+-static void fsl_mc_bus_shutdown(struct platform_device *pdev)
++/*
++ * fsl_mc_bus_remove - callback invoked when the root MC bus is being
++ * removed
++ */
++static int fsl_mc_bus_remove(struct platform_device *pdev)
+ {
+-	fsl_mc_bus_remove(pdev);
++	struct fsl_mc *mc = platform_get_drvdata(pdev);
++
++	if (!fsl_mc_is_root_dprc(&mc->root_mc_bus_dev->dev))
++		return -EINVAL;
++
++	fsl_mc_device_remove(mc->root_mc_bus_dev);
++
++	fsl_mc_bus_shutdown(pdev);
++
++	return 0;
+ }
+ 
+ static const struct of_device_id fsl_mc_bus_match_table[] = {
+diff --git a/drivers/bus/fsl-mc/fsl-mc-private.h b/drivers/bus/fsl-mc/fsl-mc-private.h
+index 1958fa065..491705f20 100644
+--- a/drivers/bus/fsl-mc/fsl-mc-private.h
++++ b/drivers/bus/fsl-mc/fsl-mc-private.h
+@@ -48,7 +48,6 @@ struct dpmng_rsp_get_version {
+ 
+ /* DPMCP command IDs */
+ #define DPMCP_CMDID_CLOSE		DPMCP_CMD(0x800)
+-#define DPMCP_CMDID_OPEN		DPMCP_CMD(0x80b)
+ #define DPMCP_CMDID_RESET		DPMCP_CMD(0x005)
+ 
+ struct dpmcp_cmd_open {
+@@ -91,7 +90,6 @@ int dpmcp_reset(struct fsl_mc_io *mc_io,
+ 
+ /* DPRC command IDs */
+ #define DPRC_CMDID_CLOSE                        DPRC_CMD(0x800)
+-#define DPRC_CMDID_OPEN                         DPRC_CMD(0x805)
+ #define DPRC_CMDID_GET_API_VERSION              DPRC_CMD(0xa05)
+ 
+ #define DPRC_CMDID_GET_ATTR                     DPRC_CMD(0x004)
+@@ -453,7 +451,6 @@ int dprc_get_connection(struct fsl_mc_io *mc_io,
+ 
+ /* Command IDs */
+ #define DPBP_CMDID_CLOSE		DPBP_CMD(0x800)
+-#define DPBP_CMDID_OPEN			DPBP_CMD(0x804)
+ 
+ #define DPBP_CMDID_ENABLE		DPBP_CMD(0x002)
+ #define DPBP_CMDID_DISABLE		DPBP_CMD(0x003)
+@@ -492,7 +489,6 @@ struct dpbp_rsp_get_attributes {
+ 
+ /* Command IDs */
+ #define DPCON_CMDID_CLOSE			DPCON_CMD(0x800)
+-#define DPCON_CMDID_OPEN			DPCON_CMD(0x808)
+ 
+ #define DPCON_CMDID_ENABLE			DPCON_CMD(0x002)
+ #define DPCON_CMDID_DISABLE			DPCON_CMD(0x003)
+@@ -524,6 +520,41 @@ struct dpcon_cmd_set_notification {
+ 	__le64 user_ctx;
+ };
+ 
++/*
++ * Generic FSL MC API
++ */
++
++/* generic command versioning */
++#define OBJ_CMD_BASE_VERSION		1
++#define OBJ_CMD_ID_OFFSET		4
++
++#define OBJ_CMD(id)	(((id) << OBJ_CMD_ID_OFFSET) | OBJ_CMD_BASE_VERSION)
++
++/* open command codes */
++#define DPRTC_CMDID_OPEN		OBJ_CMD(0x810)
++#define DPNI_CMDID_OPEN		OBJ_CMD(0x801)
++#define DPSW_CMDID_OPEN		OBJ_CMD(0x802)
++#define DPIO_CMDID_OPEN		OBJ_CMD(0x803)
++#define DPBP_CMDID_OPEN		OBJ_CMD(0x804)
++#define DPRC_CMDID_OPEN		OBJ_CMD(0x805)
++#define DPDMUX_CMDID_OPEN		OBJ_CMD(0x806)
++#define DPCI_CMDID_OPEN		OBJ_CMD(0x807)
++#define DPCON_CMDID_OPEN		OBJ_CMD(0x808)
++#define DPSECI_CMDID_OPEN		OBJ_CMD(0x809)
++#define DPAIOP_CMDID_OPEN		OBJ_CMD(0x80a)
++#define DPMCP_CMDID_OPEN		OBJ_CMD(0x80b)
++#define DPMAC_CMDID_OPEN		OBJ_CMD(0x80c)
++#define DPDCEI_CMDID_OPEN		OBJ_CMD(0x80d)
++#define DPDMAI_CMDID_OPEN		OBJ_CMD(0x80e)
++#define DPDBG_CMDID_OPEN		OBJ_CMD(0x80f)
++
++/* Generic object command IDs */
++#define OBJ_CMDID_CLOSE		OBJ_CMD(0x800)
++#define OBJ_CMDID_RESET		OBJ_CMD(0x005)
++
++struct obj_cmd_open {
++	__le32 obj_id;
++};
+ 
+ /**
+  * struct fsl_mc_resource_pool - Pool of MC resources of a given
+@@ -604,8 +635,6 @@ void fsl_mc_allocator_driver_exit(void);
+ 
+ void fsl_mc_init_all_resource_pools(struct fsl_mc_device *mc_bus_dev);
+ 
+-void fsl_mc_cleanup_all_resource_pools(struct fsl_mc_device *mc_bus_dev);
+-
+ int __must_check fsl_mc_resource_allocate(struct fsl_mc_bus *mc_bus,
+ 					  enum fsl_mc_pool_type pool_type,
+ 					  struct fsl_mc_resource
+diff --git a/drivers/bus/fsl-mc/fsl-mc-uapi.c b/drivers/bus/fsl-mc/fsl-mc-uapi.c
+index 9c4c1395f..ebac3aadc 100644
+--- a/drivers/bus/fsl-mc/fsl-mc-uapi.c
++++ b/drivers/bus/fsl-mc/fsl-mc-uapi.c
+@@ -48,6 +48,7 @@ enum fsl_mc_cmd_index {
+ 	DPRC_GET_POOL,
+ 	DPRC_GET_POOL_COUNT,
+ 	DPRC_GET_CONNECTION,
++	DPRC_GET_MEM,
+ 	DPCI_GET_LINK_STATE,
+ 	DPCI_GET_PEER_ATTR,
+ 	DPAIOP_GET_SL_VERSION,
+@@ -194,6 +195,12 @@ static struct fsl_mc_cmd_desc fsl_mc_accepted_cmds[] = {
+ 		.token = true,
+ 		.size = 32,
+ 	},
++	[DPRC_GET_MEM] = {
++		.cmdid_value = 0x16D0,
++		.cmdid_mask = 0xFFF0,
++		.token = true,
++		.size = 12,
++	},
+ 
+ 	[DPCI_GET_LINK_STATE] = {
+ 		.cmdid_value = 0x0E10,
+diff --git a/drivers/bus/fsl-mc/mc-sys.c b/drivers/bus/fsl-mc/mc-sys.c
+index f2052cd0a..b22c59d57 100644
+--- a/drivers/bus/fsl-mc/mc-sys.c
++++ b/drivers/bus/fsl-mc/mc-sys.c
+@@ -19,7 +19,7 @@
+ /*
+  * Timeout in milliseconds to wait for the completion of an MC command
+  */
+-#define MC_CMD_COMPLETION_TIMEOUT_MS	500
++#define MC_CMD_COMPLETION_TIMEOUT_MS	15000
+ 
+ /*
+  * usleep_range() min and max values used to throttle down polling
+diff --git a/drivers/bus/fsl-mc/obj-api.c b/drivers/bus/fsl-mc/obj-api.c
+new file mode 100644
+index 000000000..8eee28c7f
+--- /dev/null
++++ b/drivers/bus/fsl-mc/obj-api.c
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
++/*
++ * Copyright 2021 NXP
++ *
++ */
++#include <linux/kernel.h>
++#include <linux/fsl/mc.h>
++
++#include "fsl-mc-private.h"
++
++static int fsl_mc_get_open_cmd_id(const char *type)
++{
++	static const struct {
++		int cmd_id;
++		const char *type;
++	} dev_ids[] = {
++		{ DPRTC_CMDID_OPEN, "dprtc" },
++		{ DPRC_CMDID_OPEN, "dprc" },
++		{ DPNI_CMDID_OPEN, "dpni" },
++		{ DPIO_CMDID_OPEN, "dpio" },
++		{ DPSW_CMDID_OPEN, "dpsw" },
++		{ DPBP_CMDID_OPEN, "dpbp" },
++		{ DPCON_CMDID_OPEN, "dpcon" },
++		{ DPMCP_CMDID_OPEN, "dpmcp" },
++		{ DPMAC_CMDID_OPEN, "dpmac" },
++		{ DPSECI_CMDID_OPEN, "dpseci" },
++		{ DPDMUX_CMDID_OPEN, "dpdmux" },
++		{ DPDCEI_CMDID_OPEN, "dpdcei" },
++		{ DPAIOP_CMDID_OPEN, "dpaiop" },
++		{ DPCI_CMDID_OPEN, "dpci" },
++		{ DPDMAI_CMDID_OPEN, "dpdmai" },
++		{ DPDBG_CMDID_OPEN, "dpdbg" },
++		{ 0, NULL }
++	};
++	int i;
++
++	for (i = 0; dev_ids[i].type; i++)
++		if (!strcmp(dev_ids[i].type, type))
++			return dev_ids[i].cmd_id;
++
++	return -1;
++}
++
++int fsl_mc_obj_open(struct fsl_mc_io *mc_io,
++		    u32 cmd_flags,
++		    int obj_id,
++		    char *obj_type,
++		    u16 *token)
++{
++	struct fsl_mc_command cmd = { 0 };
++	struct obj_cmd_open *cmd_params;
++	int err = 0;
++	int cmd_id = fsl_mc_get_open_cmd_id(obj_type);
++
++	if (cmd_id == -1)
++		return -ENODEV;
++
++	/* prepare command */
++	cmd.header = mc_encode_cmd_header(cmd_id, cmd_flags, 0);
++	cmd_params = (struct obj_cmd_open *)cmd.params;
++	cmd_params->obj_id = cpu_to_le32(obj_id);
++
++	/* send command to mc*/
++	err = mc_send_command(mc_io, &cmd);
++	if (err)
++		return err;
++
++	/* retrieve response parameters */
++	*token = mc_cmd_hdr_read_token(&cmd);
++
++	return err;
++}
++EXPORT_SYMBOL_GPL(fsl_mc_obj_open);
++
++int fsl_mc_obj_close(struct fsl_mc_io *mc_io,
++		     u32 cmd_flags,
++		     u16 token)
++{
++	struct fsl_mc_command cmd = { 0 };
++
++	/* prepare command */
++	cmd.header = mc_encode_cmd_header(OBJ_CMDID_CLOSE, cmd_flags,
++					  token);
++
++	/* send command to mc*/
++	return mc_send_command(mc_io, &cmd);
++}
++EXPORT_SYMBOL_GPL(fsl_mc_obj_close);
++
++int fsl_mc_obj_reset(struct fsl_mc_io *mc_io,
++		     u32 cmd_flags,
++		     u16 token)
++{
++	struct fsl_mc_command cmd = { 0 };
++
++	/* prepare command */
++	cmd.header = mc_encode_cmd_header(OBJ_CMDID_RESET, cmd_flags,
++					  token);
++
++	/* send command to mc*/
++	return mc_send_command(mc_io, &cmd);
++}
++EXPORT_SYMBOL_GPL(fsl_mc_obj_reset);
++
+-- 
+2.25.1
+

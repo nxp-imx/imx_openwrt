@@ -1,0 +1,746 @@
+From 2b38256d837d4e8d2bbd4fc54a260ccd7f7ffa49 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 17:01:24 +0800
+Subject: [PATCH 11/24] update dma-buf driver
+
+---
+ drivers/dma-buf/Makefile         |  20 ++--
+ drivers/dma-buf/dma-buf.c        |  35 ++++++-
+ drivers/dma-buf/dma-heap.c       |  57 +++++++----
+ drivers/dma-buf/heaps/Kconfig    |   8 ++
+ drivers/dma-buf/heaps/Makefile   |   5 +-
+ drivers/dma-buf/heaps/cma_heap.c | 126 +++++++++++++++++++++---
+ drivers/dma-buf/heaps/dsp_heap.c | 162 +++++++++++++++++++++++++++++++
+ drivers/dma-buf/udmabuf.c        |   9 +-
+ include/linux/dma-heap.h         |   9 ++
+ include/uapi/linux/dma-buf.h     |   5 +
+ 10 files changed, 379 insertions(+), 57 deletions(-)
+ create mode 100644 drivers/dma-buf/heaps/dsp_heap.c
+
+diff --git a/drivers/dma-buf/Makefile b/drivers/dma-buf/Makefile
+index 4bda1a8ee..40d81f23c 100644
+--- a/drivers/dma-buf/Makefile
++++ b/drivers/dma-buf/Makefile
+@@ -1,20 +1,16 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-obj-$(CONFIG_DMA_SHARED_BUFFER) := dma-shared-buffer.o
+-
+-dma-buf-objs-y := dma-buf.o dma-fence.o dma-fence-array.o dma-fence-chain.o \
++obj-y := dma-buf.o dma-fence.o dma-fence-array.o dma-fence-chain.o \
+ 	 dma-resv.o seqno-fence.o
+-dma-buf-objs-$(CONFIG_DMABUF_HEAPS)	+= dma-heap.o
+-obj-$(CONFIG_DMABUF_HEAPS)		+= heaps/
+-dma-buf-objs-$(CONFIG_SYNC_FILE)	+= sync_file.o
+-dma-buf-objs-$(CONFIG_SW_SYNC)		+= sw_sync.o sync_debug.o
+-dma-buf-objs-$(CONFIG_UDMABUF)		+= udmabuf.o
+-dma-buf-objs-$(CONFIG_DMABUF_SYSFS_STATS) += udmabuf.o
++obj-$(CONFIG_DMABUF_HEAPS)	+= dma-heap.o
++obj-$(CONFIG_DMABUF_HEAPS)	+= heaps/
++obj-$(CONFIG_SYNC_FILE)		+= sync_file.o
++obj-$(CONFIG_SW_SYNC)		+= sw_sync.o sync_debug.o
++obj-$(CONFIG_UDMABUF)		+= udmabuf.o
++obj-$(CONFIG_DMABUF_SYSFS_STATS) += dma-buf-sysfs-stats.o
+ 
+ dmabuf_selftests-y := \
+ 	selftest.o \
+ 	st-dma-fence.o \
+ 	st-dma-fence-chain.o
+ 
+-dma-buf-objs-$(CONFIG_DMABUF_SELFTESTS)	+= dmabuf_selftests.o
+-
+-dma-shared-buffer-objs :=  $(dma-buf-objs-y)
++obj-$(CONFIG_DMABUF_SELFTESTS)	+= dmabuf_selftests.o
+diff --git a/drivers/dma-buf/dma-buf.c b/drivers/dma-buf/dma-buf.c
+index f56a694e5..c56280ee6 100644
+--- a/drivers/dma-buf/dma-buf.c
++++ b/drivers/dma-buf/dma-buf.c
+@@ -15,6 +15,7 @@
+ #include <linux/slab.h>
+ #include <linux/dma-buf.h>
+ #include <linux/dma-fence.h>
++#include <linux/dma-map-ops.h>
+ #include <linux/anon_inodes.h>
+ #include <linux/export.h>
+ #include <linux/debugfs.h>
+@@ -25,6 +26,7 @@
+ #include <linux/mm.h>
+ #include <linux/mount.h>
+ #include <linux/pseudo_fs.h>
++#include <linux/device.h>
+ 
+ #include <uapi/linux/dma-buf.h>
+ #include <uapi/linux/magic.h>
+@@ -372,6 +374,36 @@ static long dma_buf_ioctl(struct file *file,
+ 	dmabuf = file->private_data;
+ 
+ 	switch (cmd) {
++	case DMA_BUF_IOCTL_PHYS: {
++		struct dma_buf_attachment *attachment = NULL;
++		struct sg_table *sgt = NULL;
++		unsigned long phys = 0;
++		struct device dev;
++
++		if (!dmabuf || IS_ERR(dmabuf)) {
++			return -EFAULT;
++		}
++		memset(&dev, 0, sizeof(dev));
++		device_initialize(&dev);
++		dev.coherent_dma_mask = DMA_BIT_MASK(64);
++		dev.dma_mask = &dev.coherent_dma_mask;
++		arch_setup_dma_ops(&dev, 0, 0, NULL, false);
++		attachment = dma_buf_attach(dmabuf, &dev);
++		if (!attachment || IS_ERR(attachment)) {
++			return -EFAULT;
++		}
++
++		sgt = dma_buf_map_attachment(attachment, DMA_BIDIRECTIONAL);
++		if (sgt && !IS_ERR(sgt)) {
++			phys = sg_dma_address(sgt->sgl);
++			dma_buf_unmap_attachment(attachment, sgt,
++					DMA_BIDIRECTIONAL);
++		}
++		dma_buf_detach(dmabuf, attachment);
++		if (copy_to_user((void __user *) arg, &phys, sizeof(phys)))
++			return -EFAULT;
++		return 0;
++	}
+ 	case DMA_BUF_IOCTL_SYNC:
+ 		if (copy_from_user(&sync, (void __user *) arg, sizeof(sync)))
+ 			return -EFAULT;
+@@ -1513,5 +1545,4 @@ static void __exit dma_buf_deinit(void)
+ 	kern_unmount(dma_buf_mnt);
+ 	dma_buf_uninit_sysfs_statistics();
+ }
+-module_exit(dma_buf_deinit);
+-MODULE_LICENSE("GPL");
++__exitcall(dma_buf_deinit);
+diff --git a/drivers/dma-buf/dma-heap.c b/drivers/dma-buf/dma-heap.c
+index 59d158873..c8ae7da26 100644
+--- a/drivers/dma-buf/dma-heap.c
++++ b/drivers/dma-buf/dma-heap.c
+@@ -31,6 +31,7 @@
+  * @heap_devt		heap device node
+  * @list		list head connecting to list of heaps
+  * @heap_cdev		heap char device
++ * @heap_dev		heap device struct
+  *
+  * Represents a heap of memory from which buffers can be made.
+  */
+@@ -41,6 +42,7 @@ struct dma_heap {
+ 	dev_t heap_devt;
+ 	struct list_head list;
+ 	struct cdev heap_cdev;
++	struct device *heap_dev;
+ };
+ 
+ static LIST_HEAD(heap_list);
+@@ -216,10 +218,21 @@ const char *dma_heap_get_name(struct dma_heap *heap)
+ 	return heap->name;
+ }
+ 
++/**
++ * dma_heap_get_dev() - get device struct for the heap
++ * @heap: DMA-Heap to retrieve device struct from
++ *
++ * Returns:
++ * The device struct for the heap.
++ */
++struct device *dma_heap_get_dev(struct dma_heap *heap)
++{
++	return heap->heap_dev;
++}
++
+ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
+ {
+ 	struct dma_heap *heap, *h, *err_ret;
+-	struct device *dev_ret;
+ 	unsigned int minor;
+ 	int ret;
+ 
+@@ -233,6 +246,18 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
+ 		return ERR_PTR(-EINVAL);
+ 	}
+ 
++	/* check the name is unique */
++	mutex_lock(&heap_list_lock);
++	list_for_each_entry(h, &heap_list, list) {
++		if (!strcmp(h->name, exp_info->name)) {
++			mutex_unlock(&heap_list_lock);
++			pr_err("dma_heap: Already registered heap named %s\n",
++			       exp_info->name);
++			return ERR_PTR(-EINVAL);
++		}
++	}
++	mutex_unlock(&heap_list_lock);
++
+ 	heap = kzalloc(sizeof(*heap), GFP_KERNEL);
+ 	if (!heap)
+ 		return ERR_PTR(-ENOMEM);
+@@ -261,37 +286,27 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
+ 		goto err1;
+ 	}
+ 
+-	dev_ret = device_create(dma_heap_class,
+-				NULL,
+-				heap->heap_devt,
+-				NULL,
+-				heap->name);
+-	if (IS_ERR(dev_ret)) {
++	heap->heap_dev = device_create(dma_heap_class,
++				       NULL,
++				       heap->heap_devt,
++				       NULL,
++				       heap->name);
++	if (IS_ERR(heap->heap_dev)) {
+ 		pr_err("dma_heap: Unable to create device\n");
+-		err_ret = ERR_CAST(dev_ret);
++		err_ret = ERR_CAST(heap->heap_dev);
+ 		goto err2;
+ 	}
+ 
+-	mutex_lock(&heap_list_lock);
+-	/* check the name is unique */
+-	list_for_each_entry(h, &heap_list, list) {
+-		if (!strcmp(h->name, exp_info->name)) {
+-			mutex_unlock(&heap_list_lock);
+-			pr_err("dma_heap: Already registered heap named %s\n",
+-			       exp_info->name);
+-			err_ret = ERR_PTR(-EINVAL);
+-			goto err3;
+-		}
+-	}
++	/* Make sure it doesn't disappear on us */
++	heap->heap_dev = get_device(heap->heap_dev);
+ 
+ 	/* Add heap to the list */
++	mutex_lock(&heap_list_lock);
+ 	list_add(&heap->list, &heap_list);
+ 	mutex_unlock(&heap_list_lock);
+ 
+ 	return heap;
+ 
+-err3:
+-	device_destroy(dma_heap_class, heap->heap_devt);
+ err2:
+ 	cdev_del(&heap->heap_cdev);
+ err1:
+diff --git a/drivers/dma-buf/heaps/Kconfig b/drivers/dma-buf/heaps/Kconfig
+index a5eef06c4..3782eeeb9 100644
+--- a/drivers/dma-buf/heaps/Kconfig
++++ b/drivers/dma-buf/heaps/Kconfig
+@@ -12,3 +12,11 @@ config DMABUF_HEAPS_CMA
+ 	  Choose this option to enable dma-buf CMA heap. This heap is backed
+ 	  by the Contiguous Memory Allocator (CMA). If your system has these
+ 	  regions, you should say Y here.
++
++config DMABUF_HEAPS_DSP
++        tristate "DMA-BUF DSP Heap"
++        depends on DMABUF_HEAPS
++        help
++          Choose this option to enable the dsp dmabuf heap. The dsp heap
++          is allocated by gen allocater. it's allocated according the dts.
++          If in doubt, say Y.
+diff --git a/drivers/dma-buf/heaps/Makefile b/drivers/dma-buf/heaps/Makefile
+index 87f71c3ee..29733f84c 100644
+--- a/drivers/dma-buf/heaps/Makefile
++++ b/drivers/dma-buf/heaps/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+-dma-buf-objs-$(CONFIG_DMABUF_HEAPS_SYSTEM)	+= system_heap.o
+-dma-buf-objs-$(CONFIG_DMABUF_HEAPS_CMA)		+= cma_heap.o
++obj-$(CONFIG_DMABUF_HEAPS_SYSTEM)	+= system_heap.o
++obj-$(CONFIG_DMABUF_HEAPS_CMA)		+= cma_heap.o
++obj-$(CONFIG_DMABUF_HEAPS_DSP)          += dsp_heap.o
+diff --git a/drivers/dma-buf/heaps/cma_heap.c b/drivers/dma-buf/heaps/cma_heap.c
+index 83f02bd51..8a19859d3 100644
+--- a/drivers/dma-buf/heaps/cma_heap.c
++++ b/drivers/dma-buf/heaps/cma_heap.c
+@@ -38,6 +38,7 @@ struct cma_heap_buffer {
+ 	pgoff_t pagecount;
+ 	int vmap_cnt;
+ 	void *vaddr;
++	bool uncached;
+ };
+ 
+ struct dma_heap_attachment {
+@@ -45,6 +46,7 @@ struct dma_heap_attachment {
+ 	struct sg_table table;
+ 	struct list_head list;
+ 	bool mapped;
++	bool uncached;
+ };
+ 
+ static int cma_heap_attach(struct dma_buf *dmabuf,
+@@ -70,6 +72,7 @@ static int cma_heap_attach(struct dma_buf *dmabuf,
+ 	a->dev = attachment->dev;
+ 	INIT_LIST_HEAD(&a->list);
+ 	a->mapped = false;
++	a->uncached = buffer->uncached;
+ 
+ 	attachment->priv = a;
+ 
+@@ -99,9 +102,13 @@ static struct sg_table *cma_heap_map_dma_buf(struct dma_buf_attachment *attachme
+ {
+ 	struct dma_heap_attachment *a = attachment->priv;
+ 	struct sg_table *table = &a->table;
++	int attr = 0;
+ 	int ret;
+ 
+-	ret = dma_map_sgtable(attachment->dev, table, direction, 0);
++	if (a->uncached)
++		attr = DMA_ATTR_SKIP_CPU_SYNC;
++
++	ret = dma_map_sgtable(attachment->dev, table, direction, attr);
+ 	if (ret)
+ 		return ERR_PTR(-ENOMEM);
+ 	a->mapped = true;
+@@ -113,9 +120,13 @@ static void cma_heap_unmap_dma_buf(struct dma_buf_attachment *attachment,
+ 				   enum dma_data_direction direction)
+ {
+ 	struct dma_heap_attachment *a = attachment->priv;
++	int attr = 0;
++
++	if (a->uncached)
++		attr = DMA_ATTR_SKIP_CPU_SYNC;
+ 
+ 	a->mapped = false;
+-	dma_unmap_sgtable(attachment->dev, table, direction, 0);
++	dma_unmap_sgtable(attachment->dev, table, direction, attr);
+ }
+ 
+ static int cma_heap_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
+@@ -129,10 +140,12 @@ static int cma_heap_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
+ 	if (buffer->vmap_cnt)
+ 		invalidate_kernel_vmap_range(buffer->vaddr, buffer->len);
+ 
+-	list_for_each_entry(a, &buffer->attachments, list) {
+-		if (!a->mapped)
+-			continue;
+-		dma_sync_sgtable_for_cpu(a->dev, &a->table, direction);
++	if (!buffer->uncached) {
++		list_for_each_entry(a, &buffer->attachments, list) {
++			if (!a->mapped)
++				continue;
++			dma_sync_sgtable_for_cpu(a->dev, &a->table, direction);
++		}
+ 	}
+ 	mutex_unlock(&buffer->lock);
+ 
+@@ -150,10 +163,12 @@ static int cma_heap_dma_buf_end_cpu_access(struct dma_buf *dmabuf,
+ 	if (buffer->vmap_cnt)
+ 		flush_kernel_vmap_range(buffer->vaddr, buffer->len);
+ 
+-	list_for_each_entry(a, &buffer->attachments, list) {
+-		if (!a->mapped)
+-			continue;
+-		dma_sync_sgtable_for_device(a->dev, &a->table, direction);
++	if (!buffer->uncached) {
++		list_for_each_entry(a, &buffer->attachments, list) {
++			if (!a->mapped)
++				continue;
++			dma_sync_sgtable_for_device(a->dev, &a->table, direction);
++		}
+ 	}
+ 	mutex_unlock(&buffer->lock);
+ 
+@@ -185,6 +200,9 @@ static int cma_heap_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+ 	if ((vma->vm_flags & (VM_SHARED | VM_MAYSHARE)) == 0)
+ 		return -EINVAL;
+ 
++	if (buffer->uncached)
++		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
++
+ 	vma->vm_ops = &dma_heap_vm_ops;
+ 	vma->vm_private_data = buffer;
+ 
+@@ -193,9 +211,13 @@ static int cma_heap_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+ 
+ static void *cma_heap_do_vmap(struct cma_heap_buffer *buffer)
+ {
++	pgprot_t pgprot = PAGE_KERNEL;
+ 	void *vaddr;
+ 
+-	vaddr = vmap(buffer->pages, buffer->pagecount, VM_MAP, PAGE_KERNEL);
++	if (buffer->uncached)
++		pgprot = pgprot_writecombine(PAGE_KERNEL);
++
++	vaddr = vmap(buffer->pages, buffer->pagecount, VM_MAP, pgprot);
+ 	if (!vaddr)
+ 		return ERR_PTR(-ENOMEM);
+ 
+@@ -273,10 +295,11 @@ static const struct dma_buf_ops cma_heap_buf_ops = {
+ 	.release = cma_heap_dma_buf_release,
+ };
+ 
+-static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
++static struct dma_buf *cma_heap_do_allocate(struct dma_heap *heap,
+ 					 unsigned long len,
+ 					 unsigned long fd_flags,
+-					 unsigned long heap_flags)
++					 unsigned long heap_flags,
++					 bool uncached)
+ {
+ 	struct cma_heap *cma_heap = dma_heap_get_drvdata(heap);
+ 	struct cma_heap_buffer *buffer;
+@@ -285,8 +308,9 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
+ 	pgoff_t pagecount = size >> PAGE_SHIFT;
+ 	unsigned long align = get_order(size);
+ 	struct page *cma_pages;
++	struct sg_table table;
+ 	struct dma_buf *dmabuf;
+-	int ret = -ENOMEM;
++	int ret = -ENOMEM, ret_sg_table;
+ 	pgoff_t pg;
+ 
+ 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+@@ -296,6 +320,7 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
+ 	INIT_LIST_HEAD(&buffer->attachments);
+ 	mutex_init(&buffer->lock);
+ 	buffer->len = size;
++	buffer->uncached = uncached;
+ 
+ 	if (align > CONFIG_CMA_ALIGNMENT)
+ 		align = CONFIG_CMA_ALIGNMENT;
+@@ -340,6 +365,20 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
+ 	buffer->heap = cma_heap;
+ 	buffer->pagecount = pagecount;
+ 
++	if (buffer->uncached) {
++		ret_sg_table = sg_alloc_table(&table, 1, GFP_KERNEL);
++		if (ret_sg_table) {
++			ret = -ENOMEM;
++			goto free_pages;
++		}
++
++		sg_set_page(table.sgl, cma_pages, size, 0);
++
++		dma_map_sgtable(dma_heap_get_dev(heap), &table, DMA_BIDIRECTIONAL, 0);
++		dma_unmap_sgtable(dma_heap_get_dev(heap), &table, DMA_BIDIRECTIONAL, 0);
++		sg_free_table(&table);
++	}
++
+ 	/* create the dmabuf */
+ 	exp_info.exp_name = dma_heap_get_name(heap);
+ 	exp_info.ops = &cma_heap_buf_ops;
+@@ -363,14 +402,45 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
+ 	return ERR_PTR(ret);
+ }
+ 
++static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
++				  unsigned long len,
++				  unsigned long fd_flags,
++				  unsigned long heap_flags)
++{
++	return cma_heap_do_allocate(heap, len, fd_flags, heap_flags, false);
++}
++
++static struct dma_buf *cma_uncached_heap_allocate(struct dma_heap *heap,
++				  unsigned long len,
++				  unsigned long fd_flags,
++				  unsigned long heap_flags)
++{
++	return cma_heap_do_allocate(heap, len, fd_flags, heap_flags, true);
++}
++
++/* Dummy function to be used until we can call coerce_mask_and_coherent */
++static struct dma_buf *cma_uncached_heap_not_initialized(struct dma_heap *heap,
++						unsigned long len,
++						unsigned long fd_flags,
++						unsigned long heap_flags)
++{
++	return ERR_PTR(-EBUSY);
++}
++
+ static const struct dma_heap_ops cma_heap_ops = {
+ 	.allocate = cma_heap_allocate,
+ };
+ 
++static struct dma_heap_ops cma_uncached_heap_ops = {
++	.allocate = cma_uncached_heap_not_initialized,
++};
++
+ static int __add_cma_heap(struct cma *cma, void *data)
+ {
+ 	struct cma_heap *cma_heap;
+ 	struct dma_heap_export_info exp_info;
++	const char *postfixed = "-uncached";
++	char *cma_name;
+ 
+ 	cma_heap = kzalloc(sizeof(*cma_heap), GFP_KERNEL);
+ 	if (!cma_heap)
+@@ -389,6 +459,34 @@ static int __add_cma_heap(struct cma *cma, void *data)
+ 		return ret;
+ 	}
+ 
++	cma_heap = kzalloc(sizeof(*cma_heap), GFP_KERNEL);
++	if (!cma_heap)
++		return -ENOMEM;
++	cma_heap->cma = cma;
++
++	cma_name = kzalloc(strlen(cma_get_name(cma)) + strlen(postfixed) + 1, GFP_KERNEL);
++	if (!cma_name) {
++		kfree(cma_heap);
++		return -ENOMEM;
++	}
++
++	exp_info.name = strcat(strcpy(cma_name, cma_get_name(cma)), postfixed);
++	exp_info.ops = &cma_uncached_heap_ops;
++	exp_info.priv = cma_heap;
++
++	cma_heap->heap = dma_heap_add(&exp_info);
++	if (IS_ERR(cma_heap->heap)) {
++		int ret = PTR_ERR(cma_heap->heap);
++
++		kfree(cma_heap);
++		kfree(cma_name);
++		return ret;
++	}
++
++	dma_coerce_mask_and_coherent(dma_heap_get_dev(cma_heap->heap), DMA_BIT_MASK(64));
++	mb(); /* make sure we only set allocate after dma_mask is set */
++	cma_uncached_heap_ops.allocate = cma_uncached_heap_allocate;
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/dma-buf/heaps/dsp_heap.c b/drivers/dma-buf/heaps/dsp_heap.c
+new file mode 100644
+index 000000000..0663635bf
+--- /dev/null
++++ b/drivers/dma-buf/heaps/dsp_heap.c
+@@ -0,0 +1,162 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * DMABUF dsp heap exporter
++ *
++ * Copyright 2021 NXP.
++ *
++ */
++
++#include <linux/genalloc.h>
++#include <linux/dma-buf.h>
++#include <linux/dma-mapping.h>
++#include <linux/dma-heap.h>
++#include <linux/err.h>
++#include <linux/highmem.h>
++#include <linux/mm.h>
++#include <linux/module.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/scatterlist.h>
++#include <linux/slab.h>
++#include <linux/vmalloc.h>
++#include <linux/of.h>
++#include <linux/of_fdt.h>
++
++struct dsp_heap_buffer {
++	struct dma_heap *heap;
++	struct list_head attachments;
++	struct mutex lock;  /* mutex lock */
++};
++
++struct dsp_heap {
++	struct dma_heap *heap;
++	phys_addr_t base;
++	phys_addr_t size;
++};
++
++static int dsp_heap_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
++{
++	struct dsp_heap_buffer *buffer = dmabuf->priv;
++	struct dsp_heap *dsp_heap = dma_heap_get_drvdata(buffer->heap);
++	unsigned long pfn;
++	size_t size;
++	int ret;
++
++	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
++
++	size = dsp_heap->size;
++	pfn =  dsp_heap->base >> PAGE_SHIFT;
++
++	ret = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
++	if (ret < 0)
++		return ret;
++
++	return 0;
++}
++
++static void dsp_heap_dma_buf_release(struct dma_buf *dmabuf)
++{
++	struct dsp_heap_buffer *buffer = dmabuf->priv;
++
++	kfree(buffer);
++}
++
++static struct sg_table *dsp_heap_map_dma_buf(struct dma_buf_attachment *attachment,
++					     enum dma_data_direction direction)
++{
++	return NULL;
++}
++
++static void dsp_heap_unmap_dma_buf(struct dma_buf_attachment *attachment,
++				   struct sg_table *table,
++				   enum dma_data_direction direction)
++{
++}
++
++static const struct dma_buf_ops dsp_heap_buf_ops = {
++	.mmap = dsp_heap_mmap,
++	.map_dma_buf = dsp_heap_map_dma_buf,
++	.unmap_dma_buf = dsp_heap_unmap_dma_buf,
++	.release = dsp_heap_dma_buf_release,
++};
++
++static struct dma_buf * dsp_heap_allocate(struct dma_heap *heap,
++					  unsigned long len,
++					  unsigned long fd_flags,
++					  unsigned long heap_flags)
++{
++	struct dsp_heap *dsp_heap = dma_heap_get_drvdata(heap);
++	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
++	struct dsp_heap_buffer *buffer;
++	struct dma_buf *dmabuf;
++
++	if (len > dsp_heap->size)
++		return ERR_PTR(-ENOMEM);
++
++	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
++	if (!buffer)
++		return ERR_PTR(-ENOMEM);
++
++	INIT_LIST_HEAD(&buffer->attachments);
++	mutex_init(&buffer->lock);
++	buffer->heap = heap;
++
++	/* create the dmabuf */
++	exp_info.ops = &dsp_heap_buf_ops;
++	exp_info.size = len;
++	exp_info.flags = fd_flags;
++	exp_info.priv = buffer;
++	dmabuf = dma_buf_export(&exp_info);
++	if (IS_ERR(dmabuf)) {
++		kfree(buffer);
++		return dmabuf;
++	}
++
++	return dmabuf;
++}
++
++static const struct dma_heap_ops dsp_heap_ops = {
++	.allocate = dsp_heap_allocate,
++};
++
++static int dsp_heap_create(void)
++{
++	struct dma_heap_export_info exp_info;
++	struct dsp_heap *dsp_heap;
++	struct reserved_mem *rmem;
++	struct device_node np;
++
++	np.full_name = "dsp_reserved_heap";
++	np.name = "dsp_reserved_heap";
++	rmem = of_reserved_mem_lookup(&np);
++	if (!rmem) {
++		pr_err("of_reserved_mem_lookup() returned NULL\n");
++		return 0;
++	}
++
++	if (rmem->base == 0 || rmem->size == 0) {
++		pr_err("dsp_data base or size is not correct\n");
++		return -EINVAL;
++	}
++
++	dsp_heap = kzalloc(sizeof(*dsp_heap), GFP_KERNEL);
++	if (!dsp_heap)
++		return -ENOMEM;
++
++	dsp_heap->base = rmem->base;
++	dsp_heap->size = rmem->size;
++
++	exp_info.name = "dsp";
++	exp_info.ops = &dsp_heap_ops;
++	exp_info.priv = dsp_heap;
++	dsp_heap->heap = dma_heap_add(&exp_info);
++	if (IS_ERR(dsp_heap->heap)) {
++		int ret = PTR_ERR(dsp_heap->heap);
++
++		kfree(dsp_heap);
++		return ret;
++	}
++
++	return 0;
++}
++module_init(dsp_heap_create);
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/dma-buf/udmabuf.c b/drivers/dma-buf/udmabuf.c
+index bf11d3220..38e8767ec 100644
+--- a/drivers/dma-buf/udmabuf.c
++++ b/drivers/dma-buf/udmabuf.c
+@@ -124,20 +124,17 @@ static int begin_cpu_udmabuf(struct dma_buf *buf,
+ {
+ 	struct udmabuf *ubuf = buf->priv;
+ 	struct device *dev = ubuf->device->this_device;
+-	int ret = 0;
+ 
+ 	if (!ubuf->sg) {
+ 		ubuf->sg = get_sg_table(dev, buf, direction);
+-		if (IS_ERR(ubuf->sg)) {
+-			ret = PTR_ERR(ubuf->sg);
+-			ubuf->sg = NULL;
+-		}
++		if (IS_ERR(ubuf->sg))
++			return PTR_ERR(ubuf->sg);
+ 	} else {
+ 		dma_sync_sg_for_cpu(dev, ubuf->sg->sgl, ubuf->sg->nents,
+ 				    direction);
+ 	}
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ static int end_cpu_udmabuf(struct dma_buf *buf,
+diff --git a/include/linux/dma-heap.h b/include/linux/dma-heap.h
+index 0c05561ca..ca83d0e7f 100644
+--- a/include/linux/dma-heap.h
++++ b/include/linux/dma-heap.h
+@@ -59,6 +59,15 @@ void *dma_heap_get_drvdata(struct dma_heap *heap);
+  */
+ const char *dma_heap_get_name(struct dma_heap *heap);
+ 
++/**
++ * dma_heap_get_dev() - get device struct for the heap
++ * @heap: DMA-Heap to retrieve device struct from
++ *
++ * Returns:
++ * The device struct for the heap.
++ */
++struct device *dma_heap_get_dev(struct dma_heap *heap);
++
+ /**
+  * dma_heap_add - adds a heap to dmabuf heaps
+  * @exp_info:		information needed to register this heap
+diff --git a/include/uapi/linux/dma-buf.h b/include/uapi/linux/dma-buf.h
+index b1523cb8a..f4063ee83 100644
+--- a/include/uapi/linux/dma-buf.h
++++ b/include/uapi/linux/dma-buf.h
+@@ -75,6 +75,10 @@ struct dma_buf_sync {
+ 	__u64 flags;
+ };
+ 
++struct dma_buf_phys {
++	unsigned long phys;
++};
++
+ #define DMA_BUF_SYNC_READ      (1 << 0)
+ #define DMA_BUF_SYNC_WRITE     (2 << 0)
+ #define DMA_BUF_SYNC_RW        (DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)
+@@ -94,5 +98,6 @@ struct dma_buf_sync {
+ #define DMA_BUF_SET_NAME	_IOW(DMA_BUF_BASE, 1, const char *)
+ #define DMA_BUF_SET_NAME_A	_IOW(DMA_BUF_BASE, 1, __u32)
+ #define DMA_BUF_SET_NAME_B	_IOW(DMA_BUF_BASE, 1, __u64)
++#define DMA_BUF_IOCTL_PHYS	_IOW(DMA_BUF_BASE, 10, struct dma_buf_phys)
+ 
+ #endif
+-- 
+2.25.1
+

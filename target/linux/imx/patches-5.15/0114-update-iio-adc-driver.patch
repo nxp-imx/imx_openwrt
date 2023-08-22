@@ -1,0 +1,2004 @@
+From f0c85d8906612b02891f13516ded8a222d152950 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 10:59:37 +0800
+Subject: [PATCH 14/24] update iio/adc driver
+
+---
+ drivers/iio/adc/Kconfig                      |  20 +
+ drivers/iio/adc/Makefile                     |   2 +
+ drivers/iio/adc/imx8qxp_adc.c                | 723 +++++++++++++++++++
+ drivers/iio/adc/imx93_adc.c                  | 445 ++++++++++++
+ drivers/iio/adc/vf610_adc.c                  |   8 +-
+ drivers/iio/imu/Kconfig                      |  13 +-
+ drivers/iio/imu/Makefile                     |   1 +
+ drivers/iio/imu/fxos8700_core.c              | 117 +--
+ drivers/iio/imu/rpmsg_iio_pedometer.c        | 424 +++++++++++
+ drivers/iio/imu/st_lsm6dsx/st_lsm6dsx_core.c |   4 +-
+ 10 files changed, 1675 insertions(+), 82 deletions(-)
+ create mode 100644 drivers/iio/adc/imx8qxp_adc.c
+ create mode 100644 drivers/iio/adc/imx93_adc.c
+ create mode 100644 drivers/iio/imu/rpmsg_iio_pedometer.c
+
+diff --git a/drivers/iio/adc/Kconfig b/drivers/iio/adc/Kconfig
+index af168e1c9..9d713ce25 100644
+--- a/drivers/iio/adc/Kconfig
++++ b/drivers/iio/adc/Kconfig
+@@ -530,6 +530,26 @@ config IMX7D_ADC
+ 	  This driver can also be built as a module. If so, the module will be
+ 	  called imx7d_adc.
+ 
++config IMX8QXP_ADC
++	tristate "IMX8QXP ADC driver"
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on HAS_IOMEM
++	help
++	  Say yes here to build support for IMX8QXP ADC.
++
++	  This driver can also be built as a module. If so, the module will be
++	  called imx8qxp_adc.
++
++config IMX93_ADC
++	tristate "IMX93 ADC driver"
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on HAS_IOMEM
++	help
++	  Say yes here to build support for IMX93 ADC.
++
++	  This driver can also be built as a module. If so, the module will be
++	  called imx93_adc.
++
+ config LP8788_ADC
+ 	tristate "LP8788 ADC driver"
+ 	depends on MFD_LP8788
+diff --git a/drivers/iio/adc/Makefile b/drivers/iio/adc/Makefile
+index d68550f49..6eeb7a474 100644
+--- a/drivers/iio/adc/Makefile
++++ b/drivers/iio/adc/Makefile
+@@ -46,6 +46,8 @@ obj-$(CONFIG_FSL_MX25_ADC) += fsl-imx25-gcq.o
+ obj-$(CONFIG_HI8435) += hi8435.o
+ obj-$(CONFIG_HX711) += hx711.o
+ obj-$(CONFIG_IMX7D_ADC) += imx7d_adc.o
++obj-$(CONFIG_IMX8QXP_ADC) += imx8qxp_adc.o
++obj-$(CONFIG_IMX93_ADC) += imx93_adc.o
+ obj-$(CONFIG_INA2XX_ADC) += ina2xx-adc.o
+ obj-$(CONFIG_INGENIC_ADC) += ingenic-adc.o
+ obj-$(CONFIG_INTEL_MRFLD_ADC) += intel_mrfld_adc.o
+diff --git a/drivers/iio/adc/imx8qxp_adc.c b/drivers/iio/adc/imx8qxp_adc.c
+new file mode 100644
+index 000000000..a6a9c42d0
+--- /dev/null
++++ b/drivers/iio/adc/imx8qxp_adc.c
+@@ -0,0 +1,723 @@
++/*
++ * NXP i.MX8QXP ADC driver
++ *
++ * Copyright (C) 2018 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#include <linux/clk.h>
++#include <linux/completion.h>
++#include <linux/err.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/pm_runtime.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
++
++#include <linux/iio/iio.h>
++#include <linux/iio/driver.h>
++#include <linux/iio/sysfs.h>
++
++/* ADC register */
++#define IMX8QXP_REG_ADC_VERID		0x00
++#define IMX8QXP_REG_ADC_PARAM		0x04
++#define IMX8QXP_REG_ADC_CTRL		0x10
++#define IMX8QXP_REG_ADC_STAT		0x14
++#define IMX8QXP_REG_ADC_IE		0x18
++#define IMX8QXP_REG_ADC_DE		0x1c
++#define IMX8QXP_REG_ADC_CFG		0x20
++#define IMX8QXP_REG_ADC_PAUSE		0x24
++#define IMX8QXP_REG_ADC_FCTRL		0x30
++#define IMX8QXP_REG_ADC_SWTRIG		0x34
++#define IMX8QXP_REG_ADC_TCTRL0		0xc0
++#define IMX8QXP_REG_ADC_TCTRL1		0xc4
++#define IMX8QXP_REG_ADC_TCTRL2		0xc8
++#define IMX8QXP_REG_ADC_TCTRL3		0xcc
++#define IMX8QXP_REG_ADC_TCTRL4		0xd0
++#define IMX8QXP_REG_ADC_TCTRL5		0xd4
++#define IMX8QXP_REG_ADC_TCTRL6		0xd8
++#define IMX8QXP_REG_ADC_TCTRL7		0xdc
++#define IMX8QXP_REG_ADC_CMDL1		0x100
++#define IMX8QXP_REG_ADC_CMDH1		0x104
++#define IMX8QXP_REG_ADC_CMDL2		0x108
++#define IMX8QXP_REG_ADC_CMDH2		0x10c
++#define IMX8QXP_REG_ADC_CMDL3		0x110
++#define IMX8QXP_REG_ADC_CMDH3		0x114
++#define IMX8QXP_REG_ADC_CMDL4		0x118
++#define IMX8QXP_REG_ADC_CMDH4		0x11c
++#define IMX8QXP_REG_ADC_CMDL5		0x120
++#define IMX8QXP_REG_ADC_CMDH5		0x124
++#define IMX8QXP_REG_ADC_CMDL6		0x128
++#define IMX8QXP_REG_ADC_CMDH6		0x12c
++#define IMX8QXP_REG_ADC_CMDL7		0x130
++#define IMX8QXP_REG_ADC_CMDH7		0x134
++#define IMX8QXP_REG_ADC_CMDL8		0x138
++#define IMX8QXP_REG_ADC_CMDH8		0x13c
++#define IMX8QXP_REG_ADC_CV1		0x200
++#define IMX8QXP_REG_ADC_CV2		0x204
++#define IMX8QXP_REG_ADC_CV3		0x208
++#define IMX8QXP_REG_ADC_CV4		0x20c
++#define IMX8QXP_REG_ADC_RESFIFO		0x300
++#define IMX8QXP_REG_ADC_TST		0xffc
++
++/* ADC IE bit shift */
++#define IMX8QXP_REG_ADC_IE_FOFIE_SHIFT		(1)
++#define IMX8QXP_REG_ADC_IE_FWMIE_SHIFT		(0)
++/* ADC CTRL bit shift*/
++#define IMX8QXP_REG_ADC_CTRL_FIFO_RESET_SHIFT		(8)
++#define IMX8QXP_REG_ADC_CTRL_SOFTWARE_RESET_SHIFT	(1)
++#define IMX8QXP_REG_ADC_CTRL_ADC_ENABLE			(0)
++/* ADC TCTRL bit shift*/
++#define IMX8QXP_REG_ADC_TCTRL_TCMD_SHIFT	(24)
++#define IMX8QXP_REG_ADC_TCTRL_TDLY_SHIFT	(16)
++#define IMX8QXP_REG_ADC_TCTRL_TPRI_SHIFT	(8)
++#define IMX8QXP_REG_ADC_TCTRL_HTEN_SHIFT	(0)
++/* ADC CMDL bit shift*/
++#define IMX8QXP_REG_ADC_CMDL_CSCALE_SHIFT	(8)
++#define IMX8QXP_REG_ADC_CMDL_MODE_SHIFT		(7)
++#define IMX8QXP_REG_ADC_CMDL_DIFF_SHIFT		(6)
++#define IMX8QXP_REG_ADC_CMDL_ABSEL_SHIFT	(5)
++#define IMX8QXP_REG_ADC_CMDL_ADCH_SHIFT		(0)
++/* ADC CMDH bit shift*/
++#define IMX8QXP_REG_ADC_CMDH_NEXT_SHIFT		(24)
++#define IMX8QXP_REG_ADC_CMDH_LOOP_SHIFT		(16)
++#define IMX8QXP_REG_ADC_CMDH_AVGS_SHIFT		(12)
++#define IMX8QXP_REG_ADC_CMDH_STS_SHIFT		(8)
++#define IMX8QXP_REG_ADC_CMDH_LWI_SHIFT		(7)
++#define IMX8QXP_REG_ADC_CMDH_CMPEN_SHIFT	(0)
++/* ADC CFG bit shift*/
++#define IMX8QXP_REG_ADC_CFG_PWREN_SHIFT		(28)
++#define IMX8QXP_REG_ADC_CFG_PUDLY_SHIFT		(16)
++#define IMX8QXP_REG_ADC_CFG_REFSEL_SHIFT	(6)
++#define IMX8QXP_REG_ADC_CFG_PWRSEL_SHIFT	(4)
++#define IMX8QXP_REG_ADC_CFG_TPRICTRL_SHIFT	(0)
++/* ADC FCTRL bit shift*/
++#define IMX8QXP_ADC_FCTRL_FWMARK_SHIFT		(16)
++#define IMX8QXP_ADC_FCTRL_FWMARK_MASK		(0x1f << 16)
++#define IMX8QXP_ADC_FCTRL_FCOUNT_MASK		(0x1f)
++/* ADC STAT bit shift*/
++#define IMX8QXP_REG_ADC_STAT_CMDACT_SHIFT	(24)
++#define IMX8QXP_REG_ADC_STAT_TRGACT_SHIFT	(16)
++#define IMX8QXP_REG_ADC_STAT_FOF_SHIFT		(1)
++#define IMX8QXP_REG_ADC_STAT_RDY_SHIFT		(0)
++
++/* ADC CMD PARAMETER*/
++#define IMX8QXP_REG_ADC_CMDL_CNANNEL_SCALE_DOWN		(0)
++#define IMX8QXP_REG_ADC_CMDL_CHANNEL_SCALE_FULL		(0x3f)
++#define IMX8QXP_REG_ADC_CMDL_SEL_A_A_B_CHANNEL		(0)
++#define IMX8QXP_REG_ADC_CMDL_SEL_B_B_A_CHANNEL		(1)
++#define IMX8QXP_REG_ADC_CMDL_STANDARD_RESOLUTION	(0)
++#define IMX8QXP_REG_ADC_CMDL_HIGH_RESOLUTION		(1)
++#define IMX8QXP_REG_ADC_CMDL_MODE_SINGLE		(0)
++#define IMX8QXP_REG_ADC_CMDL_MODE_DIFF			(1)
++
++#define IMX8QXP_REG_ADC_CMDH_LWI_INCREMENT_ENABLE	(1)
++#define IMX8QXP_REG_ADC_CMDH_LWI_INCREMENT_DISABLE	(0)
++#define IMX8QXP_REG_ADC_CMDH_CMPEN_DISABLE		(0)
++#define IMX8QXP_REG_ADC_CMDH_CMPEN_ENABLE_TRUE		(2)
++#define IMX8QXP_REG_ADC_CMDH_CMPEN_ENABLE_UNTILE_TRUE	(0x3)
++
++/* ADC PAUSE PARAMETER*/
++#define IMX8QXP_REG_ADC_PAUSE_ENABLE		(0x80000000)
++/* ADC TRIGGER PARAMETER*/
++#define IMX8QXP_REG_ADC_TCTRL_TPRI_PRIORITY_HIGH	(0)
++#define IMX8QXP_REG_ADC_TCTRL_TPRI_PRIORITY_LOW	(1)
++
++#define IMX8QXP_REG_ADC_TCTRL_HTEN_HARDWARE_TIRGGER_DISABLE	(0)
++#define IMX8QXP_REG_ADC_TCTRC_HTEN_HARDWARE_TIRGGER_ENABLE	(1)
++
++#define MAX_CMD (8)
++#define MAX_TRIG (8)
++
++#define IMX8QXP_ADC_TIMEOUT		msecs_to_jiffies(100)
++
++struct imx8qxp_adc_trigger_ctrl {
++	u32 tcmd;
++	u32 tdly;
++	u32 tpri;
++	u32 hten;
++};
++
++struct imx8qxp_adc_cmd_l {
++	u32 scale;
++	u32 mode;
++	u32 diff;
++	u32 absel;
++	u32 adch;
++};
++
++struct imx8qxp_adc_cmd_h {
++	u32 next;
++	u32 loop;
++	u32 avgs;
++	u32 sts;
++	u32 lwi;
++	u32 cmpen;
++};
++
++struct imx8qxp_adc_cfg {
++	u32 pwren;
++	u32 pudly;
++	u32 refsel;
++	u32 pwrsel;
++	u32 tprictrl;
++};
++
++struct imx8qxp_adc {
++	struct device *dev;
++	void __iomem *regs;
++	struct clk *clk;
++	struct clk *ipg_clk;
++
++	u32 vref_uv;
++	u32 value;
++	u32 channel_id;
++	u32 trigger_id;
++	u32 cmd_id;
++
++	struct regulator *vref;
++	struct imx8qxp_adc_cmd_l adc_cmd_l[MAX_CMD + 1];
++	struct imx8qxp_adc_cmd_h adc_cmd_h[MAX_CMD + 1];
++	struct imx8qxp_adc_trigger_ctrl adc_trigger_ctrl[MAX_TRIG + 1];
++	struct imx8qxp_adc_cfg adc_cfg;
++	struct completion completion;
++};
++
++#define IMX8QXP_ADC_CHAN(_idx) {					\
++	.type = IIO_VOLTAGE,					\
++	.indexed = 1,						\
++	.channel = (_idx),					\
++	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),		\
++	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
++				BIT(IIO_CHAN_INFO_SAMP_FREQ),	\
++}
++
++static const struct iio_chan_spec imx8qxp_adc_iio_channels[] = {
++	IMX8QXP_ADC_CHAN(0),
++	IMX8QXP_ADC_CHAN(1),
++	IMX8QXP_ADC_CHAN(2),
++	IMX8QXP_ADC_CHAN(3),
++	IMX8QXP_ADC_CHAN(4),
++	IMX8QXP_ADC_CHAN(5),
++	IMX8QXP_ADC_CHAN(6),
++	IMX8QXP_ADC_CHAN(7),
++};
++
++static void imx8qxp_adc_feature_prepare(struct imx8qxp_adc *adc)
++{
++	u32 i;
++
++	adc->trigger_id = 0;
++	adc->cmd_id = 0;
++	adc->channel_id = 0;
++
++	for (i = 0; i < MAX_CMD + 1; i++) {
++		adc->adc_cmd_l[i].scale = 1;
++		adc->adc_cmd_l[i].mode = 0;
++		adc->adc_cmd_l[i].diff = 0;
++		adc->adc_cmd_l[i].absel = 0;
++		adc->adc_cmd_l[i].adch = 0;
++		adc->adc_cmd_h[i].next = 0;
++		adc->adc_cmd_h[i].loop = 0;
++		adc->adc_cmd_h[i].avgs = 0;
++		adc->adc_cmd_h[i].sts = 0;
++		adc->adc_cmd_h[i].lwi = 0;
++		adc->adc_cmd_h[i].cmpen = 0;
++	}
++
++	for (i = 0; i < MAX_TRIG; i++) {
++		adc->adc_trigger_ctrl[i].tcmd = 0;
++		adc->adc_trigger_ctrl[i].tdly = 0;
++		adc->adc_trigger_ctrl[i].tpri = 0;
++		adc->adc_trigger_ctrl[i].hten = 0;
++	}
++
++	adc->adc_cfg.pwren = 0;
++	adc->adc_cfg.pudly = 0;
++	adc->adc_cfg.refsel = 0;
++	adc->adc_cfg.pwrsel = 0;
++	adc->adc_cfg.tprictrl = 0;
++}
++
++static void imx8qxp_adc_reset(struct imx8qxp_adc *adc)
++{
++	u32 ctrl;
++
++	/*software reset, need to clear the set bit*/
++	ctrl = readl(adc->regs + IMX8QXP_REG_ADC_CTRL);
++	ctrl |= 1 << IMX8QXP_REG_ADC_CTRL_SOFTWARE_RESET_SHIFT;
++	writel(ctrl, adc->regs + IMX8QXP_REG_ADC_CTRL);
++	udelay(10);
++	ctrl &= ~(1 << IMX8QXP_REG_ADC_CTRL_SOFTWARE_RESET_SHIFT);
++	writel(ctrl, adc->regs + IMX8QXP_REG_ADC_CTRL);
++
++	/* reset the fifo */
++	ctrl |= 1 << IMX8QXP_REG_ADC_CTRL_FIFO_RESET_SHIFT;
++	writel(ctrl, adc->regs + IMX8QXP_REG_ADC_CTRL);
++}
++
++static void imx8qxp_adc_reg_config(struct imx8qxp_adc *adc)
++{
++	u32 adc_cfg, adc_tctrl, adc_cmdl, adc_cmdh;
++	u32 t_id, c_id;
++
++	adc_cfg = adc->adc_cfg.pwren << IMX8QXP_REG_ADC_CFG_PWREN_SHIFT
++			| adc->adc_cfg.pudly << IMX8QXP_REG_ADC_CFG_PUDLY_SHIFT
++			| adc->adc_cfg.refsel << IMX8QXP_REG_ADC_CFG_REFSEL_SHIFT
++			| adc->adc_cfg.pwrsel << IMX8QXP_REG_ADC_CFG_PWRSEL_SHIFT
++			| adc->adc_cfg.tprictrl << IMX8QXP_REG_ADC_CFG_TPRICTRL_SHIFT;
++	writel(adc_cfg, adc->regs + IMX8QXP_REG_ADC_CFG);
++
++	t_id = adc->trigger_id;
++	adc_tctrl = adc->adc_trigger_ctrl[t_id].tcmd << IMX8QXP_REG_ADC_TCTRL_TCMD_SHIFT
++			| adc->adc_trigger_ctrl[t_id].tdly << IMX8QXP_REG_ADC_TCTRL_TDLY_SHIFT
++			| adc->adc_trigger_ctrl[t_id].tpri << IMX8QXP_REG_ADC_TCTRL_TPRI_SHIFT
++			| adc->adc_trigger_ctrl[t_id].hten << IMX8QXP_REG_ADC_TCTRL_HTEN_SHIFT;
++	writel(adc_tctrl, adc->regs + IMX8QXP_REG_ADC_TCTRL0 + t_id * 4);
++
++	c_id = adc->cmd_id - 1;
++	adc_cmdl = adc->adc_cmd_l[c_id].scale << IMX8QXP_REG_ADC_CMDL_CSCALE_SHIFT
++			| adc->adc_cmd_l[c_id].mode << IMX8QXP_REG_ADC_CMDL_MODE_SHIFT
++			| adc->adc_cmd_l[c_id].diff << IMX8QXP_REG_ADC_CMDL_DIFF_SHIFT
++			| adc->adc_cmd_l[c_id].absel << IMX8QXP_REG_ADC_CMDL_ABSEL_SHIFT
++			| adc->adc_cmd_l[c_id].adch << IMX8QXP_REG_ADC_CMDL_ADCH_SHIFT;
++	writel(adc_cmdl, adc->regs + IMX8QXP_REG_ADC_CMDL1 + c_id * 8);
++
++	adc_cmdh = adc->adc_cmd_h[c_id].next << IMX8QXP_REG_ADC_CMDH_NEXT_SHIFT
++			| adc->adc_cmd_h[c_id].loop << IMX8QXP_REG_ADC_CMDH_LOOP_SHIFT
++			| adc->adc_cmd_h[c_id].avgs << IMX8QXP_REG_ADC_CMDH_AVGS_SHIFT
++			| adc->adc_cmd_h[c_id].sts << IMX8QXP_REG_ADC_CMDH_STS_SHIFT
++			| adc->adc_cmd_h[c_id].lwi << IMX8QXP_REG_ADC_CMDH_LWI_SHIFT
++			| adc->adc_cmd_h[c_id].cmpen << IMX8QXP_REG_ADC_CMDH_CMPEN_SHIFT;
++	writel(adc_cmdh, adc->regs + IMX8QXP_REG_ADC_CMDH1 + c_id * 8);
++}
++
++static void imx8qxp_adc_mode_config(struct imx8qxp_adc *adc)
++{
++	u32 cmd_id, trigger_id, channel_id;
++
++	channel_id = adc->channel_id;
++	cmd_id = adc->cmd_id - 1;
++	trigger_id = adc->trigger_id;
++
++	/* config the cmd */
++	adc->adc_cmd_l[cmd_id].scale = IMX8QXP_REG_ADC_CMDL_CHANNEL_SCALE_FULL;
++	adc->adc_cmd_l[cmd_id].mode = IMX8QXP_REG_ADC_CMDL_STANDARD_RESOLUTION;
++	adc->adc_cmd_l[cmd_id].diff = IMX8QXP_REG_ADC_CMDL_MODE_SINGLE;
++	adc->adc_cmd_l[cmd_id].absel = IMX8QXP_REG_ADC_CMDL_SEL_A_A_B_CHANNEL;
++	adc->adc_cmd_l[cmd_id].adch = channel_id;
++
++	adc->adc_cmd_h[cmd_id].next = 0;
++	adc->adc_cmd_h[cmd_id].loop = 0;
++	adc->adc_cmd_h[cmd_id].avgs = 7;  // 128 times conversion
++	adc->adc_cmd_h[cmd_id].sts = 0;
++	adc->adc_cmd_h[cmd_id].lwi = IMX8QXP_REG_ADC_CMDH_LWI_INCREMENT_DISABLE;
++	adc->adc_cmd_h[cmd_id].cmpen = IMX8QXP_REG_ADC_CMDH_CMPEN_DISABLE;
++
++	/* config the trigger control */
++	adc->adc_trigger_ctrl[trigger_id].tcmd = adc->cmd_id;  //point to cmd1
++	adc->adc_trigger_ctrl[trigger_id].tdly = 0;
++	adc->adc_trigger_ctrl[trigger_id].tpri = IMX8QXP_REG_ADC_TCTRL_TPRI_PRIORITY_HIGH;
++	adc->adc_trigger_ctrl[trigger_id].hten = IMX8QXP_REG_ADC_TCTRL_HTEN_HARDWARE_TIRGGER_DISABLE;
++
++	/* ADC configuration */
++	adc->adc_cfg.pwren = 1;
++	adc->adc_cfg.pudly = 0x80;
++	adc->adc_cfg.refsel = 0;
++	adc->adc_cfg.pwrsel = 3;
++	adc->adc_cfg.tprictrl = 0;
++
++	imx8qxp_adc_reg_config(adc);
++}
++
++static void imx8qxp_adc_fifo_config(struct imx8qxp_adc *adc)
++{
++	u32 fifo_ctrl, interrupt_en;
++
++	fifo_ctrl = readl(adc->regs + IMX8QXP_REG_ADC_FCTRL);
++	fifo_ctrl &= ~IMX8QXP_ADC_FCTRL_FWMARK_MASK;
++	/* set the watermark level to 1 */
++	fifo_ctrl |= 0 << IMX8QXP_ADC_FCTRL_FWMARK_SHIFT;
++	writel(fifo_ctrl, adc->regs + IMX8QXP_REG_ADC_FCTRL);
++
++	/* FIFO Watermark Interrupt Enable */
++	interrupt_en = readl(adc->regs + IMX8QXP_REG_ADC_IE);
++	interrupt_en |= 1 << IMX8QXP_REG_ADC_IE_FWMIE_SHIFT;
++	writel(interrupt_en, adc->regs + IMX8QXP_REG_ADC_IE);
++}
++
++static void imx8qxp_adc_disable(struct imx8qxp_adc *adc)
++{
++	u32 ctrl;
++
++	ctrl = readl(adc->regs + IMX8QXP_REG_ADC_CTRL);
++	ctrl &=  ~(1 << IMX8QXP_REG_ADC_CTRL_ADC_ENABLE);
++	writel(ctrl, adc->regs + IMX8QXP_REG_ADC_CTRL);
++}
++
++static void imx8qxp_adc_enable(struct imx8qxp_adc *adc)
++{
++	u32 ctrl;
++
++	ctrl = readl(adc->regs + IMX8QXP_REG_ADC_CTRL);
++	ctrl |= 1 << IMX8QXP_REG_ADC_CTRL_ADC_ENABLE;
++	writel(ctrl, adc->regs + IMX8QXP_REG_ADC_CTRL);
++
++}
++
++static void imx8qxp_adc_start_trigger(struct imx8qxp_adc *adc)
++{
++	writel(1 << adc->trigger_id, adc->regs + IMX8QXP_REG_ADC_SWTRIG);
++}
++
++static u32 imx8qxp_adc_get_sample_rate(struct imx8qxp_adc *adc)
++{
++
++	u32 input_clk;
++
++	input_clk = clk_get_rate(adc->clk);
++
++	return input_clk / 3;
++}
++
++static int imx8qxp_adc_read_raw(struct iio_dev *indio_dev,
++			struct iio_chan_spec const *chan,
++			int *val,
++			int *val2,
++			long mask)
++{
++
++	struct imx8qxp_adc *adc = iio_priv(indio_dev);
++
++	u32 channel;
++	long ret;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_RAW:
++		pm_runtime_get_sync(adc->dev);
++
++		mutex_lock(&indio_dev->mlock);
++		reinit_completion(&adc->completion);
++
++		channel = chan->channel & 0x07;
++		adc->channel_id = channel;
++		adc->cmd_id = 1;
++		adc->trigger_id = 0;
++		imx8qxp_adc_mode_config(adc);
++
++		imx8qxp_adc_fifo_config(adc);
++
++		imx8qxp_adc_enable(adc);
++
++		imx8qxp_adc_start_trigger(adc);
++
++		ret = wait_for_completion_interruptible_timeout
++				(&adc->completion, IMX8QXP_ADC_TIMEOUT);
++
++		pm_runtime_mark_last_busy(adc->dev);
++		pm_runtime_put_sync_autosuspend(adc->dev);
++
++		if (ret == 0) {
++			mutex_unlock(&indio_dev->mlock);
++			return -ETIMEDOUT;
++		}
++		if (ret < 0) {
++			mutex_unlock(&indio_dev->mlock);
++			return ret;
++		}
++
++		*val = adc->value;
++		mutex_unlock(&indio_dev->mlock);
++		return IIO_VAL_INT;
++
++	case IIO_CHAN_INFO_SCALE:
++		adc->vref_uv = regulator_get_voltage(adc->vref);
++		*val = adc->vref_uv / 1000;
++		*val2 = 12;
++		return IIO_VAL_FRACTIONAL_LOG2;
++
++	case IIO_CHAN_INFO_SAMP_FREQ:
++		*val = imx8qxp_adc_get_sample_rate(adc);
++		return IIO_VAL_INT;
++
++	default:
++		return -EINVAL;
++	}
++}
++
++static int imx8qxp_adc_read_data(struct imx8qxp_adc *adc)
++{
++	u32 value;
++
++	value = readl(adc->regs + IMX8QXP_REG_ADC_RESFIFO);
++	value &= 0xffff;
++	return (value >> 3);
++}
++
++static irqreturn_t imx8qxp_adc_isr(int irq, void *dev_id)
++{
++	struct imx8qxp_adc *adc = (struct imx8qxp_adc *)dev_id;
++
++	u32 fifo_count;
++
++	fifo_count = readl(adc->regs + IMX8QXP_REG_ADC_FCTRL)
++			& IMX8QXP_ADC_FCTRL_FCOUNT_MASK;
++
++	if (fifo_count) {
++		adc->value = imx8qxp_adc_read_data(adc);
++		complete(&adc->completion);
++	}
++
++	return IRQ_HANDLED;
++}
++
++static int imx8qxp_adc_reg_access(struct iio_dev *indio_dev,
++			unsigned int reg, unsigned int writeval,
++			unsigned int *readval)
++{
++	struct imx8qxp_adc *adc = iio_priv(indio_dev);
++
++	if (!readval || reg % 4 || reg > IMX8QXP_REG_ADC_TST)
++		return -EINVAL;
++
++	pm_runtime_get_sync(adc->dev);
++
++	*readval = readl(adc->regs + reg);
++
++	pm_runtime_mark_last_busy(adc->dev);
++	pm_runtime_put_sync_autosuspend(adc->dev);
++
++	return 0;
++}
++
++static const struct iio_info imx8qxp_adc_iio_info = {
++	.read_raw = &imx8qxp_adc_read_raw,
++	.debugfs_reg_access = &imx8qxp_adc_reg_access,
++};
++
++static const struct of_device_id imx8qxp_adc_match[] = {
++	{ .compatible = "fsl,imx8qxp-adc", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx8qxp_adc_match);
++
++static int imx8qxp_adc_probe(struct platform_device *pdev)
++{
++	struct imx8qxp_adc *adc;
++	struct iio_dev *indio_dev;
++	struct resource *mem;
++	int irq;
++	int ret;
++
++	indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(*adc));
++	if (!indio_dev) {
++		dev_err(&pdev->dev, "Failed allocating iio device\n");
++		return -ENOMEM;
++	}
++
++	adc = iio_priv(indio_dev);
++	adc->dev = &pdev->dev;
++
++	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	adc->regs = devm_ioremap_resource(&pdev->dev, mem);
++	if (IS_ERR(adc->regs)) {
++		ret = PTR_ERR(adc->regs);
++		dev_err(&pdev->dev,
++			"Failed to remap adc memory, err = %d\n", ret);
++		return ret;
++	}
++
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0) {
++		dev_err(&pdev->dev, "No irq resource?\n");
++		return irq;
++	}
++
++	adc->clk = devm_clk_get(&pdev->dev, "per");
++	if (IS_ERR(adc->clk)) {
++		ret = PTR_ERR(adc->clk);
++		dev_err(&pdev->dev, "Failed getting clock, err = %d\n", ret);
++		return ret;
++	}
++
++	adc->ipg_clk = devm_clk_get(&pdev->dev, "ipg");
++	if (IS_ERR(adc->ipg_clk)) {
++		ret = PTR_ERR(adc->ipg_clk);
++		dev_err(&pdev->dev, "Failed getting clock, err = %d\n", ret);
++		return ret;
++	}
++
++	adc->vref = devm_regulator_get(&pdev->dev, "vref");
++	if (IS_ERR(adc->vref)) {
++		ret = PTR_ERR(adc->vref);
++		dev_err(&pdev->dev,
++			"Failed getting reference voltage, err = %d\n", ret);
++		return ret;
++	}
++
++	ret = regulator_enable(adc->vref);
++	if (ret) {
++		dev_err(&pdev->dev,
++			"Can't enable adc reference top voltage, err = %d\n",
++			ret);
++		return ret;
++	}
++
++	platform_set_drvdata(pdev, indio_dev);
++
++	init_completion(&adc->completion);
++
++	indio_dev->name = dev_name(&pdev->dev);
++	indio_dev->dev.parent = &pdev->dev;
++	indio_dev->info = &imx8qxp_adc_iio_info;
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->channels = imx8qxp_adc_iio_channels;
++	indio_dev->num_channels = ARRAY_SIZE(imx8qxp_adc_iio_channels);
++
++	ret = clk_prepare_enable(adc->clk);
++	if (ret) {
++		dev_err(&pdev->dev,
++			"Could not prepare or enable the clock.\n");
++		goto error_adc_clk_enable;
++	}
++
++	ret = clk_prepare_enable(adc->ipg_clk);
++	if (ret) {
++		dev_err(&pdev->dev,
++			"Could not prepare or enable the clock.\n");
++		goto error_adc_ipg_clk_enable;
++	}
++
++	ret = devm_request_irq(adc->dev, irq,
++				imx8qxp_adc_isr, 0,
++				dev_name(&pdev->dev), adc);
++	if (ret < 0) {
++		dev_err(&pdev->dev, "Failed requesting irq, irq = %d\n", irq);
++		goto error_iio_device_register;
++	}
++
++	imx8qxp_adc_feature_prepare(adc);
++	imx8qxp_adc_reset(adc);
++
++	ret = iio_device_register(indio_dev);
++	if (ret) {
++		imx8qxp_adc_disable(adc);
++		dev_err(&pdev->dev, "Couldn't register the device.\n");
++		goto error_iio_device_register;
++	}
++
++	pm_runtime_set_active(&pdev->dev);
++	pm_runtime_set_autosuspend_delay(&pdev->dev, 50);
++	pm_runtime_use_autosuspend(&pdev->dev);
++	pm_runtime_enable(&pdev->dev);
++
++	return 0;
++
++error_iio_device_register:
++	clk_disable_unprepare(adc->ipg_clk);
++error_adc_ipg_clk_enable:
++	clk_disable_unprepare(adc->clk);
++error_adc_clk_enable:
++	regulator_disable(adc->vref);
++
++	return ret;
++}
++
++static int imx8qxp_adc_remove(struct platform_device *pdev)
++{
++	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
++	struct imx8qxp_adc *adc = iio_priv(indio_dev);
++
++	pm_runtime_get_sync(&pdev->dev);
++
++	iio_device_unregister(indio_dev);
++
++	imx8qxp_adc_disable(adc);
++
++	clk_disable_unprepare(adc->clk);
++	clk_disable_unprepare(adc->ipg_clk);
++	regulator_disable(adc->vref);
++
++	pm_runtime_disable(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
++
++
++	return 0;
++}
++
++static int imx8qxp_adc_runtime_suspend(struct device *dev)
++{
++	struct iio_dev *indio_dev = dev_get_drvdata(dev);
++	struct imx8qxp_adc *adc = iio_priv(indio_dev);
++
++	imx8qxp_adc_disable(adc);
++
++	clk_disable_unprepare(adc->clk);
++	clk_disable_unprepare(adc->ipg_clk);
++	regulator_disable(adc->vref);
++
++	return 0;
++}
++
++static int imx8qxp_adc_runtime_resume(struct device *dev)
++{
++	struct iio_dev *indio_dev = dev_get_drvdata(dev);
++	struct imx8qxp_adc *adc = iio_priv(indio_dev);
++	int ret;
++
++	ret = regulator_enable(adc->vref);
++	if (ret) {
++		dev_err(adc->dev,
++			"Can't enable adc reference top voltage, err = %d\n",
++			ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(adc->clk);
++	if (ret) {
++		dev_err(adc->dev,
++			"Could not prepare or enable clock.\n");
++		regulator_disable(adc->vref);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(adc->ipg_clk);
++	if (ret) {
++		dev_err(adc->dev,
++			"Could not prepare or enable clock.\n");
++		clk_disable_unprepare(adc->clk);
++		regulator_disable(adc->vref);
++		return ret;
++	}
++	imx8qxp_adc_reset(adc);
++
++	return 0;
++}
++
++static const struct dev_pm_ops imx8qxp_adc_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
++	SET_RUNTIME_PM_OPS(imx8qxp_adc_runtime_suspend, imx8qxp_adc_runtime_resume, NULL)
++};
++
++static struct platform_driver imx8qxp_adc_driver = {
++	.probe		= imx8qxp_adc_probe,
++	.remove		= imx8qxp_adc_remove,
++	.driver		= {
++		.name	= "imx8qxp_adc",
++		.of_match_table = imx8qxp_adc_match,
++		.pm	= &imx8qxp_adc_pm_ops,
++	},
++};
++
++module_platform_driver(imx8qxp_adc_driver);
++
++MODULE_AUTHOR("Haibo Chen <haibo.chen@nxp.com>");
++MODULE_DESCRIPTION("NXP IMX8QXP ADC driver");
++MODULE_LICENSE("GPL v2");
+diff --git a/drivers/iio/adc/imx93_adc.c b/drivers/iio/adc/imx93_adc.c
+new file mode 100644
+index 000000000..b0faddefb
+--- /dev/null
++++ b/drivers/iio/adc/imx93_adc.c
+@@ -0,0 +1,445 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * NXP i.MX93 ADC driver
++ *
++ * Copyright 2022 NXP
++ */
++
++#include <linux/bitfield.h>
++#include <linux/completion.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/platform_device.h>
++#include <linux/interrupt.h>
++#include <linux/iio/iio.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/pm_runtime.h>
++#include <linux/module.h>
++#include <linux/regulator/consumer.h>
++
++#define IMX93_ADC_DRIVER_NAME	"imx93-adc"
++
++/* Register map definition */
++#define IMX93_ADC_MCR		0x00
++#define IMX93_ADC_MSR		0x04
++#define IMX93_ADC_ISR		0x10
++#define IMX93_ADC_IMR		0x20
++#define IMX93_ADC_CIMR0		0x24
++#define IMX93_ADC_CTR0		0x94
++#define IMX93_ADC_NCMR0		0xA4
++#define IMX93_ADC_PCDR0		0x100
++#define IMX93_ADC_PCDR1		0x104
++#define IMX93_ADC_PCDR2		0x108
++#define IMX93_ADC_PCDR3		0x10c
++#define IMX93_ADC_PCDR4		0x110
++#define IMX93_ADC_PCDR5		0x114
++#define IMX93_ADC_PCDR6		0x118
++#define IMX93_ADC_PCDR7		0x11c
++#define IMX93_ADC_CALSTAT	0x39C
++
++#define IMX93_ADC_MCR_MODE_MASK			BIT(29)
++#define IMX93_ADC_MCR_NSTART_MASK		BIT(24)
++#define IMX93_ADC_MCR_CALSTART_MASK		BIT(14)
++#define IMX93_ADC_MCR_ADCLKSE_MASK		BIT(8)
++#define IMX93_ADC_MCR_PWDN_MASK			BIT(0)
++
++#define IMX93_ADC_MSR_CALFAIL_MASK		BIT(30)
++#define IMX93_ADC_MSR_CALBUSY_MASK		BIT(29)
++#define IMX93_ADC_MSR_ADCSTATUS_MASK		GENMASK(2,0)
++
++#define IMX93_ADC_ISR_EOC_MASK			BIT(1)
++
++#define IMX93_ADC_IMR_JEOC_MASK			BIT(3)	// End of injected conversion interrupt mask
++#define IMX93_ADC_IMR_JECH_MASK			BIT(2)	// End of injected chain conversion interrupt mask
++#define IMX93_ADC_IMR_EOC_MASK			BIT(1)	// End of conversion interrupt mask
++#define IMX93_ADC_IMR_ECH_MASK			BIT(0)	// End of chain conversion interrupt mask
++
++#define IMX93_ADC_PCDR_CDATA_MASK		GENMASK(11,0)
++
++#define ON_SHOT_MODE		0
++#define SCAN_MODE		1
++
++#define IDLE			0
++#define POWER_DOWN		1
++#define WAIT_STATE		2
++#define BUSY_IN_CALIBRATION	3
++#define SAMPLE			4
++#define CONVERSION		6
++
++#define IMX93_ADC_TIMEOUT		msecs_to_jiffies(100)
++
++struct imx93_adc {
++	struct device *dev;
++	void __iomem *regs;
++	struct clk *ipg_clk;
++	struct regulator *vref;
++	struct mutex lock;
++	struct completion completion;
++};
++
++#define IMX93_ADC_CHAN(_idx) {					\
++	.type = IIO_VOLTAGE,					\
++	.indexed = 1,						\
++	.channel = (_idx),					\
++	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),		\
++	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
++				BIT(IIO_CHAN_INFO_SAMP_FREQ),	\
++}
++
++static const struct iio_chan_spec imx93_adc_iio_channels[] = {
++	IMX93_ADC_CHAN(0),
++	IMX93_ADC_CHAN(1),
++	IMX93_ADC_CHAN(2),
++	IMX93_ADC_CHAN(3),
++};
++
++static void imx93_adc_power_down(struct imx93_adc *adc)
++{
++	u32 mcr, msr;
++	int ret;
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr |= FIELD_PREP(IMX93_ADC_MCR_PWDN_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	ret = readl_poll_timeout(adc->regs + IMX93_ADC_MSR, msr,
++		((msr & IMX93_ADC_MSR_ADCSTATUS_MASK) == POWER_DOWN), 1, 50);
++	if (ret == -ETIMEDOUT)
++		dev_warn(adc->dev, "ADC do not in power down mode, current MSR is %x\n", msr);
++}
++
++static void imx93_adc_config_ad_clk(struct imx93_adc *adc)
++{
++	u32 mcr;
++
++	/* put adc in power down mode */
++	imx93_adc_power_down(adc);
++
++	/* config the AD_CLK equal to bus clock */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr |= FIELD_PREP(IMX93_ADC_MCR_ADCLKSE_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	/* bring ADC out of power down state, in idle state */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr &= ~FIELD_PREP(IMX93_ADC_MCR_PWDN_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++}
++
++static int imx93_adc_calibration(struct imx93_adc *adc)
++{
++	u32 mcr, msr, adc_status;
++	int ret;
++
++	/* make sure ADC in power down mode */
++	msr = readl(adc->regs + IMX93_ADC_MSR);
++	adc_status = FIELD_GET(IMX93_ADC_MSR_ADCSTATUS_MASK, msr);
++	if (adc_status != POWER_DOWN)
++		imx93_adc_power_down(adc);
++
++	/* config SAR controller operating clock */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr &= ~FIELD_PREP(IMX93_ADC_MCR_ADCLKSE_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	/* bring ADC out of power down state */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr &= ~FIELD_PREP(IMX93_ADC_MCR_PWDN_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	/*
++	 * we use the default TSAMP/NRSMPL/AVGEN in MCR,
++	 * can add the setting of these bit if need
++	 */
++
++	/* run calibration */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr |= FIELD_PREP(IMX93_ADC_MCR_CALSTART_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	/* wait calibration to be finished */
++	ret = readl_poll_timeout(adc->regs + IMX93_ADC_MSR, msr,
++		!(msr & IMX93_ADC_MSR_CALBUSY_MASK), 1000, 2000000);
++	if (ret == -ETIMEDOUT) {
++		dev_warn(adc->dev, "ADC do not finish calibration in 1min!\n");
++		return ret;
++	}
++
++	/* check whether calbration is success or not */
++	msr = readl(adc->regs + IMX93_ADC_MSR);
++	if (msr & IMX93_ADC_MSR_CALFAIL_MASK) {
++		dev_warn(adc->dev, "ADC calibration failed!\n");
++		return -EAGAIN;
++	}
++
++	return 0;
++}
++
++static int imx93_adc_read_raw(struct iio_dev *indio_dev,
++				struct iio_chan_spec const *chan,
++				int *val, int *val2, long mask)
++{
++	struct imx93_adc *adc = iio_priv(indio_dev);
++	struct device *dev = adc->dev;
++	u32 channel;
++	u32 imr, mcr, pcda;
++	long ret;
++	u32 vref_uv;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_RAW:
++		pm_runtime_get_sync(dev);
++		mutex_lock(&adc->lock);
++
++		reinit_completion(&adc->completion);
++
++		/* config channel mask register */
++		channel = 1 << chan->channel;
++		writel(channel, adc->regs + IMX93_ADC_NCMR0);
++
++		/* can config sesired sample time in CTRn is need */
++
++		/* config interrupt mask */
++		imr = FIELD_PREP(IMX93_ADC_IMR_EOC_MASK, 1);
++		writel(imr, adc->regs + IMX93_ADC_IMR);
++		writel(channel, adc->regs + IMX93_ADC_CIMR0);
++
++		/* config one-shot mode */
++		mcr = readl(adc->regs + IMX93_ADC_MCR);
++		mcr &= ~FIELD_PREP(IMX93_ADC_MCR_MODE_MASK, 1);
++		writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++		/* start normal conversion */
++		mcr = readl(adc->regs + IMX93_ADC_MCR);
++		mcr |= FIELD_PREP(IMX93_ADC_MCR_NSTART_MASK, 1);
++		writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++		ret = wait_for_completion_interruptible_timeout(&adc->completion,
++								IMX93_ADC_TIMEOUT);
++		if (ret == 0) {
++			mutex_unlock(&adc->lock);
++			return -ETIMEDOUT;
++		}
++		if (ret < 0) {
++			mutex_unlock(&adc->lock);
++			return ret;
++		}
++
++		pcda = readl(adc->regs + IMX93_ADC_PCDR0 + chan->channel * 4);
++
++		*val = FIELD_GET(IMX93_ADC_PCDR_CDATA_MASK, pcda);
++
++		mutex_unlock(&adc->lock);
++		pm_runtime_mark_last_busy(dev);
++		pm_runtime_put_sync_autosuspend(dev);
++		return IIO_VAL_INT;
++
++	case IIO_CHAN_INFO_SCALE:
++		vref_uv = regulator_get_voltage(adc->vref);
++		*val = vref_uv / 1000;
++		*val2 = 12;
++		return IIO_VAL_FRACTIONAL_LOG2;
++
++	case IIO_CHAN_INFO_SAMP_FREQ:
++		*val = clk_get_rate(adc->ipg_clk);
++		return IIO_VAL_INT;
++
++	default:
++		return -EINVAL;
++	}
++}
++
++static irqreturn_t imx93_adc_isr(int irq, void *dev_id)
++{
++	struct imx93_adc *adc = dev_id;
++	u32 isr;
++
++	isr = readl(adc->regs + IMX93_ADC_ISR);
++	writel(isr, adc->regs + IMX93_ADC_ISR);
++
++	if (FIELD_GET(IMX93_ADC_ISR_EOC_MASK, isr))
++		complete(&adc->completion);
++
++	return IRQ_HANDLED;
++}
++
++static const struct iio_info imx93_adc_iio_info = {
++	.read_raw = &imx93_adc_read_raw,
++};
++
++static int imx93_adc_probe(struct platform_device *pdev)
++{
++	struct imx93_adc *adc;
++	struct iio_dev *indio_dev;
++	struct device *dev = &pdev->dev;
++	int irq, ret;
++
++	indio_dev = devm_iio_device_alloc(dev, sizeof(*adc));
++	if (!indio_dev) {
++		dev_err(dev, "Failed allocating iio device\n");
++		return -ENOMEM;
++	}
++
++	adc = iio_priv(indio_dev);
++	adc->dev = dev;
++
++	mutex_init(&adc->lock);
++	adc->regs = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(adc->regs))
++		return PTR_ERR(adc->regs);
++
++	irq = platform_get_irq(pdev, 2);
++	if (irq < 0)
++		return irq;
++
++	adc->ipg_clk = devm_clk_get(dev, "ipg");
++	if (IS_ERR(adc->ipg_clk))
++		return dev_err_probe(dev, PTR_ERR(adc->ipg_clk), "Failed getting clock\n");
++
++	adc->vref = devm_regulator_get(dev, "vref");
++	if (IS_ERR(adc->vref))
++		return dev_err_probe(dev, PTR_ERR(adc->vref), "Failed getting reference voltage\n");
++
++	ret = regulator_enable(adc->vref);
++	if (ret) {
++		dev_err(dev, "Can't enable adc reference top voltage\n");
++		return ret;
++	}
++
++	platform_set_drvdata(pdev, indio_dev);
++
++	init_completion(&adc->completion);
++
++	indio_dev->name = IMX93_ADC_DRIVER_NAME;
++	indio_dev->info = &imx93_adc_iio_info;
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->channels = imx93_adc_iio_channels;
++	indio_dev->num_channels = ARRAY_SIZE(imx93_adc_iio_channels);
++
++	ret = clk_prepare_enable(adc->ipg_clk);
++	if (ret) {
++		dev_err(&pdev->dev, "Could not prepare or enable the clock.\n");
++		return ret;
++	}
++
++	ret = devm_request_irq(dev, irq, imx93_adc_isr, 0, IMX93_ADC_DRIVER_NAME, adc);
++	if (ret < 0) {
++		dev_err(dev, "Failed requesting irq, irq = %d\n", irq);
++		goto error_ipg_clk_disable;
++	}
++
++	ret = imx93_adc_calibration(adc);
++	if (ret < 0)
++		goto error_ipg_clk_disable;
++
++	imx93_adc_config_ad_clk(adc);
++
++	ret = iio_device_register(indio_dev);
++	if (ret) {
++		dev_err(dev, "Couldn't register the device.\n");
++		goto error_ipg_clk_disable;
++	}
++
++	pm_runtime_set_active(dev);
++	pm_runtime_set_autosuspend_delay(dev, 50);
++	pm_runtime_use_autosuspend(dev);
++	pm_runtime_enable(dev);
++
++	return 0;
++
++error_ipg_clk_disable:
++	clk_disable_unprepare(adc->ipg_clk);
++	regulator_disable(adc->vref);
++
++	return ret;
++}
++
++static int imx93_adc_remove(struct platform_device *pdev)
++{
++	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
++	struct imx93_adc *adc = iio_priv(indio_dev);
++	struct device *dev = adc->dev;
++
++	pm_runtime_get_sync(dev);
++
++	iio_device_unregister(indio_dev);
++	imx93_adc_power_down(adc);
++	clk_disable_unprepare(adc->ipg_clk);
++	regulator_disable(adc->vref);
++
++	pm_runtime_disable(dev);
++	pm_runtime_put_noidle(dev);
++
++	return 0;
++}
++
++static __maybe_unused int imx93_adc_runtime_suspend(struct device *dev)
++{
++	struct iio_dev *indio_dev = dev_get_drvdata(dev);
++	struct imx93_adc *adc = iio_priv(indio_dev);
++
++	imx93_adc_power_down(adc);
++	clk_disable_unprepare(adc->ipg_clk);
++	regulator_disable(adc->vref);
++
++	return 0;
++}
++
++static __maybe_unused int imx93_adc_runtime_resume(struct device *dev)
++{
++	struct iio_dev *indio_dev = dev_get_drvdata(dev);
++	struct imx93_adc *adc = iio_priv(indio_dev);
++	int ret;
++	u32 mcr;
++
++	ret = regulator_enable(adc->vref);
++	if (ret) {
++		dev_err(dev, "Can't enable adc reference top voltage, err = %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(adc->ipg_clk);
++	if (ret) {
++		dev_err(dev, "Could not prepare or enable clock.\n");
++		goto err_disable_reg;
++	}
++
++	/* bring ADC out of power down state, in idle state */
++	mcr = readl(adc->regs + IMX93_ADC_MCR);
++	mcr &= ~FIELD_PREP(IMX93_ADC_MCR_PWDN_MASK, 1);
++	writel(mcr, adc->regs + IMX93_ADC_MCR);
++
++	return 0;
++
++err_disable_reg:
++	regulator_disable(adc->vref);
++
++	return ret;
++}
++
++static const struct dev_pm_ops imx93_adc_pm_ops = {
++	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
++	SET_RUNTIME_PM_OPS(imx93_adc_runtime_suspend, imx93_adc_runtime_resume, NULL)
++};
++
++static const struct of_device_id imx93_adc_match[] = {
++	{ .compatible = "nxp,imx93-adc", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx93_adc_match);
++
++static struct platform_driver imx93_adc_driver = {
++	.probe		= imx93_adc_probe,
++	.remove		= imx93_adc_remove,
++	.driver		= {
++		.name	= IMX93_ADC_DRIVER_NAME,
++		.of_match_table = imx93_adc_match,
++		.pm	= &imx93_adc_pm_ops,
++	},
++};
++
++module_platform_driver(imx93_adc_driver);
++
++MODULE_DESCRIPTION("NXP i.MX93 ADC driver");
++MODULE_AUTHOR("Haibo Chen <haibo.chen@nxp.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/iio/adc/vf610_adc.c b/drivers/iio/adc/vf610_adc.c
+index fd57fc43e..1d4d3cfc8 100644
+--- a/drivers/iio/adc/vf610_adc.c
++++ b/drivers/iio/adc/vf610_adc.c
+@@ -803,6 +803,7 @@ static int vf610_adc_probe(struct platform_device *pdev)
+ 	struct iio_dev *indio_dev;
+ 	int irq;
+ 	int ret;
++	u32 channels;
+ 
+ 	indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(struct vf610_adc));
+ 	if (!indio_dev) {
+@@ -858,11 +859,16 @@ static int vf610_adc_probe(struct platform_device *pdev)
+ 
+ 	init_completion(&info->completion);
+ 
++	ret  = of_property_read_u32(pdev->dev.of_node,
++					"num-channels", &channels);
++	if (ret)
++		channels = ARRAY_SIZE(vf610_adc_iio_channels);
++
+ 	indio_dev->name = dev_name(&pdev->dev);
+ 	indio_dev->info = &vf610_adc_iio_info;
+ 	indio_dev->modes = INDIO_DIRECT_MODE;
+ 	indio_dev->channels = vf610_adc_iio_channels;
+-	indio_dev->num_channels = ARRAY_SIZE(vf610_adc_iio_channels);
++	indio_dev->num_channels = (int)channels;
+ 
+ 	ret = clk_prepare_enable(info->clk);
+ 	if (ret) {
+diff --git a/drivers/iio/imu/Kconfig b/drivers/iio/imu/Kconfig
+index 1f8ed7b1a..12f895ea4 100644
+--- a/drivers/iio/imu/Kconfig
++++ b/drivers/iio/imu/Kconfig
+@@ -47,7 +47,6 @@ config ADIS16480
+ 	depends on SPI
+ 	select IIO_ADIS_LIB
+ 	select IIO_ADIS_LIB_BUFFER if IIO_BUFFER
+-	select CRC32
+ 	help
+ 	  Say yes here to build support for Analog Devices ADIS16375, ADIS16480,
+ 	  ADIS16485, ADIS16488 inertial sensors.
+@@ -81,6 +80,18 @@ config FXOS8700_SPI
+ 	  This driver can also be built as a module. If so, the module will be
+ 	  called fxos8700_spi.
+ 
++config RPMSG_IIO_PEDOMETER
++	tristate "NXP RPMSG IIO PEDOMETER"
++	depends on RPMSG
++	depends on OF
++	default n
++	help
++	  This is the rpmsg virtual sensor driver on imx8ulp, because some
++	  sensors connect with M4 core.
++
++	  This driver can also be build as module. If so, the module will be
++	  called rpmsg_iio_pedometer
++
+ config KMX61
+ 	tristate "Kionix KMX61 6-axis accelerometer and magnetometer"
+ 	depends on I2C
+diff --git a/drivers/iio/imu/Makefile b/drivers/iio/imu/Makefile
+index c82748096..4a124ec27 100644
+--- a/drivers/iio/imu/Makefile
++++ b/drivers/iio/imu/Makefile
+@@ -19,6 +19,7 @@ obj-y += bmi160/
+ obj-$(CONFIG_FXOS8700) += fxos8700_core.o
+ obj-$(CONFIG_FXOS8700_I2C) += fxos8700_i2c.o
+ obj-$(CONFIG_FXOS8700_SPI) += fxos8700_spi.o
++obj-$(CONFIG_RPMSG_IIO_PEDOMETER) += rpmsg_iio_pedometer.o
+ 
+ obj-y += inv_icm42600/
+ obj-y += inv_mpu6050/
+diff --git a/drivers/iio/imu/fxos8700_core.c b/drivers/iio/imu/fxos8700_core.c
+index 04d3778fc..a82fa2e33 100644
+--- a/drivers/iio/imu/fxos8700_core.c
++++ b/drivers/iio/imu/fxos8700_core.c
+@@ -10,7 +10,6 @@
+ #include <linux/regmap.h>
+ #include <linux/acpi.h>
+ #include <linux/bitops.h>
+-#include <linux/bitfield.h>
+ 
+ #include <linux/iio/iio.h>
+ #include <linux/iio/sysfs.h>
+@@ -145,8 +144,9 @@
+ #define FXOS8700_NVM_DATA_BNK0      0xa7
+ 
+ /* Bit definitions for FXOS8700_CTRL_REG1 */
++#define FXOS8700_CTRL_ODR_MSK       0x38
+ #define FXOS8700_CTRL_ODR_MAX       0x00
+-#define FXOS8700_CTRL_ODR_MSK       GENMASK(5, 3)
++#define FXOS8700_CTRL_ODR_MIN       GENMASK(4, 3)
+ 
+ /* Bit definitions for FXOS8700_M_CTRL_REG1 */
+ #define FXOS8700_HMS_MASK           GENMASK(1, 0)
+@@ -162,12 +162,11 @@
+ 
+ #define FXOS8700_DEVICE_ID          0xC7
+ #define FXOS8700_PRE_DEVICE_ID      0xC4
+-#define FXOS8700_DATA_BUF_SIZE      3
+ 
+ struct fxos8700_data {
+ 	struct regmap *regmap;
+ 	struct iio_trigger *trig;
+-	__be16 buf[FXOS8700_DATA_BUF_SIZE] ____cacheline_aligned;
++	__be16 buf ____cacheline_aligned;
+ };
+ 
+ /* Regmap info */
+@@ -320,7 +319,7 @@ static enum fxos8700_sensor fxos8700_to_sensor(enum iio_chan_type iio_type)
+ 	switch (iio_type) {
+ 	case IIO_ACCEL:
+ 		return FXOS8700_ACCEL;
+-	case IIO_MAGN:
++	case IIO_ANGL_VEL:
+ 		return FXOS8700_MAGN;
+ 	default:
+ 		return -EINVAL;
+@@ -351,23 +350,21 @@ static int fxos8700_set_scale(struct fxos8700_data *data,
+ 	struct device *dev = regmap_get_device(data->regmap);
+ 
+ 	if (t == FXOS8700_MAGN) {
+-		dev_err(dev, "Magnetometer scale is locked at 0.001Gs\n");
++		dev_err(dev, "Magnetometer scale is locked at 1200uT\n");
+ 		return -EINVAL;
+ 	}
+ 
+-	/*
+-	 * When device is in active mode, it failed to set an ACCEL
+-	 * full-scale range(2g/4g/8g) in FXOS8700_XYZ_DATA_CFG.
+-	 * This is not align with the datasheet, but it is a fxos8700
+-	 * chip behavier. Set the device in standby mode before setting
+-	 * an ACCEL full-scale range.
+-	 */
+ 	ret = regmap_read(data->regmap, FXOS8700_CTRL_REG1, &val);
+ 	if (ret)
+ 		return ret;
+ 
+ 	active_mode = val & FXOS8700_ACTIVE;
++
+ 	if (active_mode) {
++		/*
++		 * The device must be in standby mode to change any of the
++		 * other fields within CTRL_REG1
++		 */
+ 		ret = regmap_write(data->regmap, FXOS8700_CTRL_REG1,
+ 				   val & ~FXOS8700_ACTIVE);
+ 		if (ret)
+@@ -385,8 +382,8 @@ static int fxos8700_set_scale(struct fxos8700_data *data,
+ 			    fxos8700_accel_scale[i].bits);
+ 	if (ret)
+ 		return ret;
+-	return regmap_write(data->regmap, FXOS8700_CTRL_REG1,
+-				  active_mode);
++	return regmap_update_bits(data->regmap, FXOS8700_CTRL_REG1,
++				  FXOS8700_ACTIVE, active_mode);
+ }
+ 
+ static int fxos8700_get_scale(struct fxos8700_data *data,
+@@ -396,7 +393,7 @@ static int fxos8700_get_scale(struct fxos8700_data *data,
+ 	static const int scale_num = ARRAY_SIZE(fxos8700_accel_scale);
+ 
+ 	if (t == FXOS8700_MAGN) {
+-		*uscale = 1000; /* Magnetometer is locked at 0.001Gs */
++		*uscale = 1200; /* Magnetometer is locked at 1200uT */
+ 		return 0;
+ 	}
+ 
+@@ -417,62 +414,29 @@ static int fxos8700_get_scale(struct fxos8700_data *data,
+ static int fxos8700_get_data(struct fxos8700_data *data, int chan_type,
+ 			     int axis, int *val)
+ {
+-	u8 base, reg;
+-	s16 tmp;
++	u8 base, offset;
++	enum fxos8700_sensor type = fxos8700_to_sensor(chan_type);
++	u8 tmp_data[2];
++	u16 native_data;
+ 	int ret;
+ 
+-	/*
+-	 * Different register base addresses varies with channel types.
+-	 * This bug hasn't been noticed before because using an enum is
+-	 * really hard to read. Use an a switch statement to take over that.
+-	 */
+-	switch (chan_type) {
+-	case IIO_ACCEL:
+-		base = FXOS8700_OUT_X_MSB;
+-		break;
+-	case IIO_MAGN:
+-		base = FXOS8700_M_OUT_X_MSB;
+-		break;
+-	default:
+-		return -EINVAL;
+-	}
++	base = type ? FXOS8700_M_OUT_X_MSB : FXOS8700_OUT_X_MSB;
++	offset = axis - IIO_MOD_X;
+ 
+-	/* Block read 6 bytes of device output registers to avoid data loss */
+-	ret = regmap_bulk_read(data->regmap, base, data->buf,
+-			       sizeof(data->buf));
++	ret = regmap_bulk_read(data->regmap, base + offset, &tmp_data[0], 2);
+ 	if (ret)
+-		return ret;
++		return -EIO;
+ 
+-	/* Convert axis to buffer index */
+-	reg = axis - IIO_MOD_X;
+ 
+-	/*
+-	 * Convert to native endianness. The accel data and magn data
+-	 * are signed, so a forced type conversion is needed.
+-	 */
+-	tmp = be16_to_cpu(data->buf[reg]);
++	data->buf = ((tmp_data[1] << 8) & 0xff00) | tmp_data[0];
++	/* Convert to native endianness */
++	native_data = be16_to_cpu(data->buf);
+ 
+-	/*
+-	 * ACCEL output data registers contain the X-axis, Y-axis, and Z-axis
+-	 * 14-bit left-justified sample data and MAGN output data registers
+-	 * contain the X-axis, Y-axis, and Z-axis 16-bit sample data. Apply
+-	 * a signed 2 bits right shift to the readback raw data from ACCEL
+-	 * output data register and keep that from MAGN sensor as the origin.
+-	 * Value should be extended to 32 bit.
+-	 */
+-	switch (chan_type) {
+-	case IIO_ACCEL:
+-		tmp = tmp >> 2;
+-		break;
+-	case IIO_MAGN:
+-		/* Nothing to do */
+-		break;
+-	default:
+-		return -EINVAL;
+-	}
++	/*accel raw data only has 14 bit */
++	if (!type)
++		native_data = native_data >> 2;
+ 
+-	/* Convert to native endianness */
+-	*val = sign_extend32(tmp, 15);
++	*val = sign_extend32(native_data, 15);
+ 
+ 	return 0;
+ }
+@@ -508,9 +472,10 @@ static int fxos8700_set_odr(struct fxos8700_data *data, enum fxos8700_sensor t,
+ 	if (i >= odr_num)
+ 		return -EINVAL;
+ 
+-	val &= ~FXOS8700_CTRL_ODR_MSK;
+-	val |= FIELD_PREP(FXOS8700_CTRL_ODR_MSK, fxos8700_odr[i].bits) | FXOS8700_ACTIVE;
+-	return regmap_write(data->regmap, FXOS8700_CTRL_REG1, val);
++	return regmap_update_bits(data->regmap,
++				  FXOS8700_CTRL_REG1,
++				  FXOS8700_CTRL_ODR_MSK + FXOS8700_ACTIVE,
++				  fxos8700_odr[i].bits << 3 | active_mode);
+ }
+ 
+ static int fxos8700_get_odr(struct fxos8700_data *data, enum fxos8700_sensor t,
+@@ -523,7 +488,8 @@ static int fxos8700_get_odr(struct fxos8700_data *data, enum fxos8700_sensor t,
+ 	if (ret)
+ 		return ret;
+ 
+-	val = FIELD_GET(FXOS8700_CTRL_ODR_MSK, val);
++	val &= FXOS8700_CTRL_ODR_MSK;
++	val = val >> 3;
+ 
+ 	for (i = 0; i < odr_num; i++)
+ 		if (val == fxos8700_odr[i].bits)
+@@ -588,7 +554,7 @@ static IIO_CONST_ATTR(in_accel_sampling_frequency_available,
+ static IIO_CONST_ATTR(in_magn_sampling_frequency_available,
+ 		      "1.5625 6.25 12.5 50 100 200 400 800");
+ static IIO_CONST_ATTR(in_accel_scale_available, "0.000244 0.000488 0.000976");
+-static IIO_CONST_ATTR(in_magn_scale_available, "0.001000");
++static IIO_CONST_ATTR(in_magn_scale_available, "0.000001200");
+ 
+ static struct attribute *fxos8700_attrs[] = {
+ 	&iio_const_attr_in_accel_sampling_frequency_available.dev_attr.attr,
+@@ -654,19 +620,14 @@ static int fxos8700_chip_init(struct fxos8700_data *data, bool use_spi)
+ 	if (ret)
+ 		return ret;
+ 
+-	/*
+-	 * Set max full-scale range (+/-8G) for ACCEL sensor in chip
+-	 * initialization then activate the device.
+-	 */
++	/* Set for max full-scale range (+/-8G) */
+ 	ret = regmap_write(data->regmap, FXOS8700_XYZ_DATA_CFG, MODE_8G);
++	/* Max ODR (800Hz individual or 400Hz hybrid), active mode */
+ 	if (ret)
+ 		return ret;
+ 
+-	/* Max ODR (800Hz individual or 400Hz hybrid), active mode */
+-	return regmap_update_bits(data->regmap, FXOS8700_CTRL_REG1,
+-				FXOS8700_CTRL_ODR_MSK | FXOS8700_ACTIVE,
+-				FIELD_PREP(FXOS8700_CTRL_ODR_MSK, FXOS8700_CTRL_ODR_MAX) |
+-				FXOS8700_ACTIVE);
++	return regmap_write(data->regmap, FXOS8700_CTRL_REG1,
++			   FXOS8700_CTRL_ODR_MAX << 3 | FXOS8700_ACTIVE);
+ }
+ 
+ static void fxos8700_chip_uninit(void *data)
+diff --git a/drivers/iio/imu/rpmsg_iio_pedometer.c b/drivers/iio/imu/rpmsg_iio_pedometer.c
+new file mode 100644
+index 000000000..6edf34780
+--- /dev/null
++++ b/drivers/iio/imu/rpmsg_iio_pedometer.c
+@@ -0,0 +1,424 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright 2021 NXP
++ */
++
++#include <linux/err.h>
++#include <linux/imx_rpmsg.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/rpmsg.h>
++#include <linux/pm_qos.h>
++#include <linux/iio/iio.h>
++#include <linux/iio/events.h>
++#include <linux/iio/sysfs.h>
++#include <linux/slab.h>
++#include <linux/module.h>
++
++
++#define RPMSG_IIO_DEV_STANDBY		0x00
++#define RPMSG_IIO_DEV_ACTIVED		0x01
++#define PEDOMETER_TYPE			0x00
++#define PEDOMETER_IDX			0x00
++
++#define RPMSG_TIMEOUT_MS		1000
++
++
++/*
++ * Default use 1000ms poll delay, the supported range
++ * is 500~3600000, which means from half second to one
++ * hour.
++ */
++#define RPMSG_IIO_POLL_DELAY_DEFAULT	1000
++#define RPMSG_IIO_POLL_DELAY_MIN	500
++#define RPMSG_IIO_POLL_DELAY_MAX	3600000
++
++enum rpmsg_iio_header_type {
++	RPMSG_IIO_SETUP,
++	RPMSG_IIO_REPLY,
++	RPMSG_IIO_NOTIFY,
++};
++
++enum rpmsg_iio_header_cmd {
++	RPMSG_IIO_DETECTOR_CMD,
++	RPMSG_IIO_COUNTER_CMD,
++	RPMSG_IIO_POLL_DELAY_CMD,
++};
++
++struct rpmsg_iio_msg {
++	struct imx_rpmsg_head header;
++	u8 sensor_type;
++	u8 sensor_index;
++	union {
++		union {
++			u8 enable;
++			u8 retcode;
++		} inout;
++
++		u32 val;
++	} instruct;
++} __packed __aligned(8);
++
++struct rpmsg_iio_data {
++	struct device *dev;
++	struct iio_dev *indio_dev;
++	bool counter_enable;
++	bool detector_enable;
++	u32 steps;
++	u32 step_poll_delay;	// in ms
++
++	struct rpmsg_device *rpdev;
++	struct rpmsg_iio_msg *reply_msg;
++	struct rpmsg_iio_msg *notify_msg;
++	struct pm_qos_request pm_qos_req;
++	struct completion cmd_complete;
++	struct mutex lock;
++};
++
++/* This driver can only support one sensor instance. */
++static struct rpmsg_iio_data *iio_rpmsg;
++
++static int iio_send_message(struct rpmsg_iio_msg *msg,
++			    struct rpmsg_iio_data *info)
++{
++	int err;
++
++	if (!info->rpdev) {
++		dev_err(info->dev,
++			"rpmsg channel not ready, m4 image ready?\n");
++		return -EINVAL;
++	}
++
++	mutex_lock(&info->lock);
++	cpu_latency_qos_add_request(&info->pm_qos_req, 0);
++
++	reinit_completion(&info->cmd_complete);
++
++	err = rpmsg_send(info->rpdev->ept, (void *)msg, sizeof(struct rpmsg_iio_msg));
++	if (err) {
++		dev_err(&info->rpdev->dev, "rpmsg_send failed: %d\n", err);
++		goto err_out;
++	}
++
++	err = wait_for_completion_timeout(&info->cmd_complete,
++					msecs_to_jiffies(RPMSG_TIMEOUT_MS));
++	if (!err) {
++		dev_err(&info->rpdev->dev, "rpmsg_send timeout!\n");
++		goto err_out;
++	}
++
++	err = info->reply_msg->instruct.inout.retcode;
++	if (err != 0) {
++		dev_err(&info->rpdev->dev, "rpmsg not ack %d!\n", err);
++		err = -EINVAL;
++		goto err_out;
++	}
++
++err_out:
++	cpu_latency_qos_remove_request(&info->pm_qos_req);
++	mutex_unlock(&info->lock);
++
++	return err;
++}
++
++static inline void rpmsg_iio_event_report(struct rpmsg_iio_msg *msg)
++{
++	struct iio_dev *indio_dev;
++	s64 ts;
++
++	indio_dev = iio_rpmsg->indio_dev;
++	ts = iio_get_time_ns(indio_dev);
++	if (msg->header.cmd == RPMSG_IIO_DETECTOR_CMD) {
++		iio_push_event(indio_dev,
++			       IIO_EVENT_CODE(IIO_ACTIVITY, 0, IIO_NO_MOD,
++					      IIO_EV_DIR_RISING,
++					      IIO_EV_TYPE_THRESH, 0, 0, 0),
++			       ts);
++	} else if (msg->header.cmd == RPMSG_IIO_COUNTER_CMD) {
++		iio_rpmsg->steps = msg->instruct.val;
++		iio_push_event(indio_dev,
++			       IIO_EVENT_CODE(IIO_STEPS, 0, IIO_NO_MOD,
++					      IIO_EV_DIR_NONE,
++					      IIO_EV_TYPE_CHANGE, 0, 0, 0),
++			       ts);
++	}
++}
++
++static int rpmsg_iio_cb(struct rpmsg_device *rpdev, void *data, int len,
++				void *priv, u32 src)
++{
++	struct rpmsg_iio_msg *msg = (struct rpmsg_iio_msg *)data;
++
++	if (msg->header.type == RPMSG_IIO_REPLY) {
++		iio_rpmsg->reply_msg = msg;
++		complete(&iio_rpmsg->cmd_complete);
++	} else if (msg->header.type == RPMSG_IIO_NOTIFY) {
++		iio_rpmsg->notify_msg = msg;
++		rpmsg_iio_event_report(msg);
++	} else {
++		dev_err(&iio_rpmsg->rpdev->dev, "wrong command type %d!\n",
++			msg->header.type);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int rpmsg_iio_probe(struct rpmsg_device *rpdev)
++{
++	iio_rpmsg->rpdev = rpdev;
++
++	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x\n",
++			rpdev->src, rpdev->dst);
++
++	init_completion(&iio_rpmsg->cmd_complete);
++	mutex_init(&iio_rpmsg->lock);
++
++	return 0;
++}
++
++static struct rpmsg_device_id rpmsg_iio_id_table[] = {
++	{ .name = "rpmsg-sensor-channel" },
++	{ },
++};
++
++static struct rpmsg_driver rpmsg_iio_driver = {
++	.drv.name	= "iio_rpmsg",
++	.drv.owner	= THIS_MODULE,
++	.id_table	= rpmsg_iio_id_table,
++	.probe		= rpmsg_iio_probe,
++	.callback	= rpmsg_iio_cb,
++};
++
++static int rpmsg_iio_change_mode(int cmd, int enable)
++{
++	struct rpmsg_iio_msg msg;
++
++	memset(&msg, 0, sizeof(struct rpmsg_iio_msg));
++	msg.header.cate = IMX_RPMSG_SENSOR;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RPMSG_IIO_SETUP;
++	msg.header.cmd = cmd;
++	msg.sensor_type = PEDOMETER_TYPE;
++	msg.sensor_index = PEDOMETER_IDX;
++	msg.instruct.inout.enable = enable;
++
++	return iio_send_message(&msg, iio_rpmsg);
++}
++
++static int rpmsg_iio_set_step_poll_delay(int cmd, int poll_delay)
++{
++	struct rpmsg_iio_msg msg;
++
++	memset(&msg, 0, sizeof(struct rpmsg_iio_msg));
++	msg.header.cate = IMX_RPMSG_SENSOR;
++	msg.header.major = IMX_RMPSG_MAJOR;
++	msg.header.minor = IMX_RMPSG_MINOR;
++	msg.header.type = RPMSG_IIO_SETUP;
++	msg.header.cmd = cmd;
++	msg.sensor_type = PEDOMETER_TYPE;
++	msg.sensor_index = PEDOMETER_IDX;
++	msg.instruct.val = poll_delay;
++
++	return iio_send_message(&msg, iio_rpmsg);
++}
++
++static int rpmsg_iio_read_event_value(struct iio_dev *indio_dev,
++					const struct iio_chan_spec *chan,
++					enum iio_event_type type,
++					enum iio_event_direction dir,
++					enum iio_event_info info,
++					int *val, int *val2)
++{
++	switch (info) {
++	case IIO_EV_INFO_VALUE:
++		*val = iio_rpmsg->steps;
++		return IIO_VAL_INT;
++	case IIO_EV_INFO_PERIOD:
++		*val = iio_rpmsg->step_poll_delay;
++		return IIO_VAL_INT;
++	default:
++		return -EINVAL;
++	}
++}
++
++static int rpmsg_iio_write_event_value(struct iio_dev *indio_dev,
++					const struct iio_chan_spec *chan,
++					enum iio_event_type type,
++					enum iio_event_direction dir,
++					enum iio_event_info info,
++					int val, int val2)
++{
++	int ret;
++	switch (info) {
++	case IIO_EV_INFO_PERIOD:
++		if (val < RPMSG_IIO_POLL_DELAY_MIN ||
++		    val > RPMSG_IIO_POLL_DELAY_MAX) {
++			dev_err(&indio_dev->dev,
++				"Incorrect value, the val must in 500~3600000\n");
++			return -EINVAL;
++		}
++		ret = rpmsg_iio_set_step_poll_delay(RPMSG_IIO_POLL_DELAY_CMD, val);
++		if (!ret)
++			iio_rpmsg->step_poll_delay = val;
++		return ret;
++	default:
++		return -EINVAL;
++	}
++}
++
++static int rpmsg_iio_read_raw(struct iio_dev *indio_dev,
++			      struct iio_chan_spec const *chan,
++			      int *val, int *val2, long mask)
++{
++	struct rpmsg_iio_data *pdata = iio_priv(indio_dev);
++
++	switch (mask) {
++	case IIO_CHAN_INFO_ENABLE:
++		switch (chan->type) {
++		case IIO_STEPS:
++			*val = pdata->counter_enable;
++			return IIO_VAL_INT;
++		case IIO_ACTIVITY:
++			*val = pdata->detector_enable;
++			return IIO_VAL_INT;
++		default:
++			return -EINVAL;
++		}
++	default:
++		return -EINVAL;
++	}
++
++}
++
++static int rpmsg_iio_write_raw(struct iio_dev *indio_dev,
++			       struct iio_chan_spec const *chan,
++			       int val, int val2, long mask)
++{
++	struct rpmsg_iio_data *pdata = iio_priv(indio_dev);
++	unsigned long mode;
++	int ret;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_ENABLE:
++		switch (chan->type) {
++		case IIO_STEPS:
++			mode = val ? RPMSG_IIO_DEV_ACTIVED:
++				     RPMSG_IIO_DEV_STANDBY;
++			ret = rpmsg_iio_change_mode(RPMSG_IIO_COUNTER_CMD, mode);
++			if (!ret)
++				pdata->counter_enable = val;
++			return ret;
++		case IIO_ACTIVITY:
++			mode = val ? RPMSG_IIO_DEV_ACTIVED:
++				     RPMSG_IIO_DEV_STANDBY;
++			ret = rpmsg_iio_change_mode(RPMSG_IIO_DETECTOR_CMD, mode);
++			if (!ret)
++				pdata->detector_enable = val;
++			return ret;
++		default:
++			return -EINVAL;
++		}
++	default:
++		return -EINVAL;
++	}
++}
++
++static const struct iio_event_spec rpmsg_iio_step_event = {
++	.type = IIO_EV_TYPE_CHANGE,
++	.dir = IIO_EV_DIR_NONE,
++	.mask_separate = BIT(IIO_EV_INFO_VALUE) | BIT(IIO_EV_INFO_PERIOD),
++};
++
++static const struct iio_chan_spec rpmsg_iio_channels[] = {
++	{
++		.type = IIO_STEPS,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_ENABLE),
++		.event_spec = &rpmsg_iio_step_event,
++		.num_event_specs = 1,
++	},
++
++	{
++		.type = IIO_ACTIVITY,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_ENABLE),
++	},
++};
++
++static const struct iio_info rpmsg_iio_info = {
++	.read_raw = rpmsg_iio_read_raw,
++	.write_raw = rpmsg_iio_write_raw,
++	.read_event_value = rpmsg_iio_read_event_value,
++	.write_event_value = rpmsg_iio_write_event_value,
++};
++
++static int rpmsg_iio_pedometer_device_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct iio_dev *indio_dev;
++	int ret;
++
++	indio_dev = devm_iio_device_alloc(dev, sizeof(struct rpmsg_iio_data));
++	if (!indio_dev)
++		return -ENOMEM;
++
++	iio_rpmsg = iio_priv(indio_dev);
++	iio_rpmsg->indio_dev = indio_dev;
++	platform_set_drvdata(pdev, iio_rpmsg);
++
++	indio_dev->channels = rpmsg_iio_channels;
++	indio_dev->num_channels = ARRAY_SIZE(rpmsg_iio_channels);
++	indio_dev->name = "rpmsg-iio-pedometer";
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->info = &rpmsg_iio_info;
++
++	ret = iio_device_register(indio_dev);
++	if (ret < 0) {
++		dev_err(dev, "unable to register iio pedometer device\n");
++		goto err_register_iio;
++	}
++
++	ret = register_rpmsg_driver(&rpmsg_iio_driver);
++	if (ret) {
++		dev_err(dev, "unable to register rpmsg iio driver\n");
++		goto err_register_rpmsg;
++	}
++
++	/*
++	 * Default use 1000ms poll delay, the supported range
++	 * is 500~3600000, which means from half second to one
++	 * hour.
++	 */
++	iio_rpmsg->step_poll_delay = 1000;
++
++	return ret;
++
++err_register_rpmsg:
++	iio_device_unregister(indio_dev);
++err_register_iio:
++	platform_set_drvdata(pdev, NULL);
++
++	return ret;
++
++}
++
++static const struct of_device_id rpmsg_iio_pedometer_of_match[] = {
++	{ .compatible = "nxp,rpmsg-iio-pedometer", },
++	{ },
++};
++
++MODULE_DEVICE_TABLE(of, rpmsg_iio_pedometer_of_match);
++
++static struct platform_driver rpmsg_iio_pedometer_device_driver = {
++	.probe		= rpmsg_iio_pedometer_device_probe,
++	.driver		= {
++		.name	= "rpmsg-iio-pedometer",
++		.of_match_table = of_match_ptr(rpmsg_iio_pedometer_of_match)
++	}
++};
++
++module_platform_driver(rpmsg_iio_pedometer_device_driver);
++
++MODULE_AUTHOR("Haibo Chen <haibo.chen@nxp.com>");
++MODULE_LICENSE("GPL v2");
++MODULE_DESCRIPTION("NXP rpmsg iio pedometer driver");
+diff --git a/drivers/iio/imu/st_lsm6dsx/st_lsm6dsx_core.c b/drivers/iio/imu/st_lsm6dsx/st_lsm6dsx_core.c
+index a778aceba..a7b63eb64 100644
+--- a/drivers/iio/imu/st_lsm6dsx/st_lsm6dsx_core.c
++++ b/drivers/iio/imu/st_lsm6dsx/st_lsm6dsx_core.c
+@@ -1631,7 +1631,7 @@ st_lsm6dsx_sysfs_sampling_frequency_avail(struct device *dev,
+ 					  struct device_attribute *attr,
+ 					  char *buf)
+ {
+-	struct st_lsm6dsx_sensor *sensor = iio_priv(dev_get_drvdata(dev));
++	struct st_lsm6dsx_sensor *sensor = iio_priv(dev_to_iio_dev(dev));
+ 	const struct st_lsm6dsx_odr_table_entry *odr_table;
+ 	int i, len = 0;
+ 
+@@ -1649,7 +1649,7 @@ static ssize_t st_lsm6dsx_sysfs_scale_avail(struct device *dev,
+ 					    struct device_attribute *attr,
+ 					    char *buf)
+ {
+-	struct st_lsm6dsx_sensor *sensor = iio_priv(dev_get_drvdata(dev));
++	struct st_lsm6dsx_sensor *sensor = iio_priv(dev_to_iio_dev(dev));
+ 	const struct st_lsm6dsx_fs_table_entry *fs_table;
+ 	struct st_lsm6dsx_hw *hw = sensor->hw;
+ 	int i, len = 0;
+-- 
+2.25.1
+

@@ -1,0 +1,925 @@
+From 8bf448d31df1c38b8355faafe02d66736b029437 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 17 Aug 2023 15:16:36 +0800
+Subject: [PATCH 1/2] update pcie driver
+
+---
+ .../pci/controller/dwc/pci-layerscape-ep.c    | 117 ++++-
+ drivers/pci/controller/dwc/pci-layerscape.c   | 457 ++++++++++++++----
+ .../pci/controller/dwc/pcie-designware-host.c |   9 +-
+ drivers/pci/controller/dwc/pcie-designware.c  |  46 +-
+ 4 files changed, 514 insertions(+), 115 deletions(-)
+
+diff --git a/drivers/pci/controller/dwc/pci-layerscape-ep.c b/drivers/pci/controller/dwc/pci-layerscape-ep.c
+index 39f4664bd..2554f891e 100644
+--- a/drivers/pci/controller/dwc/pci-layerscape-ep.c
++++ b/drivers/pci/controller/dwc/pci-layerscape-ep.c
+@@ -18,6 +18,22 @@
+ 
+ #include "pcie-designware.h"
+ 
++#define PCIE_LINK_CAP			0x7C	/* PCIe Link Capabilities*/
++#define MAX_LINK_SP_MASK		0x0F
++#define MAX_LINK_W_MASK			0x3F
++#define MAX_LINK_W_SHIFT		4
++
++/* PEX PFa PCIE pme and message interrupt registers*/
++#define PEX_PF0_PME_MES_DR             0xC0020
++#define PEX_PF0_PME_MES_DR_LUD         (1 << 7)
++#define PEX_PF0_PME_MES_DR_LDD         (1 << 9)
++#define PEX_PF0_PME_MES_DR_HRD         (1 << 10)
++
++#define PEX_PF0_PME_MES_IER            0xC0028
++#define PEX_PF0_PME_MES_IER_LUDIE      (1 << 7)
++#define PEX_PF0_PME_MES_IER_LDDIE      (1 << 9)
++#define PEX_PF0_PME_MES_IER_HRDIE      (1 << 10)
++
+ #define to_ls_pcie_ep(x)	dev_get_drvdata((x)->dev)
+ 
+ struct ls_pcie_ep_drvdata {
+@@ -30,6 +46,10 @@ struct ls_pcie_ep {
+ 	struct dw_pcie			*pci;
+ 	struct pci_epc_features		*ls_epc;
+ 	const struct ls_pcie_ep_drvdata *drvdata;
++	u8				max_speed;
++	u8				max_width;
++	bool				big_endian;
++	int				irq;
+ };
+ 
+ static int ls_pcie_establish_link(struct dw_pcie *pci)
+@@ -41,6 +61,84 @@ static const struct dw_pcie_ops dw_ls_pcie_ep_ops = {
+ 	.start_link = ls_pcie_establish_link,
+ };
+ 
++static u32 ls_lut_readl(struct ls_pcie_ep *pcie, u32 offset)
++{
++	struct dw_pcie *pci = pcie->pci;
++
++	if (pcie->big_endian)
++		return ioread32be(pci->dbi_base + offset);
++	else
++		return ioread32(pci->dbi_base + offset);
++}
++
++static void ls_lut_writel(struct ls_pcie_ep *pcie, u32 offset,
++			  u32 value)
++{
++	struct dw_pcie *pci = pcie->pci;
++
++	if (pcie->big_endian)
++		iowrite32be(value, pci->dbi_base + offset);
++	else
++		iowrite32(value, pci->dbi_base + offset);
++}
++
++static irqreturn_t ls_pcie_ep_event_handler(int irq, void *dev_id)
++{
++	struct ls_pcie_ep *pcie = (struct ls_pcie_ep *)dev_id;
++	struct dw_pcie *pci = pcie->pci;
++	u32 val;
++
++	val = ls_lut_readl(pcie, PEX_PF0_PME_MES_DR);
++	if (!val)
++		return IRQ_NONE;
++
++	if (val & PEX_PF0_PME_MES_DR_LUD)
++		dev_info(pci->dev, "Detect the link up state !\n");
++	else if (val & PEX_PF0_PME_MES_DR_LDD)
++		dev_info(pci->dev, "Detect the link down state !\n");
++	else if (val & PEX_PF0_PME_MES_DR_HRD)
++		dev_info(pci->dev, "Detect the hot reset state !\n");
++
++	dw_pcie_dbi_ro_wr_en(pci);
++	dw_pcie_writew_dbi(pci, PCIE_LINK_CAP,
++			   (pcie->max_width << MAX_LINK_W_SHIFT) |
++			   pcie->max_speed);
++	dw_pcie_dbi_ro_wr_dis(pci);
++
++	ls_lut_writel(pcie, PEX_PF0_PME_MES_DR, val);
++
++	return IRQ_HANDLED;
++}
++
++static int ls_pcie_ep_interrupt_init(struct ls_pcie_ep *pcie,
++				     struct platform_device *pdev)
++{
++	u32 val;
++	int ret;
++
++	pcie->irq = platform_get_irq_byname(pdev, "pme");
++	if (pcie->irq < 0) {
++		dev_err(&pdev->dev, "Can't get 'pme' irq.\n");
++		return pcie->irq;
++	}
++
++	ret = devm_request_irq(&pdev->dev, pcie->irq,
++			       ls_pcie_ep_event_handler, IRQF_SHARED,
++			       pdev->name, pcie);
++	if (ret) {
++		dev_err(&pdev->dev, "Can't register PCIe IRQ.\n");
++		return ret;
++	}
++
++	/* Enable interrupts */
++	val = ls_lut_readl(pcie, PEX_PF0_PME_MES_IER);
++	val |=  PEX_PF0_PME_MES_IER_LDDIE | PEX_PF0_PME_MES_IER_HRDIE |
++		PEX_PF0_PME_MES_IER_LUDIE;
++	ls_lut_writel(pcie, PEX_PF0_PME_MES_IER, val);
++
++	return 0;
++}
++
+ static const struct pci_epc_features*
+ ls_pcie_ep_get_features(struct dw_pcie_ep *ep)
+ {
+@@ -124,6 +222,7 @@ static const struct ls_pcie_ep_drvdata lx2_ep_drvdata = {
+ static const struct of_device_id ls_pcie_ep_of_match[] = {
+ 	{ .compatible = "fsl,ls1046a-pcie-ep", .data = &ls1_ep_drvdata },
+ 	{ .compatible = "fsl,ls1088a-pcie-ep", .data = &ls2_ep_drvdata },
++	{ .compatible = "fsl,ls1028a-pcie-ep", .data = &ls1_ep_drvdata },
+ 	{ .compatible = "fsl,ls2088a-pcie-ep", .data = &ls2_ep_drvdata },
+ 	{ .compatible = "fsl,lx2160ar2-pcie-ep", .data = &lx2_ep_drvdata },
+ 	{ },
+@@ -136,6 +235,7 @@ static int __init ls_pcie_ep_probe(struct platform_device *pdev)
+ 	struct ls_pcie_ep *pcie;
+ 	struct pci_epc_features *ls_epc;
+ 	struct resource *dbi_base;
++	int ret;
+ 
+ 	pcie = devm_kzalloc(dev, sizeof(*pcie), GFP_KERNEL);
+ 	if (!pcie)
+@@ -166,9 +266,24 @@ static int __init ls_pcie_ep_probe(struct platform_device *pdev)
+ 
+ 	pci->ep.ops = &ls_pcie_ep_ops;
+ 
++	pcie->big_endian = of_property_read_bool(dev->of_node, "big-endian");
++
++	pcie->max_speed = dw_pcie_readw_dbi(pci, PCIE_LINK_CAP) &
++			  MAX_LINK_SP_MASK;
++	pcie->max_width = (dw_pcie_readw_dbi(pci, PCIE_LINK_CAP) >>
++			  MAX_LINK_W_SHIFT) & MAX_LINK_W_MASK;
++
++	/* set 64-bit DMA mask and coherent DMA mask */
++	if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64)))
++		dev_warn(dev, "Failed to set 64-bit DMA mask.\n");
++
+ 	platform_set_drvdata(pdev, pcie);
+ 
+-	return dw_pcie_ep_init(&pci->ep);
++	ret = dw_pcie_ep_init(&pci->ep);
++	if (ret)
++		return  ret;
++
++	return  ls_pcie_ep_interrupt_init(pcie, pdev);
+ }
+ 
+ static struct platform_driver ls_pcie_ep_driver = {
+diff --git a/drivers/pci/controller/dwc/pci-layerscape.c b/drivers/pci/controller/dwc/pci-layerscape.c
+index 5b9c625df..456020ce4 100644
+--- a/drivers/pci/controller/dwc/pci-layerscape.c
++++ b/drivers/pci/controller/dwc/pci-layerscape.c
+@@ -3,13 +3,16 @@
+  * PCIe host controller driver for Freescale Layerscape SoCs
+  *
+  * Copyright (C) 2014 Freescale Semiconductor.
++ * Copyright 2020 NXP
+  *
+  * Author: Minghuan Lian <Minghuan.Lian@freescale.com>
+  */
+ 
++#include <linux/delay.h>
+ #include <linux/kernel.h>
+ #include <linux/interrupt.h>
+ #include <linux/init.h>
++#include <linux/iopoll.h>
+ #include <linux/of_pci.h>
+ #include <linux/of_platform.h>
+ #include <linux/of_irq.h>
+@@ -22,35 +25,65 @@
+ 
+ #include "pcie-designware.h"
+ 
+-/* PEX1/2 Misc Ports Status Register */
+-#define SCFG_PEXMSCPORTSR(pex_idx)	(0x94 + (pex_idx) * 4)
+-#define LTSSM_STATE_SHIFT	20
+-#define LTSSM_STATE_MASK	0x3f
+-#define LTSSM_PCIE_L0		0x11 /* L0 state */
+-
+ /* PEX Internal Configuration Registers */
+ #define PCIE_STRFMR1		0x71c /* Symbol Timer & Filter Mask Register1 */
+ #define PCIE_ABSERR		0x8d0 /* Bridge Slave Error Response Register */
+ #define PCIE_ABSERR_SETTING	0x9401 /* Forward error of non-posted request */
+ 
++/* PF Message Command Register */
++#define LS_PCIE_PF_MCR		0x2c
++#define PF_MCR_PTOMR		BIT(0)
++#define PF_MCR_EXL2S		BIT(1)
++
++/* LS1021A PEXn PM Write Control Register */
++#define SCFG_PEXPMWRCR(idx)	(0x5c + (idx) * 0x64)
++#define PMXMTTURNOFF		BIT(31)
++#define SCFG_PEXSFTRSTCR	0x190
++#define PEXSR(idx)		BIT(idx)
++
++/* LS1043A PEX PME control register */
++#define SCFG_PEXPMECR		0x144
++#define PEXPME(idx)		BIT(31 - (idx) * 4)
++
++/* LS1043A PEX LUT debug register */
++#define LS_PCIE_LDBG	0x7fc
++#define LDBG_SR		BIT(30)
++#define LDBG_WE		BIT(31)
++
+ #define PCIE_IATU_NUM		6
+ 
++#define LS_PCIE_IS_L2(v)	\
++	(((v) & PORT_LOGIC_LTSSM_STATE_MASK) == PORT_LOGIC_LTSSM_STATE_L2)
++
++struct ls_pcie;
++
++struct ls_pcie_host_pm_ops {
++	int (*pm_init)(struct ls_pcie *pcie);
++	void (*send_turn_off_message)(struct ls_pcie *pcie);
++	void (*exit_from_l2)(struct ls_pcie *pcie);
++};
++
+ struct ls_pcie_drvdata {
+-	u32 lut_offset;
+-	u32 ltssm_shift;
+-	u32 lut_dbg;
++	const u32 pf_off;
++	const u32 lut_off;
+ 	const struct dw_pcie_host_ops *ops;
+-	const struct dw_pcie_ops *dw_pcie_ops;
++	const struct ls_pcie_host_pm_ops *pm_ops;
+ };
+ 
+ struct ls_pcie {
+ 	struct dw_pcie *pci;
+-	void __iomem *lut;
+-	struct regmap *scfg;
+ 	const struct ls_pcie_drvdata *drvdata;
++	void __iomem *pf_base;
++	void __iomem *lut_base;
++	bool big_endian;
++	bool ep_presence;
++	bool pm_support;
++	struct regmap *scfg;
+ 	int index;
+ };
+ 
++#define ls_pcie_lut_readl_addr(addr)	ls_pcie_lut_readl(pcie, addr)
++#define ls_pcie_pf_readl_addr(addr)	ls_pcie_pf_readl(pcie, addr)
+ #define to_ls_pcie(x)	dev_get_drvdata((x)->dev)
+ 
+ static bool ls_pcie_is_bridge(struct ls_pcie *pcie)
+@@ -83,67 +116,177 @@ static void ls_pcie_drop_msg_tlp(struct ls_pcie *pcie)
+ 	iowrite32(val, pci->dbi_base + PCIE_STRFMR1);
+ }
+ 
+-static int ls1021_pcie_link_up(struct dw_pcie *pci)
++/* Forward error response of outbound non-posted requests */
++static void ls_pcie_fix_error_response(struct ls_pcie *pcie)
+ {
+-	u32 state;
+-	struct ls_pcie *pcie = to_ls_pcie(pci);
++	struct dw_pcie *pci = pcie->pci;
+ 
+-	if (!pcie->scfg)
+-		return 0;
++	iowrite32(PCIE_ABSERR_SETTING, pci->dbi_base + PCIE_ABSERR);
++}
+ 
+-	regmap_read(pcie->scfg, SCFG_PEXMSCPORTSR(pcie->index), &state);
+-	state = (state >> LTSSM_STATE_SHIFT) & LTSSM_STATE_MASK;
++static u32 ls_pcie_lut_readl(struct ls_pcie *pcie, u32 off)
++{
++	if (pcie->big_endian)
++		return ioread32be(pcie->lut_base + off);
+ 
+-	if (state < LTSSM_PCIE_L0)
+-		return 0;
++	return ioread32(pcie->lut_base + off);
++}
++
++static void ls_pcie_lut_writel(struct ls_pcie *pcie, u32 off, u32 val)
++{
++	if (pcie->big_endian)
++		return iowrite32be(val, pcie->lut_base + off);
++
++	return iowrite32(val, pcie->lut_base + off);
+ 
+-	return 1;
+ }
+ 
+-static int ls_pcie_link_up(struct dw_pcie *pci)
++static u32 ls_pcie_pf_readl(struct ls_pcie *pcie, u32 off)
+ {
+-	struct ls_pcie *pcie = to_ls_pcie(pci);
+-	u32 state;
++	if (pcie->big_endian)
++		return ioread32be(pcie->pf_base + off);
+ 
+-	state = (ioread32(pcie->lut + pcie->drvdata->lut_dbg) >>
+-		 pcie->drvdata->ltssm_shift) &
+-		 LTSSM_STATE_MASK;
++	return ioread32(pcie->pf_base + off);
++}
+ 
+-	if (state < LTSSM_PCIE_L0)
+-		return 0;
++static void ls_pcie_pf_writel(struct ls_pcie *pcie, u32 off, u32 val)
++{
++	if (pcie->big_endian)
++		return iowrite32be(val, pcie->pf_base + off);
++
++	return iowrite32(val, pcie->pf_base + off);
+ 
+-	return 1;
+ }
+ 
+-/* Forward error response of outbound non-posted requests */
+-static void ls_pcie_fix_error_response(struct ls_pcie *pcie)
++static void ls_pcie_send_turnoff_msg(struct ls_pcie *pcie)
++{
++	u32 val;
++	int ret;
++
++	val = ls_pcie_pf_readl(pcie, LS_PCIE_PF_MCR);
++	val |= PF_MCR_PTOMR;
++	ls_pcie_pf_writel(pcie, LS_PCIE_PF_MCR, val);
++
++	ret = readx_poll_timeout(ls_pcie_pf_readl_addr, LS_PCIE_PF_MCR,
++				 val, !(val & PF_MCR_PTOMR), 100, 10000);
++	if (ret)
++		dev_info(pcie->pci->dev, "poll turn off message timeout\n");
++}
++
++static void ls1021a_pcie_send_turnoff_msg(struct ls_pcie *pcie)
++{
++	u32 val;
++
++	if (!pcie->scfg) {
++		dev_dbg(pcie->pci->dev, "SYSCFG is NULL\n");
++		return;
++	}
++
++	/* Send Turn_off message */
++	regmap_read(pcie->scfg, SCFG_PEXPMWRCR(pcie->index), &val);
++	val |= PMXMTTURNOFF;
++	regmap_write(pcie->scfg, SCFG_PEXPMWRCR(pcie->index), val);
++
++	mdelay(10);
++
++	/* Clear Turn_off message */
++	regmap_read(pcie->scfg, SCFG_PEXPMWRCR(pcie->index), &val);
++	val &= ~PMXMTTURNOFF;
++	regmap_write(pcie->scfg, SCFG_PEXPMWRCR(pcie->index), val);
++}
++
++static void ls1043a_pcie_send_turnoff_msg(struct ls_pcie *pcie)
++{
++	u32 val;
++
++	if (!pcie->scfg) {
++		dev_dbg(pcie->pci->dev, "SYSCFG is NULL\n");
++		return;
++	}
++
++	/* Send Turn_off message */
++	regmap_read(pcie->scfg, SCFG_PEXPMECR, &val);
++	val |= PEXPME(pcie->index);
++	regmap_write(pcie->scfg, SCFG_PEXPMECR, val);
++
++	mdelay(10);
++
++	/* Clear Turn_off message */
++	regmap_read(pcie->scfg, SCFG_PEXPMECR, &val);
++	val &= ~PEXPME(pcie->index);
++	regmap_write(pcie->scfg, SCFG_PEXPMECR, val);
++}
++
++static void ls_pcie_exit_from_l2(struct ls_pcie *pcie)
++{
++	u32 val;
++	int ret;
++
++	val = ls_pcie_pf_readl(pcie, LS_PCIE_PF_MCR);
++	val |= PF_MCR_EXL2S;
++	ls_pcie_pf_writel(pcie, LS_PCIE_PF_MCR, val);
++
++	ret = readx_poll_timeout(ls_pcie_pf_readl_addr, LS_PCIE_PF_MCR,
++				 val, !(val & PF_MCR_EXL2S), 100, 10000);
++	if (ret)
++		dev_info(pcie->pci->dev, "poll exit L2 state timeout\n");
++}
++
++static void ls_pcie_retrain_link(struct ls_pcie *pcie)
+ {
+ 	struct dw_pcie *pci = pcie->pci;
++	u8 offset = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
++	u32 val;
+ 
+-	iowrite32(PCIE_ABSERR_SETTING, pci->dbi_base + PCIE_ABSERR);
++	val = dw_pcie_readw_dbi(pci, offset + PCI_EXP_LNKCTL);
++	val |= PCI_EXP_LNKCTL_RL;
++	dw_pcie_writew_dbi(pci, offset + PCI_EXP_LNKCTL, val);
+ }
+ 
+-static int ls_pcie_host_init(struct pcie_port *pp)
++static void ls1021a_pcie_exit_from_l2(struct ls_pcie *pcie)
+ {
+-	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
+-	struct ls_pcie *pcie = to_ls_pcie(pci);
++	u32 val;
+ 
+-	ls_pcie_fix_error_response(pcie);
++	regmap_read(pcie->scfg, SCFG_PEXSFTRSTCR, &val);
++	val |= PEXSR(pcie->index);
++	regmap_write(pcie->scfg, SCFG_PEXSFTRSTCR, val);
+ 
+-	dw_pcie_dbi_ro_wr_en(pci);
+-	ls_pcie_clear_multifunction(pcie);
+-	dw_pcie_dbi_ro_wr_dis(pci);
++	regmap_read(pcie->scfg, SCFG_PEXSFTRSTCR, &val);
++	val &= ~PEXSR(pcie->index);
++	regmap_write(pcie->scfg, SCFG_PEXSFTRSTCR, val);
+ 
+-	ls_pcie_drop_msg_tlp(pcie);
++	mdelay(1);
+ 
+-	return 0;
++	ls_pcie_retrain_link(pcie);
+ }
++static void ls1043a_pcie_exit_from_l2(struct ls_pcie *pcie)
++{
++	u32 val;
++
++	val = ls_pcie_lut_readl(pcie, LS_PCIE_LDBG);
++	val |= LDBG_WE;
++	ls_pcie_lut_writel(pcie, LS_PCIE_LDBG, val);
++
++	val = ls_pcie_lut_readl(pcie, LS_PCIE_LDBG);
++	val |= LDBG_SR;
++	ls_pcie_lut_writel(pcie, LS_PCIE_LDBG, val);
++
++	val = ls_pcie_lut_readl(pcie, LS_PCIE_LDBG);
++	val &= ~LDBG_SR;
++	ls_pcie_lut_writel(pcie, LS_PCIE_LDBG, val);
++
++	val = ls_pcie_lut_readl(pcie, LS_PCIE_LDBG);
++	val &= ~LDBG_WE;
++	ls_pcie_lut_writel(pcie, LS_PCIE_LDBG, val);
+ 
+-static int ls1021_pcie_host_init(struct pcie_port *pp)
++	mdelay(1);
++
++	ls_pcie_retrain_link(pcie);
++}
++
++static int ls1021a_pcie_pm_init(struct ls_pcie *pcie)
+ {
+-	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
+-	struct ls_pcie *pcie = to_ls_pcie(pci);
+-	struct device *dev = pci->dev;
++	struct device *dev = pcie->pci->dev;
+ 	u32 index[2];
+ 	int ret;
+ 
+@@ -156,79 +299,101 @@ static int ls1021_pcie_host_init(struct pcie_port *pp)
+ 		return ret;
+ 	}
+ 
+-	if (of_property_read_u32_array(dev->of_node,
+-				       "fsl,pcie-scfg", index, 2)) {
++	ret = of_property_read_u32_array(dev->of_node, "fsl,pcie-scfg",
++					 index, 2);
++	if (ret) {
+ 		pcie->scfg = NULL;
+-		return -EINVAL;
++		return ret;
+ 	}
++
+ 	pcie->index = index[1];
+ 
+-	return ls_pcie_host_init(pp);
++	return 0;
+ }
+ 
+-static const struct dw_pcie_host_ops ls1021_pcie_host_ops = {
+-	.host_init = ls1021_pcie_host_init,
+-};
++static int ls_pcie_pm_init(struct ls_pcie *pcie)
++{
++	return 0;
++}
+ 
+-static const struct dw_pcie_host_ops ls_pcie_host_ops = {
+-	.host_init = ls_pcie_host_init,
+-};
++static void ls_pcie_set_dstate(struct ls_pcie *pcie, u32 dstate)
++{
++	struct dw_pcie *pci = pcie->pci;
++	u8 offset = dw_pcie_find_capability(pci, PCI_CAP_ID_PM);
++	u32 val;
++
++	val = dw_pcie_readw_dbi(pci, offset + PCI_PM_CTRL);
++	val &= ~PCI_PM_CTRL_STATE_MASK;
++	val |= dstate;
++	dw_pcie_writew_dbi(pci, offset + PCI_PM_CTRL, val);
++}
++
++static int ls_pcie_host_init(struct pcie_port *pp)
++{
++	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
++	struct ls_pcie *pcie = to_ls_pcie(pci);
++
++	ls_pcie_fix_error_response(pcie);
+ 
+-static const struct dw_pcie_ops dw_ls1021_pcie_ops = {
+-	.link_up = ls1021_pcie_link_up,
++	dw_pcie_dbi_ro_wr_en(pci);
++	ls_pcie_clear_multifunction(pcie);
++	dw_pcie_dbi_ro_wr_dis(pci);
++
++	ls_pcie_drop_msg_tlp(pcie);
++
++	return 0;
++}
++
++static struct ls_pcie_host_pm_ops ls1021a_pcie_host_pm_ops = {
++	.pm_init = &ls1021a_pcie_pm_init,
++	.send_turn_off_message = &ls1021a_pcie_send_turnoff_msg,
++	.exit_from_l2 = &ls1021a_pcie_exit_from_l2,
+ };
+ 
+-static const struct dw_pcie_ops dw_ls_pcie_ops = {
+-	.link_up = ls_pcie_link_up,
++static struct ls_pcie_host_pm_ops ls1043a_pcie_host_pm_ops = {
++	.pm_init = &ls1021a_pcie_pm_init,
++	.send_turn_off_message = &ls1043a_pcie_send_turnoff_msg,
++	.exit_from_l2 = &ls1043a_pcie_exit_from_l2,
+ };
+ 
+-static const struct ls_pcie_drvdata ls1021_drvdata = {
+-	.ops = &ls1021_pcie_host_ops,
+-	.dw_pcie_ops = &dw_ls1021_pcie_ops,
++static struct ls_pcie_host_pm_ops ls_pcie_host_pm_ops = {
++	.pm_init = &ls_pcie_pm_init,
++	.send_turn_off_message = &ls_pcie_send_turnoff_msg,
++	.exit_from_l2 = &ls_pcie_exit_from_l2,
+ };
+ 
+-static const struct ls_pcie_drvdata ls1043_drvdata = {
+-	.lut_offset = 0x10000,
+-	.ltssm_shift = 24,
+-	.lut_dbg = 0x7fc,
+-	.ops = &ls_pcie_host_ops,
+-	.dw_pcie_ops = &dw_ls_pcie_ops,
++static const struct dw_pcie_host_ops ls_pcie_host_ops = {
++	.host_init = ls_pcie_host_init,
+ };
+ 
+-static const struct ls_pcie_drvdata ls1046_drvdata = {
+-	.lut_offset = 0x80000,
+-	.ltssm_shift = 24,
+-	.lut_dbg = 0x407fc,
++static const struct ls_pcie_drvdata ls1021a_drvdata = {
+ 	.ops = &ls_pcie_host_ops,
+-	.dw_pcie_ops = &dw_ls_pcie_ops,
++	.pm_ops = &ls1021a_pcie_host_pm_ops,
+ };
+ 
+-static const struct ls_pcie_drvdata ls2080_drvdata = {
+-	.lut_offset = 0x80000,
+-	.ltssm_shift = 0,
+-	.lut_dbg = 0x7fc,
++static const struct ls_pcie_drvdata ls1043a_drvdata = {
+ 	.ops = &ls_pcie_host_ops,
+-	.dw_pcie_ops = &dw_ls_pcie_ops,
++	.lut_off = 0x10000,
++	.pm_ops = &ls1043a_pcie_host_pm_ops,
+ };
+ 
+-static const struct ls_pcie_drvdata ls2088_drvdata = {
+-	.lut_offset = 0x80000,
+-	.ltssm_shift = 0,
+-	.lut_dbg = 0x407fc,
++static const struct ls_pcie_drvdata layerscape_drvdata = {
+ 	.ops = &ls_pcie_host_ops,
+-	.dw_pcie_ops = &dw_ls_pcie_ops,
++	.lut_off = 0x80000,
++	.pf_off = 0xc0000,
++	.pm_ops = &ls_pcie_host_pm_ops,
+ };
+ 
+ static const struct of_device_id ls_pcie_of_match[] = {
+-	{ .compatible = "fsl,ls1012a-pcie", .data = &ls1046_drvdata },
+-	{ .compatible = "fsl,ls1021a-pcie", .data = &ls1021_drvdata },
+-	{ .compatible = "fsl,ls1028a-pcie", .data = &ls2088_drvdata },
+-	{ .compatible = "fsl,ls1043a-pcie", .data = &ls1043_drvdata },
+-	{ .compatible = "fsl,ls1046a-pcie", .data = &ls1046_drvdata },
+-	{ .compatible = "fsl,ls2080a-pcie", .data = &ls2080_drvdata },
+-	{ .compatible = "fsl,ls2085a-pcie", .data = &ls2080_drvdata },
+-	{ .compatible = "fsl,ls2088a-pcie", .data = &ls2088_drvdata },
+-	{ .compatible = "fsl,ls1088a-pcie", .data = &ls2088_drvdata },
++	{ .compatible = "fsl,ls1012a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls1021a-pcie", .data = &ls1021a_drvdata },
++	{ .compatible = "fsl,ls1028a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls1043a-pcie", .data = &ls1043a_drvdata },
++	{ .compatible = "fsl,ls1046a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls2080a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls2085a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls2088a-pcie", .data = &layerscape_drvdata },
++	{ .compatible = "fsl,ls1088a-pcie", .data = &layerscape_drvdata },
+ 	{ },
+ };
+ 
+@@ -238,6 +403,7 @@ static int ls_pcie_probe(struct platform_device *pdev)
+ 	struct dw_pcie *pci;
+ 	struct ls_pcie *pcie;
+ 	struct resource *dbi_base;
++	int ret;
+ 
+ 	pcie = devm_kzalloc(dev, sizeof(*pcie), GFP_KERNEL);
+ 	if (!pcie)
+@@ -250,7 +416,6 @@ static int ls_pcie_probe(struct platform_device *pdev)
+ 	pcie->drvdata = of_device_get_match_data(dev);
+ 
+ 	pci->dev = dev;
+-	pci->ops = pcie->drvdata->dw_pcie_ops;
+ 	pci->pp.ops = pcie->drvdata->ops;
+ 
+ 	pcie->pci = pci;
+@@ -260,22 +425,120 @@ static int ls_pcie_probe(struct platform_device *pdev)
+ 	if (IS_ERR(pci->dbi_base))
+ 		return PTR_ERR(pci->dbi_base);
+ 
+-	pcie->lut = pci->dbi_base + pcie->drvdata->lut_offset;
++	pcie->big_endian = of_property_read_bool(dev->of_node, "big-endian");
++
++	if (pcie->drvdata->lut_off)
++		pcie->lut_base = pci->dbi_base + pcie->drvdata->lut_off;
++
++	if (pcie->drvdata->pf_off)
++		pcie->pf_base = pci->dbi_base + pcie->drvdata->pf_off;
+ 
+ 	if (!ls_pcie_is_bridge(pcie))
+ 		return -ENODEV;
+ 
+ 	platform_set_drvdata(pdev, pcie);
+ 
+-	return dw_pcie_host_init(&pci->pp);
++	ret = dw_pcie_host_init(&pci->pp);
++	if (ret)
++		return ret;
++
++	if (dw_pcie_link_up(pci)) {
++		dev_dbg(pci->dev, "Endpoint is present\n");
++		pcie->ep_presence = true;
++	}
++
++	if (pcie->drvdata->pm_ops && pcie->drvdata->pm_ops->pm_init &&
++	    !pcie->drvdata->pm_ops->pm_init(pcie))
++		pcie->pm_support = true;
++
++	return 0;
+ }
+ 
++static bool ls_pcie_pm_check(struct ls_pcie *pcie)
++{
++	if (!pcie->ep_presence) {
++		dev_dbg(pcie->pci->dev, "Endpoint isn't present\n");
++		return false;
++	}
++
++	if (!pcie->pm_support)
++		return false;
++
++	return true;
++}
++
++#ifdef CONFIG_PM_SLEEP
++static int ls_pcie_suspend_noirq(struct device *dev)
++{
++	struct ls_pcie *pcie = dev_get_drvdata(dev);
++	struct dw_pcie *pci = pcie->pci;
++	u32 val;
++	int ret;
++
++	if (!ls_pcie_pm_check(pcie))
++		return 0;
++
++	pcie->drvdata->pm_ops->send_turn_off_message(pcie);
++
++	/* 10ms timeout to check L2 ready */
++	ret = readl_poll_timeout(pci->dbi_base + PCIE_PORT_DEBUG0,
++				 val, LS_PCIE_IS_L2(val), 100, 10000);
++	if (ret) {
++		dev_err(dev, "PCIe link enter L2 timeout! ltssm = 0x%x\n", val);
++		return ret;
++	}
++
++	ls_pcie_set_dstate(pcie, 0x3);
++
++	return 0;
++}
++
++static int ls_pcie_resume_noirq(struct device *dev)
++{
++	struct ls_pcie *pcie = dev_get_drvdata(dev);
++	struct dw_pcie *pci = pcie->pci;
++	int ret;
++
++	if (!ls_pcie_pm_check(pcie))
++		return 0;
++
++	ls_pcie_set_dstate(pcie, 0x0);
++
++	pcie->drvdata->pm_ops->exit_from_l2(pcie);
++
++	/* delay 10ms to access EP */
++	mdelay(10);
++
++	ret = ls_pcie_host_init(&pci->pp);
++	if (ret) {
++		dev_err(dev, "ls_pcie_host_init failed! ret = 0x%x\n", ret);
++		return ret;
++	}
++
++	dw_pcie_setup_rc(&pci->pp);
++
++	ret = dw_pcie_wait_for_link(pci);
++	if (ret) {
++		dev_err(dev, "wait link up timeout! ret = 0x%x\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++#endif /* CONFIG_PM_SLEEP */
++
++static const struct dev_pm_ops ls_pcie_pm_ops = {
++	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(ls_pcie_suspend_noirq,
++				      ls_pcie_resume_noirq)
++};
++
+ static struct platform_driver ls_pcie_driver = {
+ 	.probe = ls_pcie_probe,
+ 	.driver = {
+ 		.name = "layerscape-pcie",
+ 		.of_match_table = ls_pcie_of_match,
+ 		.suppress_bind_attrs = true,
++		.pm = &ls_pcie_pm_ops,
+ 	},
+ };
+ builtin_platform_driver(ls_pcie_driver);
+diff --git a/drivers/pci/controller/dwc/pcie-designware-host.c b/drivers/pci/controller/dwc/pcie-designware-host.c
+index 7cd4593ad..37f5420c9 100644
+--- a/drivers/pci/controller/dwc/pcie-designware-host.c
++++ b/drivers/pci/controller/dwc/pcie-designware-host.c
+@@ -318,6 +318,8 @@ int dw_pcie_host_init(struct pcie_port *pp)
+ 			return PTR_ERR(pci->dbi_base);
+ 	}
+ 
++	dw_pcie_iatu_detect(pci);
++
+ 	bridge = devm_pci_alloc_host_bridge(dev, 0);
+ 	if (!bridge)
+ 		return -ENOMEM;
+@@ -352,6 +354,12 @@ int dw_pcie_host_init(struct pcie_port *pp)
+ 			if (ret < 0)
+ 				return ret;
+ 		} else if (pp->has_msi_ctrl) {
++			u32 ctrl, num_ctrls;
++
++			num_ctrls = pp->num_vectors / MAX_MSI_IRQS_PER_CTRL;
++			for (ctrl = 0; ctrl < num_ctrls; ctrl++)
++				pp->irq_mask[ctrl] = ~0;
++
+ 			if (!pp->msi_irq) {
+ 				pp->msi_irq = platform_get_irq_byname_optional(pdev, "msi");
+ 				if (pp->msi_irq < 0) {
+@@ -552,7 +560,6 @@ void dw_pcie_setup_rc(struct pcie_port *pp)
+ 
+ 		/* Initialize IRQ Status array */
+ 		for (ctrl = 0; ctrl < num_ctrls; ctrl++) {
+-			pp->irq_mask[ctrl] = ~0;
+ 			dw_pcie_writel_dbi(pci, PCIE_MSI_INTR0_MASK +
+ 					    (ctrl * MSI_REG_CTRL_BLOCK_SIZE),
+ 					    pp->irq_mask[ctrl]);
+diff --git a/drivers/pci/controller/dwc/pcie-designware.c b/drivers/pci/controller/dwc/pcie-designware.c
+index d92c8a250..5848cc520 100644
+--- a/drivers/pci/controller/dwc/pcie-designware.c
++++ b/drivers/pci/controller/dwc/pcie-designware.c
+@@ -287,8 +287,8 @@ static void dw_pcie_prog_outbound_atu_unroll(struct dw_pcie *pci, u8 func_no,
+ 	dw_pcie_writel_ob_unroll(pci, index, PCIE_ATU_UNR_UPPER_TARGET,
+ 				 upper_32_bits(pci_addr));
+ 	val = type | PCIE_ATU_FUNC_NUM(func_no);
+-	val = upper_32_bits(size - 1) ?
+-		val | PCIE_ATU_INCREASE_REGION_SIZE : val;
++	if (upper_32_bits(limit_addr) > upper_32_bits(cpu_addr))
++		val |= PCIE_ATU_INCREASE_REGION_SIZE;
+ 	if (pci->version == 0x490A)
+ 		val = dw_pcie_enable_ecrc(val);
+ 	dw_pcie_writel_ob_unroll(pci, index, PCIE_ATU_UNR_REGION_CTRL1, val);
+@@ -315,6 +315,7 @@ static void __dw_pcie_prog_outbound_atu(struct dw_pcie *pci, u8 func_no,
+ 					u64 pci_addr, u64 size)
+ {
+ 	u32 retries, val;
++	u64 limit_addr;
+ 
+ 	if (pci->ops && pci->ops->cpu_addr_fixup)
+ 		cpu_addr = pci->ops->cpu_addr_fixup(pci, cpu_addr);
+@@ -325,6 +326,8 @@ static void __dw_pcie_prog_outbound_atu(struct dw_pcie *pci, u8 func_no,
+ 		return;
+ 	}
+ 
++	limit_addr = cpu_addr + size - 1;
++
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_VIEWPORT,
+ 			   PCIE_ATU_REGION_OUTBOUND | index);
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_LOWER_BASE,
+@@ -332,17 +335,18 @@ static void __dw_pcie_prog_outbound_atu(struct dw_pcie *pci, u8 func_no,
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_UPPER_BASE,
+ 			   upper_32_bits(cpu_addr));
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_LIMIT,
+-			   lower_32_bits(cpu_addr + size - 1));
++			   lower_32_bits(limit_addr));
+ 	if (pci->version >= 0x460A)
+ 		dw_pcie_writel_dbi(pci, PCIE_ATU_UPPER_LIMIT,
+-				   upper_32_bits(cpu_addr + size - 1));
++				   upper_32_bits(limit_addr));
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_LOWER_TARGET,
+ 			   lower_32_bits(pci_addr));
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_UPPER_TARGET,
+ 			   upper_32_bits(pci_addr));
+ 	val = type | PCIE_ATU_FUNC_NUM(func_no);
+-	val = ((upper_32_bits(size - 1)) && (pci->version >= 0x460A)) ?
+-		val | PCIE_ATU_INCREASE_REGION_SIZE : val;
++	if (upper_32_bits(limit_addr) > upper_32_bits(cpu_addr) &&
++	    pci->version >= 0x460A)
++		val |= PCIE_ATU_INCREASE_REGION_SIZE;
+ 	if (pci->version == 0x490A)
+ 		val = dw_pcie_enable_ecrc(val);
+ 	dw_pcie_writel_dbi(pci, PCIE_ATU_CR1, val);
+@@ -491,7 +495,7 @@ int dw_pcie_prog_inbound_atu(struct dw_pcie *pci, u8 func_no, int index,
+ void dw_pcie_disable_atu(struct dw_pcie *pci, int index,
+ 			 enum dw_pcie_region_type type)
+ {
+-	int region;
++	u32 region;
+ 
+ 	switch (type) {
+ 	case DW_PCIE_REGION_INBOUND:
+@@ -504,8 +508,18 @@ void dw_pcie_disable_atu(struct dw_pcie *pci, int index,
+ 		return;
+ 	}
+ 
+-	dw_pcie_writel_dbi(pci, PCIE_ATU_VIEWPORT, region | index);
+-	dw_pcie_writel_dbi(pci, PCIE_ATU_CR2, ~(u32)PCIE_ATU_ENABLE);
++	if (pci->iatu_unroll_enabled) {
++		if (region == PCIE_ATU_REGION_INBOUND) {
++			dw_pcie_writel_ib_unroll(pci, index, PCIE_ATU_UNR_REGION_CTRL2,
++						 ~(u32)PCIE_ATU_ENABLE);
++		} else {
++			dw_pcie_writel_ob_unroll(pci, index, PCIE_ATU_UNR_REGION_CTRL2,
++						 ~(u32)PCIE_ATU_ENABLE);
++		}
++	} else {
++		dw_pcie_writel_dbi(pci, PCIE_ATU_VIEWPORT, region | index);
++		dw_pcie_writel_dbi(pci, PCIE_ATU_CR2, ~(u32)PCIE_ATU_ENABLE);
++	}
+ }
+ 
+ int dw_pcie_wait_for_link(struct dw_pcie *pci)
+@@ -726,6 +740,13 @@ void dw_pcie_setup(struct dw_pcie *pci)
+ 	val |= PORT_LINK_DLL_LINK_EN;
+ 	dw_pcie_writel_dbi(pci, PCIE_PORT_LINK_CONTROL, val);
+ 
++	if (of_property_read_bool(np, "snps,enable-cdm-check")) {
++		val = dw_pcie_readl_dbi(pci, PCIE_PL_CHK_REG_CONTROL_STATUS);
++		val |= PCIE_PL_CHK_REG_CHK_REG_CONTINUOUS |
++		       PCIE_PL_CHK_REG_CHK_REG_START;
++		dw_pcie_writel_dbi(pci, PCIE_PL_CHK_REG_CONTROL_STATUS, val);
++	}
++
+ 	of_property_read_u32(np, "num-lanes", &pci->num_lanes);
+ 	if (!pci->num_lanes) {
+ 		dev_dbg(pci->dev, "Using h/w default number of lanes\n");
+@@ -772,11 +793,4 @@ void dw_pcie_setup(struct dw_pcie *pci)
+ 		break;
+ 	}
+ 	dw_pcie_writel_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL, val);
+-
+-	if (of_property_read_bool(np, "snps,enable-cdm-check")) {
+-		val = dw_pcie_readl_dbi(pci, PCIE_PL_CHK_REG_CONTROL_STATUS);
+-		val |= PCIE_PL_CHK_REG_CHK_REG_CONTINUOUS |
+-		       PCIE_PL_CHK_REG_CHK_REG_START;
+-		dw_pcie_writel_dbi(pci, PCIE_PL_CHK_REG_CONTROL_STATUS, val);
+-	}
+ }
+-- 
+2.25.1
+

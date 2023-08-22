@@ -1,0 +1,2790 @@
+From 46eecae09d8cc51d3234fad59743486aec0e10c6 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Thu, 10 Aug 2023 16:15:04 +0800
+Subject: [PATCH 07/24] update clk driver
+
+---
+ drivers/clk/Kconfig                     |   3 +-
+ drivers/clk/Makefile                    |   1 +
+ drivers/clk/clk-conf.c                  |  12 +-
+ drivers/clk/clk-devres.c                |  91 ++-----
+ drivers/clk/clk-gate.c                  |  35 ---
+ drivers/clk/clk.c                       |   3 +-
+ drivers/clk/imx/Makefile                |   2 +-
+ drivers/clk/imx/clk-composite-7ulp.c    |   7 +
+ drivers/clk/imx/clk-composite-8m.c      |   4 +-
+ drivers/clk/imx/clk-composite-93.c      | 171 +++++++++++++-
+ drivers/clk/imx/clk-fracn-gppll.c       |  13 +-
+ drivers/clk/imx/clk-imx7d.c             |   1 -
+ drivers/clk/imx/clk-imx8mm.c            |   2 +
+ drivers/clk/imx/clk-imx8mn.c            |   2 +
+ drivers/clk/imx/clk-imx8mp.c            |   4 +-
+ drivers/clk/imx/clk-imx8mq.c            |   2 +
+ drivers/clk/imx/clk-imx8qxp.c           |  29 ++-
+ drivers/clk/imx/clk-imx8ulp.c           |  10 +-
+ drivers/clk/imx/clk-imx93.c             |  53 ++---
+ drivers/clk/imx/clk-pllv4.c             |   2 +-
+ drivers/clk/imx/clk.c                   |   2 +
+ drivers/clk/imx/clk.h                   |  10 +-
+ drivers/clk/s32/Kconfig                 |   4 +
+ drivers/clk/s32/Makefile                |   2 +
+ drivers/clk/s32/clk-core.c              |  53 +++++
+ drivers/clk/s32/clk.h                   |  55 +++++
+ drivers/clk/s32/s32v234/Makefile        |   1 +
+ drivers/clk/s32/s32v234/clk-dfs.c       | 236 ++++++++++++++++++
+ drivers/clk/s32/s32v234/clk-plldig.c    | 240 +++++++++++++++++++
+ drivers/clk/s32/s32v234/clk.c           | 299 +++++++++++++++++++++++
+ drivers/clk/s32/s32v234/clk.h           |  31 +++
+ drivers/clk/s32/s32v234/dfs.h           |  78 ++++++
+ drivers/clk/s32/s32v234/mc_cgm.h        |  70 ++++++
+ drivers/clk/s32/s32v234/mc_me.h         | 110 +++++++++
+ drivers/clk/s32/s32v234/pll.h           |  78 ++++++
+ drivers/clk/s32/s32v234/src.h           |  17 ++
+ include/dt-bindings/clock/imx93-clock.h |  10 +-
+ include/dt-bindings/firmware/imx/rsrc.h | 302 ++++++++++++++++--------
+ 38 files changed, 1762 insertions(+), 283 deletions(-)
+ create mode 100644 drivers/clk/s32/Kconfig
+ create mode 100644 drivers/clk/s32/Makefile
+ create mode 100644 drivers/clk/s32/clk-core.c
+ create mode 100644 drivers/clk/s32/clk.h
+ create mode 100644 drivers/clk/s32/s32v234/Makefile
+ create mode 100644 drivers/clk/s32/s32v234/clk-dfs.c
+ create mode 100644 drivers/clk/s32/s32v234/clk-plldig.c
+ create mode 100644 drivers/clk/s32/s32v234/clk.c
+ create mode 100644 drivers/clk/s32/s32v234/clk.h
+ create mode 100644 drivers/clk/s32/s32v234/dfs.h
+ create mode 100644 drivers/clk/s32/s32v234/mc_cgm.h
+ create mode 100644 drivers/clk/s32/s32v234/mc_me.h
+ create mode 100644 drivers/clk/s32/s32v234/pll.h
+ create mode 100644 drivers/clk/s32/s32v234/src.h
+
+diff --git a/drivers/clk/Kconfig b/drivers/clk/Kconfig
+index 100e474ff..023cf9191 100644
+--- a/drivers/clk/Kconfig
++++ b/drivers/clk/Kconfig
+@@ -83,7 +83,7 @@ config COMMON_CLK_RK808
+ config COMMON_CLK_HI655X
+ 	tristate "Clock driver for Hi655x" if EXPERT
+ 	depends on (MFD_HI655X_PMIC || COMPILE_TEST)
+-	select REGMAP
++	depends on REGMAP
+ 	default MFD_HI655X_PMIC
+ 	help
+ 	  This driver supports the hi655x PMIC clock. This
+@@ -408,6 +408,7 @@ source "drivers/clk/qcom/Kconfig"
+ source "drivers/clk/ralink/Kconfig"
+ source "drivers/clk/renesas/Kconfig"
+ source "drivers/clk/rockchip/Kconfig"
++source "drivers/clk/s32/Kconfig"
+ source "drivers/clk/samsung/Kconfig"
+ source "drivers/clk/sifive/Kconfig"
+ source "drivers/clk/socfpga/Kconfig"
+diff --git a/drivers/clk/Makefile b/drivers/clk/Makefile
+index e42312121..b1b31fa57 100644
+--- a/drivers/clk/Makefile
++++ b/drivers/clk/Makefile
+@@ -103,6 +103,7 @@ obj-$(CONFIG_COMMON_CLK_QCOM)		+= qcom/
+ obj-y					+= ralink/
+ obj-y					+= renesas/
+ obj-$(CONFIG_ARCH_ROCKCHIP)		+= rockchip/
++obj-$(CONFIG_ARCH_S32)			+= s32/
+ obj-$(CONFIG_COMMON_CLK_SAMSUNG)	+= samsung/
+ obj-$(CONFIG_CLK_SIFIVE)		+= sifive/
+ obj-y					+= socfpga/
+diff --git a/drivers/clk/clk-conf.c b/drivers/clk/clk-conf.c
+index 1a4e6340f..2ef819606 100644
+--- a/drivers/clk/clk-conf.c
++++ b/drivers/clk/clk-conf.c
+@@ -33,12 +33,9 @@ static int __set_clk_parents(struct device_node *node, bool clk_supplier)
+ 			else
+ 				return rc;
+ 		}
+-		if (clkspec.np == node && !clk_supplier) {
+-			of_node_put(clkspec.np);
++		if (clkspec.np == node && !clk_supplier)
+ 			return 0;
+-		}
+ 		pclk = of_clk_get_from_provider(&clkspec);
+-		of_node_put(clkspec.np);
+ 		if (IS_ERR(pclk)) {
+ 			if (PTR_ERR(pclk) != -EPROBE_DEFER)
+ 				pr_warn("clk: couldn't get parent clock %d for %pOF\n",
+@@ -51,12 +48,10 @@ static int __set_clk_parents(struct device_node *node, bool clk_supplier)
+ 		if (rc < 0)
+ 			goto err;
+ 		if (clkspec.np == node && !clk_supplier) {
+-			of_node_put(clkspec.np);
+ 			rc = 0;
+ 			goto err;
+ 		}
+ 		clk = of_clk_get_from_provider(&clkspec);
+-		of_node_put(clkspec.np);
+ 		if (IS_ERR(clk)) {
+ 			if (PTR_ERR(clk) != -EPROBE_DEFER)
+ 				pr_warn("clk: couldn't get assigned clock %d for %pOF\n",
+@@ -98,13 +93,10 @@ static int __set_clk_rates(struct device_node *node, bool clk_supplier)
+ 				else
+ 					return rc;
+ 			}
+-			if (clkspec.np == node && !clk_supplier) {
+-				of_node_put(clkspec.np);
++			if (clkspec.np == node && !clk_supplier)
+ 				return 0;
+-			}
+ 
+ 			clk = of_clk_get_from_provider(&clkspec);
+-			of_node_put(clkspec.np);
+ 			if (IS_ERR(clk)) {
+ 				if (PTR_ERR(clk) != -EPROBE_DEFER)
+ 					pr_warn("clk: couldn't get clock %d for %pOF\n",
+diff --git a/drivers/clk/clk-devres.c b/drivers/clk/clk-devres.c
+index 4fb4fd4b0..f9d5b7334 100644
+--- a/drivers/clk/clk-devres.c
++++ b/drivers/clk/clk-devres.c
+@@ -4,100 +4,41 @@
+ #include <linux/export.h>
+ #include <linux/gfp.h>
+ 
+-struct devm_clk_state {
+-	struct clk *clk;
+-	void (*exit)(struct clk *clk);
+-};
+-
+ static void devm_clk_release(struct device *dev, void *res)
+ {
+-	struct devm_clk_state *state = res;
+-
+-	if (state->exit)
+-		state->exit(state->clk);
+-
+-	clk_put(state->clk);
++	clk_put(*(struct clk **)res);
+ }
+ 
+-static struct clk *__devm_clk_get(struct device *dev, const char *id,
+-				  struct clk *(*get)(struct device *dev, const char *id),
+-				  int (*init)(struct clk *clk),
+-				  void (*exit)(struct clk *clk))
++struct clk *devm_clk_get(struct device *dev, const char *id)
+ {
+-	struct devm_clk_state *state;
+-	struct clk *clk;
+-	int ret;
++	struct clk **ptr, *clk;
+ 
+-	state = devres_alloc(devm_clk_release, sizeof(*state), GFP_KERNEL);
+-	if (!state)
++	ptr = devres_alloc(devm_clk_release, sizeof(*ptr), GFP_KERNEL);
++	if (!ptr)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	clk = get(dev, id);
+-	if (IS_ERR(clk)) {
+-		ret = PTR_ERR(clk);
+-		goto err_clk_get;
+-	}
+-
+-	if (init) {
+-		ret = init(clk);
+-		if (ret)
+-			goto err_clk_init;
++	clk = clk_get(dev, id);
++	if (!IS_ERR(clk)) {
++		*ptr = clk;
++		devres_add(dev, ptr);
++	} else {
++		devres_free(ptr);
+ 	}
+ 
+-	state->clk = clk;
+-	state->exit = exit;
+-
+-	devres_add(dev, state);
+-
+ 	return clk;
+-
+-err_clk_init:
+-
+-	clk_put(clk);
+-err_clk_get:
+-
+-	devres_free(state);
+-	return ERR_PTR(ret);
+-}
+-
+-struct clk *devm_clk_get(struct device *dev, const char *id)
+-{
+-	return __devm_clk_get(dev, id, clk_get, NULL, NULL);
+ }
+ EXPORT_SYMBOL(devm_clk_get);
+ 
+-struct clk *devm_clk_get_prepared(struct device *dev, const char *id)
+-{
+-	return __devm_clk_get(dev, id, clk_get, clk_prepare, clk_unprepare);
+-}
+-EXPORT_SYMBOL_GPL(devm_clk_get_prepared);
+-
+-struct clk *devm_clk_get_enabled(struct device *dev, const char *id)
+-{
+-	return __devm_clk_get(dev, id, clk_get,
+-			      clk_prepare_enable, clk_disable_unprepare);
+-}
+-EXPORT_SYMBOL_GPL(devm_clk_get_enabled);
+-
+ struct clk *devm_clk_get_optional(struct device *dev, const char *id)
+ {
+-	return __devm_clk_get(dev, id, clk_get_optional, NULL, NULL);
+-}
+-EXPORT_SYMBOL(devm_clk_get_optional);
++	struct clk *clk = devm_clk_get(dev, id);
+ 
+-struct clk *devm_clk_get_optional_prepared(struct device *dev, const char *id)
+-{
+-	return __devm_clk_get(dev, id, clk_get_optional,
+-			      clk_prepare, clk_unprepare);
+-}
+-EXPORT_SYMBOL_GPL(devm_clk_get_optional_prepared);
++	if (clk == ERR_PTR(-ENOENT))
++		return NULL;
+ 
+-struct clk *devm_clk_get_optional_enabled(struct device *dev, const char *id)
+-{
+-	return __devm_clk_get(dev, id, clk_get_optional,
+-			      clk_prepare_enable, clk_disable_unprepare);
++	return clk;
+ }
+-EXPORT_SYMBOL_GPL(devm_clk_get_optional_enabled);
++EXPORT_SYMBOL(devm_clk_get_optional);
+ 
+ struct clk_bulk_devres {
+ 	struct clk_bulk_data *clks;
+diff --git a/drivers/clk/clk-gate.c b/drivers/clk/clk-gate.c
+index 642838076..070dc47e9 100644
+--- a/drivers/clk/clk-gate.c
++++ b/drivers/clk/clk-gate.c
+@@ -7,7 +7,6 @@
+  */
+ 
+ #include <linux/clk-provider.h>
+-#include <linux/device.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
+ #include <linux/io.h>
+@@ -223,37 +222,3 @@ void clk_hw_unregister_gate(struct clk_hw *hw)
+ 	kfree(gate);
+ }
+ EXPORT_SYMBOL_GPL(clk_hw_unregister_gate);
+-
+-static void devm_clk_hw_release_gate(struct device *dev, void *res)
+-{
+-	clk_hw_unregister_gate(*(struct clk_hw **)res);
+-}
+-
+-struct clk_hw *__devm_clk_hw_register_gate(struct device *dev,
+-		struct device_node *np, const char *name,
+-		const char *parent_name, const struct clk_hw *parent_hw,
+-		const struct clk_parent_data *parent_data,
+-		unsigned long flags,
+-		void __iomem *reg, u8 bit_idx,
+-		u8 clk_gate_flags, spinlock_t *lock)
+-{
+-	struct clk_hw **ptr, *hw;
+-
+-	ptr = devres_alloc(devm_clk_hw_release_gate, sizeof(*ptr), GFP_KERNEL);
+-	if (!ptr)
+-		return ERR_PTR(-ENOMEM);
+-
+-	hw = __clk_hw_register_gate(dev, np, name, parent_name, parent_hw,
+-				    parent_data, flags, reg, bit_idx,
+-				    clk_gate_flags, lock);
+-
+-	if (!IS_ERR(hw)) {
+-		*ptr = hw;
+-		devres_add(dev, ptr);
+-	} else {
+-		devres_free(ptr);
+-	}
+-
+-	return hw;
+-}
+-EXPORT_SYMBOL_GPL(__devm_clk_hw_register_gate);
+diff --git a/drivers/clk/clk.c b/drivers/clk/clk.c
+index 0674dbc62..1c9a74efb 100644
+--- a/drivers/clk/clk.c
++++ b/drivers/clk/clk.c
+@@ -2537,7 +2537,8 @@ static int clk_core_set_parent_nolock(struct clk_core *core,
+ 	if (!core)
+ 		return 0;
+ 
+-	if (core->parent == parent)
++	if ((core->parent == parent) &&
++		!(core->flags & CLK_SET_PARENT_NOCACHE))
+ 		return 0;
+ 
+ 	/* verify ops for multi-parent clks */
+diff --git a/drivers/clk/imx/Makefile b/drivers/clk/imx/Makefile
+index 983c149c4..56a1fbf71 100644
+--- a/drivers/clk/imx/Makefile
++++ b/drivers/clk/imx/Makefile
+@@ -28,7 +28,7 @@ obj-$(CONFIG_CLK_IMX8MN) += clk-imx8mn.o
+ obj-$(CONFIG_CLK_IMX8MP) += clk-imx8mp.o clk-blk-ctrl.o
+ obj-$(CONFIG_CLK_IMX8MQ) += clk-imx8mq.o
+ 
+-obj-$(CONFIG_CLK_IMX93) += clk-imx93.o
++obj-$(CONFIG_CLK_IMX93) += clk-imx93.o clk-gate-93.o
+ 
+ obj-$(CONFIG_MXC_CLK_SCU) += clk-imx-scu.o clk-imx-lpcg-scu.o
+ clk-imx-scu-$(CONFIG_CLK_IMX8QXP) += clk-scu.o clk-imx8qxp.o \
+diff --git a/drivers/clk/imx/clk-composite-7ulp.c b/drivers/clk/imx/clk-composite-7ulp.c
+index 4eedd45db..f9fe968bd 100644
+--- a/drivers/clk/imx/clk-composite-7ulp.c
++++ b/drivers/clk/imx/clk-composite-7ulp.c
+@@ -7,6 +7,7 @@
+ 
+ #include <linux/bits.h>
+ #include <linux/clk-provider.h>
++#include <linux/delay.h>
+ #include <linux/err.h>
+ #include <linux/io.h>
+ #include <linux/slab.h>
+@@ -37,6 +38,9 @@ static int pcc_gate_enable(struct clk_hw *hw)
+ 	if (ret)
+ 		return ret;
+ 
++	/* wait before release reset */
++	udelay(1);
++
+ 	spin_lock_irqsave(gate->lock, flags);
+ 	/*
+ 	 * release the sw reset for peripherals associated with
+@@ -48,6 +52,9 @@ static int pcc_gate_enable(struct clk_hw *hw)
+ 
+ 	spin_unlock_irqrestore(gate->lock, flags);
+ 
++	/* wait sync reset done */
++	udelay(1);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/clk/imx/clk-composite-8m.c b/drivers/clk/imx/clk-composite-8m.c
+index fec34169a..fd704be82 100644
+--- a/drivers/clk/imx/clk-composite-8m.c
++++ b/drivers/clk/imx/clk-composite-8m.c
+@@ -178,7 +178,7 @@ struct clk_hw *imx8m_clk_hw_composite_flags(const char *name,
+ 					unsigned long flags)
+ {
+ 	struct clk_hw *hw = ERR_PTR(-ENOMEM), *mux_hw;
+-	struct clk_hw *div_hw, *gate_hw;
++	struct clk_hw *div_hw, *gate_hw = NULL;
+ 	struct clk_divider *div = NULL;
+ 	struct clk_gate *gate = NULL;
+ 	struct clk_mux *mux = NULL;
+@@ -224,7 +224,7 @@ struct clk_hw *imx8m_clk_hw_composite_flags(const char *name,
+ 	div->flags = CLK_DIVIDER_ROUND_CLOSEST;
+ 
+ 	/* skip registering the gate ops if M4 is enabled */
+-	if (imx_src_is_m4_enabled()) {
++	if (imx_src_is_m4_enabled() || mcore_booted) {
+ 		gate_hw = NULL;
+ 	} else {
+ 		gate = kzalloc(sizeof(*gate), GFP_KERNEL);
+diff --git a/drivers/clk/imx/clk-composite-93.c b/drivers/clk/imx/clk-composite-93.c
+index b44619aa5..74a66b020 100644
+--- a/drivers/clk/imx/clk-composite-93.c
++++ b/drivers/clk/imx/clk-composite-93.c
+@@ -9,22 +9,180 @@
+ #include <linux/errno.h>
+ #include <linux/export.h>
+ #include <linux/io.h>
++#include <linux/iopoll.h>
+ #include <linux/slab.h>
+ 
+ #include "clk.h"
+ 
++#define TIMEOUT_US	500U
++
+ #define CCM_DIV_SHIFT	0
+ #define CCM_DIV_WIDTH	8
+ #define CCM_MUX_SHIFT	8
+ #define CCM_MUX_MASK	3
+ #define CCM_OFF_SHIFT	24
++#define CCM_BUSY_SHIFT	28
+ 
++#define STAT_OFFSET	0x4
+ #define AUTHEN_OFFSET	0x30
+ #define TZ_NS_SHIFT	9
+ #define TZ_NS_MASK	BIT(9)
+ 
++#define WHITE_LIST_SHIFT	16
++
++static int imx93_clk_composite_wait_ready(struct clk_hw *hw, void __iomem *reg)
++{
++	int ret;
++	u32 val;
++
++	ret = readl_poll_timeout_atomic(reg + STAT_OFFSET, val, !(val & BIT(CCM_BUSY_SHIFT)),
++					0, TIMEOUT_US);
++	if (ret)
++		pr_err("Slice[%s] busy timeout\n", clk_hw_get_name(hw));
++
++	return ret;
++}
++
++static void imx93_clk_composite_gate_endisable(struct clk_hw *hw, int enable)
++{
++	struct clk_gate *gate = to_clk_gate(hw);
++	unsigned long flags;
++	u32 reg;
++
++	if (gate->lock)
++		spin_lock_irqsave(gate->lock, flags);
++
++	reg = readl(gate->reg);
++
++	if (enable)
++		reg &= ~BIT(gate->bit_idx);
++	else
++		reg |= BIT(gate->bit_idx);
++
++	writel(reg, gate->reg);
++
++	imx93_clk_composite_wait_ready(hw, gate->reg);
++
++	if (gate->lock)
++		spin_unlock_irqrestore(gate->lock, flags);
++}
++
++static int imx93_clk_composite_gate_enable(struct clk_hw *hw)
++{
++	imx93_clk_composite_gate_endisable(hw, 1);
++
++	return 0;
++}
++
++static void imx93_clk_composite_gate_disable(struct clk_hw *hw)
++{
++	imx93_clk_composite_gate_endisable(hw, 0);
++}
++
++static const struct clk_ops imx93_clk_composite_gate_ops = {
++	.enable = imx93_clk_composite_gate_enable,
++	.disable = imx93_clk_composite_gate_disable,
++	.is_enabled = clk_gate_is_enabled,
++};
++
++static unsigned long
++imx93_clk_composite_divider_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
++{
++	return clk_divider_ops.recalc_rate(hw, parent_rate);
++}
++
++static long
++imx93_clk_composite_divider_round_rate(struct clk_hw *hw, unsigned long rate, unsigned long *prate)
++{
++	return clk_divider_ops.round_rate(hw, rate, prate);
++}
++
++static int
++imx93_clk_composite_divider_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	return clk_divider_ops.determine_rate(hw, req);
++}
++
++static int imx93_clk_composite_divider_set_rate(struct clk_hw *hw, unsigned long rate,
++						unsigned long parent_rate)
++{
++	struct clk_divider *divider = to_clk_divider(hw);
++	int value;
++	unsigned long flags = 0;
++	u32 val;
++	int ret;
++
++	value = divider_get_val(rate, parent_rate, divider->table, divider->width, divider->flags);
++	if (value < 0)
++		return value;
++
++	if (divider->lock)
++		spin_lock_irqsave(divider->lock, flags);
++
++	val = readl(divider->reg);
++	val &= ~(clk_div_mask(divider->width) << divider->shift);
++	val |= (u32)value << divider->shift;
++	writel(val, divider->reg);
++
++	ret = imx93_clk_composite_wait_ready(hw, divider->reg);
++
++	if (divider->lock)
++		spin_unlock_irqrestore(divider->lock, flags);
++
++	return ret;
++}
++
++static const struct clk_ops imx93_clk_composite_divider_ops = {
++	.recalc_rate = imx93_clk_composite_divider_recalc_rate,
++	.round_rate = imx93_clk_composite_divider_round_rate,
++	.determine_rate = imx93_clk_composite_divider_determine_rate,
++	.set_rate = imx93_clk_composite_divider_set_rate,
++};
++
++static u8 imx93_clk_composite_mux_get_parent(struct clk_hw *hw)
++{
++	return clk_mux_ops.get_parent(hw);
++}
++
++static int imx93_clk_composite_mux_set_parent(struct clk_hw *hw, u8 index)
++{
++	struct clk_mux *mux = to_clk_mux(hw);
++	u32 val = clk_mux_index_to_val(mux->table, mux->flags, index);
++	unsigned long flags = 0;
++	u32 reg;
++	int ret;
++
++	if (mux->lock)
++		spin_lock_irqsave(mux->lock, flags);
++
++	reg = readl(mux->reg);
++	reg &= ~(mux->mask << mux->shift);
++	val = val << mux->shift;
++	reg |= val;
++	writel(reg, mux->reg);
++
++	ret = imx93_clk_composite_wait_ready(hw, mux->reg);
++
++	if (mux->lock)
++		spin_unlock_irqrestore(mux->lock, flags);
++
++	return ret;
++}
++
++static int
++imx93_clk_composite_mux_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	return clk_mux_ops.determine_rate(hw, req);
++}
++
++static const struct clk_ops imx93_clk_composite_mux_ops = {
++	.get_parent = imx93_clk_composite_mux_get_parent,
++	.set_parent = imx93_clk_composite_mux_set_parent,
++	.determine_rate = imx93_clk_composite_mux_determine_rate,
++};
++
+ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *parent_names,
+-					 int num_parents, void __iomem *reg,
++					 int num_parents, void __iomem *reg, u32 domain_id,
+ 					 unsigned long flags)
+ {
+ 	struct clk_hw *hw = ERR_PTR(-ENOMEM), *mux_hw;
+@@ -33,6 +191,7 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 	struct clk_gate *gate = NULL;
+ 	struct clk_mux *mux = NULL;
+ 	bool clk_ro = false;
++	u32 authen;
+ 
+ 	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+ 	if (!mux)
+@@ -55,7 +214,8 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 	div->lock = &imx_ccm_lock;
+ 	div->flags = CLK_DIVIDER_ROUND_CLOSEST;
+ 
+-	if (!(readl(reg + AUTHEN_OFFSET) & TZ_NS_MASK))
++	authen = readl(reg + AUTHEN_OFFSET);
++	if (!(authen & TZ_NS_MASK) || !(authen & BIT(WHITE_LIST_SHIFT + domain_id)))
+ 		clk_ro = true;
+ 
+ 	if (clk_ro) {
+@@ -74,9 +234,10 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
+ 		gate->flags = CLK_GATE_SET_TO_DISABLE;
+ 
+ 		hw = clk_hw_register_composite(NULL, name, parent_names, num_parents,
+-					       mux_hw, &clk_mux_ops, div_hw,
+-					       &clk_divider_ops, gate_hw,
+-					       &clk_gate_ops, flags | CLK_SET_RATE_NO_REPARENT);
++					       mux_hw, &imx93_clk_composite_mux_ops, div_hw,
++					       &imx93_clk_composite_divider_ops, gate_hw,
++					       &imx93_clk_composite_gate_ops,
++					       flags | CLK_SET_RATE_NO_REPARENT);
+ 	}
+ 
+ 	if (IS_ERR(hw))
+diff --git a/drivers/clk/imx/clk-fracn-gppll.c b/drivers/clk/imx/clk-fracn-gppll.c
+index 352b8c542..e1362e5cb 100644
+--- a/drivers/clk/imx/clk-fracn-gppll.c
++++ b/drivers/clk/imx/clk-fracn-gppll.c
+@@ -64,14 +64,14 @@ struct clk_fracn_gppll {
+  * Fout = Fvco / (rdiv * odiv)
+  */
+ static const struct imx_fracn_gppll_rate_table fracn_tbl[] = {
+-	PLL_FRACN_GP(650000000U, 81, 0, 1, 0, 3),
++	PLL_FRACN_GP(650000000U, 162, 50, 100, 0, 6),
+ 	PLL_FRACN_GP(594000000U, 198, 0, 1, 0, 8),
+-	PLL_FRACN_GP(560000000U, 70, 0, 1, 0, 3),
+-	PLL_FRACN_GP(498000000U, 83, 0, 1, 0, 4),
++	PLL_FRACN_GP(560000000U, 140, 0, 1, 0, 6),
++	PLL_FRACN_GP(498000000U, 166, 0, 1, 0, 8),
+ 	PLL_FRACN_GP(484000000U, 121, 0, 1, 0, 6),
+ 	PLL_FRACN_GP(445333333U, 167, 0, 1, 0, 9),
+-	PLL_FRACN_GP(400000000U, 50, 0, 1, 0, 3),
+-	PLL_FRACN_GP(393216000U, 81, 92, 100, 0, 5),
++	PLL_FRACN_GP(400000000U, 200, 0, 1, 0, 12),
++	PLL_FRACN_GP(393216000U, 163, 84, 100, 0, 10),
+ 	PLL_FRACN_GP(300000000U, 150, 0, 1, 0, 12)
+ };
+ 
+@@ -153,8 +153,7 @@ static unsigned long clk_fracn_gppll_recalc_rate(struct clk_hw *hw, unsigned lon
+ 	if (rate)
+ 		return (unsigned long)rate;
+ 
+-	if (!rdiv)
+-		rdiv = rdiv + 1;
++	rdiv = rdiv + 1;
+ 
+ 	switch (odiv) {
+ 	case 0:
+diff --git a/drivers/clk/imx/clk-imx7d.c b/drivers/clk/imx/clk-imx7d.c
+index f9046d06e..13b6702cc 100644
+--- a/drivers/clk/imx/clk-imx7d.c
++++ b/drivers/clk/imx/clk-imx7d.c
+@@ -850,7 +850,6 @@ static void __init imx7d_clocks_init(struct device_node *ccm_node)
+ 	hws[IMX7D_WDOG4_ROOT_CLK] = imx_clk_hw_gate4("wdog4_root_clk", "wdog_post_div", base + 0x49f0, 0);
+ 	hws[IMX7D_KPP_ROOT_CLK] = imx_clk_hw_gate4("kpp_root_clk", "ipg_root_clk", base + 0x4aa0, 0);
+ 	hws[IMX7D_CSI_MCLK_ROOT_CLK] = imx_clk_hw_gate4("csi_mclk_root_clk", "csi_mclk_post_div", base + 0x4490, 0);
+-	hws[IMX7D_AUDIO_MCLK_ROOT_CLK] = imx_clk_hw_gate4("audio_mclk_root_clk", "audio_mclk_post_div", base + 0x4790, 0);
+ 	hws[IMX7D_WRCLK_ROOT_CLK] = imx_clk_hw_gate4("wrclk_root_clk", "wrclk_post_div", base + 0x47a0, 0);
+ 	hws[IMX7D_USB_CTRL_CLK] = imx_clk_hw_gate4("usb_ctrl_clk", "ahb_root_clk", base + 0x4680, 0);
+ 	hws[IMX7D_USB_PHY1_CLK] = imx_clk_hw_gate4("usb_phy1_clk", "pll_usb1_main_clk", base + 0x46a0, 0);
+diff --git a/drivers/clk/imx/clk-imx8mm.c b/drivers/clk/imx/clk-imx8mm.c
+index 5a9f84ae2..7273575dd 100644
+--- a/drivers/clk/imx/clk-imx8mm.c
++++ b/drivers/clk/imx/clk-imx8mm.c
+@@ -679,6 +679,8 @@ static struct platform_driver imx8mm_clk_driver = {
+ 	},
+ };
+ module_platform_driver(imx8mm_clk_driver);
++module_param(mcore_booted, bool, S_IRUGO);
++MODULE_PARM_DESC(mcore_booted, "See Cortex-M core is booted or not");
+ 
+ /*
+  * Debugfs interface for audio PLL K divider change dynamically.
+diff --git a/drivers/clk/imx/clk-imx8mn.c b/drivers/clk/imx/clk-imx8mn.c
+index 7b45de388..d9d288be3 100644
+--- a/drivers/clk/imx/clk-imx8mn.c
++++ b/drivers/clk/imx/clk-imx8mn.c
+@@ -635,6 +635,8 @@ static struct platform_driver imx8mn_clk_driver = {
+ 	},
+ };
+ module_platform_driver(imx8mn_clk_driver);
++module_param(mcore_booted, bool, S_IRUGO);
++MODULE_PARM_DESC(mcore_booted, "See Cortex-M core is booted or not");
+ 
+ MODULE_AUTHOR("Anson Huang <Anson.Huang@nxp.com>");
+ MODULE_DESCRIPTION("NXP i.MX8MN clock driver");
+diff --git a/drivers/clk/imx/clk-imx8mp.c b/drivers/clk/imx/clk-imx8mp.c
+index aa8033419..ae711e304 100644
+--- a/drivers/clk/imx/clk-imx8mp.c
++++ b/drivers/clk/imx/clk-imx8mp.c
+@@ -966,8 +966,8 @@ static int imx8mp_clocks_probe(struct platform_device *pdev)
+ 	hws[IMX8MP_CLK_CAN1_ROOT] = imx_clk_hw_gate2("can1_root_clk", "can1", ccm_base + 0x4350, 0);
+ 	hws[IMX8MP_CLK_CAN2_ROOT] = imx_clk_hw_gate2("can2_root_clk", "can2", ccm_base + 0x4360, 0);
+ 	hws[IMX8MP_CLK_SDMA1_ROOT] = imx_clk_hw_gate4("sdma1_root_clk", "ipg_root", ccm_base + 0x43a0, 0);
+-	hws[IMX8MP_CLK_ENET_QOS_ROOT] = imx_clk_hw_gate4("enet_qos_root_clk", "sim_enet_root_clk", ccm_base + 0x43b0, 0);
+ 	hws[IMX8MP_CLK_SIM_ENET_ROOT] = imx_clk_hw_gate4("sim_enet_root_clk", "enet_axi", ccm_base + 0x4400, 0);
++	hws[IMX8MP_CLK_ENET_QOS_ROOT] = imx_clk_hw_gate4("enet_qos_root_clk", "sim_enet_root_clk", ccm_base + 0x43b0, 0);
+ 	hws[IMX8MP_CLK_GPU2D_ROOT] = imx_clk_hw_gate4("gpu2d_root_clk", "gpu2d_core", ccm_base + 0x4450, 0);
+ 	hws[IMX8MP_CLK_GPU3D_ROOT] = imx_clk_hw_gate4("gpu3d_root_clk", "gpu3d_core", ccm_base + 0x4460, 0);
+ 	hws[IMX8MP_CLK_SNVS_ROOT] = imx_clk_hw_gate2_flags("snvs_root_clk", "ipg_root", ccm_base + 0x4470, 0, CLK_IS_CRITICAL);
+@@ -1048,6 +1048,8 @@ static struct platform_driver imx8mp_clk_driver = {
+ 	},
+ };
+ module_platform_driver(imx8mp_clk_driver);
++module_param(mcore_booted, bool, S_IRUGO);
++MODULE_PARM_DESC(mcore_booted, "See Cortex-M core is booted or not");
+ 
+ MODULE_AUTHOR("Anson Huang <Anson.Huang@nxp.com>");
+ MODULE_DESCRIPTION("NXP i.MX8MP clock driver");
+diff --git a/drivers/clk/imx/clk-imx8mq.c b/drivers/clk/imx/clk-imx8mq.c
+index 55323f416..bf3100eb5 100644
+--- a/drivers/clk/imx/clk-imx8mq.c
++++ b/drivers/clk/imx/clk-imx8mq.c
+@@ -683,6 +683,8 @@ static struct platform_driver imx8mq_clk_driver = {
+ 	},
+ };
+ module_platform_driver(imx8mq_clk_driver);
++module_param(mcore_booted, bool, S_IRUGO);
++MODULE_PARM_DESC(mcore_booted, "See Cortex-M core is booted or not");
+ 
+ MODULE_AUTHOR("Abel Vesa <abel.vesa@nxp.com>");
+ MODULE_DESCRIPTION("NXP i.MX8MQ clock driver");
+diff --git a/drivers/clk/imx/clk-imx8qxp.c b/drivers/clk/imx/clk-imx8qxp.c
+index 73efd7c46..3c4c444ad 100644
+--- a/drivers/clk/imx/clk-imx8qxp.c
++++ b/drivers/clk/imx/clk-imx8qxp.c
+@@ -67,6 +67,22 @@ static const char * const lcd_pxl_sels[] = {
+ 	"lcd_pxl_bypass_div_clk",
+ };
+ 
++static const char *const lvds0_sels[] = {
++	"clk_dummy",
++	"clk_dummy",
++	"clk_dummy",
++	"clk_dummy",
++	"lvds0_bypass_clk",
++};
++
++static const char * const lvds1_sels[] = {
++	"clk_dummy",
++	"clk_dummy",
++	"clk_dummy",
++	"clk_dummy",
++	"lvds1_bypass_clk",
++};
++
+ static const char * const mipi_sels[] = {
+ 	"clk_dummy",
+ 	"clk_dummy",
+@@ -207,9 +223,9 @@ static int imx8qxp_clk_probe(struct platform_device *pdev)
+ 	/* MIPI-LVDS SS */
+ 	imx_clk_scu("mipi0_bypass_clk", IMX_SC_R_MIPI_0, IMX_SC_PM_CLK_BYPASS);
+ 	imx_clk_scu("mipi0_pixel_clk", IMX_SC_R_MIPI_0, IMX_SC_PM_CLK_PER);
+-	imx_clk_scu("mipi0_lvds_pixel_clk", IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_MISC2);
+-	imx_clk_scu("mipi0_lvds_bypass_clk", IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_BYPASS);
+-	imx_clk_scu("mipi0_lvds_phy_clk", IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_MISC3);
++	imx_clk_scu("lvds0_bypass_clk", IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_BYPASS);
++	imx_clk_scu2("lvds0_pixel_clk", lvds0_sels, ARRAY_SIZE(lvds0_sels), IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_MISC2);
++	imx_clk_scu2("lvds0_phy_clk", lvds0_sels, ARRAY_SIZE(lvds0_sels), IMX_SC_R_LVDS_0, IMX_SC_PM_CLK_MISC3);
+ 	imx_clk_scu2("mipi0_dsi_tx_esc_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_0, IMX_SC_PM_CLK_MST_BUS);
+ 	imx_clk_scu2("mipi0_dsi_rx_esc_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_0, IMX_SC_PM_CLK_SLV_BUS);
+ 	imx_clk_scu2("mipi0_dsi_phy_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_0, IMX_SC_PM_CLK_PHY);
+@@ -219,10 +235,9 @@ static int imx8qxp_clk_probe(struct platform_device *pdev)
+ 
+ 	imx_clk_scu("mipi1_bypass_clk", IMX_SC_R_MIPI_1, IMX_SC_PM_CLK_BYPASS);
+ 	imx_clk_scu("mipi1_pixel_clk", IMX_SC_R_MIPI_1, IMX_SC_PM_CLK_PER);
+-	imx_clk_scu("mipi1_lvds_pixel_clk", IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_MISC2);
+-	imx_clk_scu("mipi1_lvds_bypass_clk", IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_BYPASS);
+-	imx_clk_scu("mipi1_lvds_phy_clk", IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_MISC3);
+-
++	imx_clk_scu("lvds1_bypass_clk", IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_BYPASS);
++	imx_clk_scu2("lvds1_pixel_clk", lvds1_sels, ARRAY_SIZE(lvds1_sels), IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_MISC2);
++	imx_clk_scu2("lvds1_phy_clk", lvds1_sels, ARRAY_SIZE(lvds1_sels), IMX_SC_R_LVDS_1, IMX_SC_PM_CLK_MISC3);
+ 	imx_clk_scu2("mipi1_dsi_tx_esc_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_1, IMX_SC_PM_CLK_MST_BUS);
+ 	imx_clk_scu2("mipi1_dsi_rx_esc_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_1, IMX_SC_PM_CLK_SLV_BUS);
+ 	imx_clk_scu2("mipi1_dsi_phy_clk", mipi_sels, ARRAY_SIZE(mipi_sels), IMX_SC_R_MIPI_1, IMX_SC_PM_CLK_PHY);
+diff --git a/drivers/clk/imx/clk-imx8ulp.c b/drivers/clk/imx/clk-imx8ulp.c
+index 909d121ec..3e0641280 100644
+--- a/drivers/clk/imx/clk-imx8ulp.c
++++ b/drivers/clk/imx/clk-imx8ulp.c
+@@ -206,10 +206,10 @@ static int imx8ulp_clk_cgc1_init(struct platform_device *pdev)
+ 
+ 	clks[IMX8ULP_CLK_NIC_SEL] = imx_clk_hw_mux2("nic_sel", base + 0x34, 28, 2, nic_sels, ARRAY_SIZE(nic_sels));
+ 	clks[IMX8ULP_CLK_NIC_AD_DIVPLAT] = imx_clk_hw_divider_flags("nic_ad_divplat", "nic_sel", base + 0x34, 21, 6, CLK_SET_RATE_PARENT | CLK_IS_CRITICAL);
+-	clks[IMX8ULP_CLK_NIC_PER_DIVPLAT] = imx_clk_hw_divider_flags("nic_per_divplat", "nic_ad_divplat", base + 0x34, 14, 6, CLK_SET_RATE_PARENT | CLK_IS_CRITICAL);
+-	clks[IMX8ULP_CLK_XBAR_AD_DIVPLAT] = imx_clk_hw_divider_flags("xbar_ad_divplat", "nic_ad_divplat", base + 0x38, 14, 6, CLK_SET_RATE_PARENT | CLK_IS_CRITICAL);
+-	clks[IMX8ULP_CLK_XBAR_DIVBUS] = imx_clk_hw_divider_flags("xbar_divbus", "nic_ad_divplat", base + 0x38, 7, 6, CLK_SET_RATE_PARENT | CLK_IS_CRITICAL);
+-	clks[IMX8ULP_CLK_XBAR_AD_SLOW] = imx_clk_hw_divider_flags("xbar_ad_slow", "nic_ad_divplat", base + 0x38, 0, 6, CLK_SET_RATE_PARENT | CLK_IS_CRITICAL);
++	clks[IMX8ULP_CLK_NIC_PER_DIVPLAT] = imx_clk_hw_divider_flags("nic_per_divplat", "nic_ad_divplat", base + 0x34, 14, 6, CLK_SET_RATE_PARENT);
++	clks[IMX8ULP_CLK_XBAR_AD_DIVPLAT] = imx_clk_hw_divider_flags("xbar_ad_divplat", "nic_ad_divplat", base + 0x38, 14, 6, CLK_SET_RATE_PARENT);
++	clks[IMX8ULP_CLK_XBAR_DIVBUS] = imx_clk_hw_divider_flags("xbar_divbus", "xbar_ad_divplat", base + 0x38, 7, 6, CLK_SET_RATE_PARENT);
++	clks[IMX8ULP_CLK_XBAR_AD_SLOW] = imx_clk_hw_divider_flags("xbar_ad_slow", "xbar_divbus", base + 0x38, 0, 6, CLK_SET_RATE_PARENT);
+ 
+ 	clks[IMX8ULP_CLK_SOSC_DIV1_GATE] = imx_clk_hw_gate_dis("sosc_div1_gate", "sosc", base + 0x108, 7);
+ 	clks[IMX8ULP_CLK_SOSC_DIV2_GATE] = imx_clk_hw_gate_dis("sosc_div2_gate", "sosc", base + 0x108, 15);
+@@ -265,7 +265,7 @@ static int imx8ulp_clk_cgc2_init(struct platform_device *pdev)
+ 
+ 	clks[IMX8ULP_CLK_DDR_SEL] = imx_clk_hw_mux_flags("ddr_sel", base + 0x40, 28, 3, ddr_sels, ARRAY_SIZE(ddr_sels), CLK_GET_RATE_NOCACHE);
+ 	clks[IMX8ULP_CLK_DDR_DIV] = imx_clk_hw_divider_flags("ddr_div", "ddr_sel", base + 0x40, 21, 6, CLK_IS_CRITICAL | CLK_GET_RATE_NOCACHE);
+-	clks[IMX8ULP_CLK_LPAV_AXI_SEL] = imx_clk_hw_mux_flags("lpav_sel", base + 0x3c, 28, 2, lpav_sels, ARRAY_SIZE(lpav_sels), CLK_SET_PARENT_GATE);
++	clks[IMX8ULP_CLK_LPAV_AXI_SEL] = imx_clk_hw_mux2("lpav_sel", base + 0x3c, 28, 2, lpav_sels, ARRAY_SIZE(lpav_sels));
+ 	clks[IMX8ULP_CLK_LPAV_AXI_DIV] = imx_clk_hw_divider_flags("lpav_axi_div", "lpav_sel", base + 0x3c, 21, 6, CLK_IS_CRITICAL);
+ 	clks[IMX8ULP_CLK_LPAV_AHB_DIV] = imx_clk_hw_divider_flags("lpav_ahb_div", "lpav_axi_div", base + 0x3c, 14, 6, CLK_IS_CRITICAL);
+ 	clks[IMX8ULP_CLK_LPAV_BUS_DIV] = imx_clk_hw_divider_flags("lpav_bus_div", "lpav_axi_div", base + 0x3c, 7, 6, CLK_IS_CRITICAL);
+diff --git a/drivers/clk/imx/clk-imx93.c b/drivers/clk/imx/clk-imx93.c
+index ddd44b1c6..efdadedd5 100644
+--- a/drivers/clk/imx/clk-imx93.c
++++ b/drivers/clk/imx/clk-imx93.c
+@@ -19,6 +19,7 @@
+ static u32 share_count_sai1;
+ static u32 share_count_sai2;
+ static u32 share_count_sai3;
++static u32 share_count_mub;
+ 
+ enum clk_sel {
+ 	LOW_SPEED_IO_SEL,
+@@ -64,13 +65,9 @@ static const struct imx93_clk_root {
+ 	{ IMX93_CLK_M33_SYSTICK,	"m33_systick_root",	0x0480,	LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_FLEXIO1,		"flexio1_root",		0x0500,	LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_FLEXIO2,		"flexio2_root",		0x0580,	LOW_SPEED_IO_SEL, },
+-	{ IMX93_CLK_LPIT1,		"lpit1_root",		0x0600,	LOW_SPEED_IO_SEL, },
+-	{ IMX93_CLK_LPIT2,		"lpit2_root",		0x0680,	LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_LPTMR1,		"lptmr1_root",		0x0700,	LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_LPTMR2,		"lptmr2_root",		0x0780,	LOW_SPEED_IO_SEL, },
+-	{ IMX93_CLK_TPM1,		"tpm1_root",		0x0800,	TPM_SEL, },
+ 	{ IMX93_CLK_TPM2,		"tpm2_root",		0x0880,	TPM_SEL, },
+-	{ IMX93_CLK_TPM3,		"tpm3_root",		0x0900,	TPM_SEL, },
+ 	{ IMX93_CLK_TPM4,		"tpm4_root",		0x0980,	TPM_SEL, },
+ 	{ IMX93_CLK_TPM5,		"tpm5_root",		0x0a00,	TPM_SEL, },
+ 	{ IMX93_CLK_TPM6,		"tpm6_root",		0x0a80,	TPM_SEL, },
+@@ -113,7 +110,7 @@ static const struct imx93_clk_root {
+ 	{ IMX93_CLK_CCM_CKO2,		"ccm_cko2_root",	0x1d00,	CKO2_SEL, },
+ 	{ IMX93_CLK_CCM_CKO3,		"ccm_cko3_root",	0x1d80,	CKO1_SEL, },
+ 	{ IMX93_CLK_CCM_CKO4,		"ccm_cko4_root",	0x1e00,	CKO2_SEL, },
+-	{ IMX93_CLK_HSIO,		"hsio_root",		0x1e80,	LOW_SPEED_IO_SEL, },
++	{ IMX93_CLK_HSIO,		"hsio_root",		0x1e80,	LOW_SPEED_IO_SEL, CLK_IS_CRITICAL},
+ 	{ IMX93_CLK_HSIO_USB_TEST_60M,	"hsio_usb_test_60m_root", 0x1f00, LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_HSIO_ACSCAN_80M,	"hsio_acscan_80m_root",	0x1f80,	LOW_SPEED_IO_SEL, },
+ 	{ IMX93_CLK_HSIO_ACSCAN_480M,	"hsio_acscan_480m_root", 0x2000, MISC_SEL, },
+@@ -151,6 +148,7 @@ static const struct imx93_clk_ccgr {
+ 	char *parent_name;
+ 	u32 off;
+ 	unsigned long flags;
++	u32 *shared_count;
+ } ccgr_array[] = {
+ 	{ IMX93_CLK_A55_GATE,		"a55",		"a55_root",		0x8000, },
+ 	/* M33 critical clk for system run */
+@@ -163,8 +161,10 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_WDOG5_GATE,		"wdog5",	"osc_24m",		0x8400, },
+ 	{ IMX93_CLK_SEMA1_GATE,		"sema1",	"bus_aon_root",		0x8440, },
+ 	{ IMX93_CLK_SEMA2_GATE,		"sema2",	"bus_wakeup_root",	0x8480, },
+-	{ IMX93_CLK_MU_A_GATE,		"mu_a",		"bus_aon_root",		0x84c0, },
+-	{ IMX93_CLK_MU_B_GATE,		"mu_b",		"bus_aon_root",		0x8500, },
++	{ IMX93_CLK_MU1_A_GATE,		"mu1_a",	"bus_aon_root",		0x84c0, CLK_IGNORE_UNUSED },
++	{ IMX93_CLK_MU2_A_GATE,		"mu2_a",	"bus_wakeup_root",	0x84c0, CLK_IGNORE_UNUSED },
++	{ IMX93_CLK_MU1_B_GATE,		"mu1_b",	"bus_aon_root",		0x8500, 0, &share_count_mub },
++	{ IMX93_CLK_MU2_B_GATE,		"mu2_b",	"bus_wakeup_root",	0x8500, 0, &share_count_mub },
+ 	{ IMX93_CLK_EDMA1_GATE,		"edma1",	"m33_root",		0x8540, },
+ 	{ IMX93_CLK_EDMA2_GATE,		"edma2",	"wakeup_axi_root",	0x8580, },
+ 	{ IMX93_CLK_FLEXSPI1_GATE,	"flexspi1",	"flexspi1_root",	0x8640, },
+@@ -174,13 +174,13 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_GPIO4_GATE,		"gpio4",	"bus_wakeup_root",	0x8940, },
+ 	{ IMX93_CLK_FLEXIO1_GATE,	"flexio1",	"flexio1_root",		0x8980, },
+ 	{ IMX93_CLK_FLEXIO2_GATE,	"flexio2",	"flexio2_root",		0x89c0, },
+-	{ IMX93_CLK_LPIT1_GATE,		"lpit1",	"lpit1_root",		0x8a00, },
+-	{ IMX93_CLK_LPIT2_GATE,		"lpit2",	"lpit2_root",		0x8a40, },
++	{ IMX93_CLK_LPIT1_GATE,		"lpit1",	"bus_aon_root",		0x8a00, },
++	{ IMX93_CLK_LPIT2_GATE,		"lpit2",	"bus_wakeup_root",	0x8a40, },
+ 	{ IMX93_CLK_LPTMR1_GATE,	"lptmr1",	"lptmr1_root",		0x8a80, },
+ 	{ IMX93_CLK_LPTMR2_GATE,	"lptmr2",	"lptmr2_root",		0x8ac0, },
+-	{ IMX93_CLK_TPM1_GATE,		"tpm1",		"tpm1_root",		0x8b00, },
++	{ IMX93_CLK_TPM1_GATE,		"tpm1",		"bus_aon_root",		0x8b00, },
+ 	{ IMX93_CLK_TPM2_GATE,		"tpm2",		"tpm2_root",		0x8b40, },
+-	{ IMX93_CLK_TPM3_GATE,		"tpm3",		"tpm3_root",		0x8b80, },
++	{ IMX93_CLK_TPM3_GATE,		"tpm3",		"bus_wakeup_root",	0x8b80, },
+ 	{ IMX93_CLK_TPM4_GATE,		"tpm4",		"tpm4_root",		0x8bc0, },
+ 	{ IMX93_CLK_TPM5_GATE,		"tpm5",		"tpm5_root",		0x8c00, },
+ 	{ IMX93_CLK_TPM6_GATE,		"tpm6",		"tpm6_root",		0x8c40, },
+@@ -215,6 +215,12 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_USDHC1_GATE,	"usdhc1",	"usdhc1_root",		0x9380, },
+ 	{ IMX93_CLK_USDHC2_GATE,	"usdhc2",	"usdhc2_root",		0x93c0, },
+ 	{ IMX93_CLK_USDHC3_GATE,	"usdhc3",	"usdhc3_root",		0x9400, },
++	{ IMX93_CLK_SAI1_GATE,          "sai1",         "sai1_root",            0x9440, 0, &share_count_sai1},
++	{ IMX93_CLK_SAI1_IPG,		"sai1_ipg_clk", "bus_aon_root",		0x9440, 0, &share_count_sai1},
++	{ IMX93_CLK_SAI2_GATE,          "sai2",         "sai2_root",            0x9480, 0, &share_count_sai2},
++	{ IMX93_CLK_SAI2_IPG,		"sai2_ipg_clk", "bus_wakeup_root",	0x9480, 0, &share_count_sai2},
++	{ IMX93_CLK_SAI3_GATE,          "sai3",         "sai3_root",            0x94c0, 0, &share_count_sai3},
++	{ IMX93_CLK_SAI3_IPG,		"sai3_ipg_clk", "bus_wakeup_root",	0x94c0, 0, &share_count_sai3},
+ 	{ IMX93_CLK_MIPI_CSI_GATE,	"mipi_csi",	"media_apb_root",	0x9580, },
+ 	{ IMX93_CLK_MIPI_DSI_GATE,	"mipi_dsi",	"media_apb_root",	0x95c0, },
+ 	{ IMX93_CLK_LVDS_GATE,		"lvds",		"media_ldb_root",	0x9600, },
+@@ -223,17 +229,17 @@ static const struct imx93_clk_ccgr {
+ 	{ IMX93_CLK_ISI_GATE,		"isi",		"media_apb_root",	0x96c0, },
+ 	{ IMX93_CLK_NIC_MEDIA_GATE,	"nic_media",	"media_axi_root",	0x9700, },
+ 	{ IMX93_CLK_USB_CONTROLLER_GATE, "usb_controller", "hsio_root",		0x9a00, },
+-	{ IMX93_CLK_USB_TEST_60M_GATE,	"usb_test_60m",	"hsio_usb_test_60m_root", 0x9a40, },
++	{ IMX93_CLK_USB_TEST_60M_GATE,	"usb_test_60m",	"hsio_usb_test_60m_root", 0x9a40, CLK_IGNORE_UNUSED },
+ 	{ IMX93_CLK_HSIO_TROUT_24M_GATE, "hsio_trout_24m", "osc_24m",		0x9a80, },
+ 	{ IMX93_CLK_PDM_GATE,		"pdm",		"pdm_root",		0x9ac0, },
+ 	{ IMX93_CLK_MQS1_GATE,		"mqs1",		"sai1_root",		0x9b00, },
+ 	{ IMX93_CLK_MQS2_GATE,		"mqs2",		"sai3_root",		0x9b40, },
+ 	{ IMX93_CLK_AUD_XCVR_GATE,	"aud_xcvr",	"audio_xcvr_root",	0x9b80, },
+ 	{ IMX93_CLK_SPDIF_GATE,		"spdif",	"spdif_root",		0x9c00, },
+-	{ IMX93_CLK_HSIO_32K_GATE,	"hsio_32k",	"osc_32k",		0x9dc0, },
+-	{ IMX93_CLK_ENET1_GATE,		"enet1",	"enet_root",		0x9e00, },
+-	{ IMX93_CLK_ENET_QOS_GATE,	"enet_qos",	"wakeup_axi_root",	0x9e40, },
+-	{ IMX93_CLK_SYS_CNT_GATE,	"sys_cnt",	"osc_24m",		0x9e80, },
++	{ IMX93_CLK_HSIO_32K_GATE,	"hsio_32k",	"osc_32k",		0x9dc0, CLK_IGNORE_UNUSED, },
++	{ IMX93_CLK_ENET1_GATE,		"enet1",	"wakeup_axi_root",	0x9e00, CLK_IGNORE_UNUSED, },
++	{ IMX93_CLK_ENET_QOS_GATE,	"enet_qos",	"wakeup_axi_root",	0x9e40, CLK_IGNORE_UNUSED, },
++	{ IMX93_CLK_SYS_CNT_GATE,       "sys_cnt",      "osc_24m",              0x9e80, CLK_IS_CRITICAL },
+ 	{ IMX93_CLK_TSTMR1_GATE,	"tstmr1",	"bus_aon_root",		0x9ec0, },
+ 	{ IMX93_CLK_TSTMR2_GATE,	"tstmr2",	"bus_wakeup_root",	0x9f00, },
+ 	{ IMX93_CLK_TMC_GATE,		"tmc",		"osc_24m",		0x9f40, },
+@@ -323,25 +329,16 @@ static int imx93_clocks_probe(struct platform_device *pdev)
+ 		root = &root_array[i];
+ 		clks[root->clk] = imx93_clk_composite_flags(root->name,
+ 							    parent_names[root->sel],
+-							    4, base + root->off,
++							    4, base + root->off, 3,
+ 							    root->flags);
+ 	}
+ 
+ 	for (i = 0; i < ARRAY_SIZE(ccgr_array); i++) {
+ 		ccgr = &ccgr_array[i];
+-		clks[ccgr->clk] = imx_clk_hw_gate4_flags(ccgr->name,
+-							 ccgr->parent_name,
+-							 base + ccgr->off, 0,
+-							 ccgr->flags);
++		clks[ccgr->clk] = imx93_clk_gate(NULL, ccgr->name, ccgr->parent_name, ccgr->flags,
++						 base + ccgr->off, 0, 1, 1, 3, ccgr->shared_count);
+ 	}
+ 
+-	clks[IMX93_CLK_SAI1_GATE] = imx_clk_hw_gate2_shared2("sai1_mclk", "sai1_root", base + 0x9440, 0, &share_count_sai1);
+-	clks[IMX93_CLK_SAI1_IPG] = imx_clk_hw_gate2_shared2("sai1_ipg_clk", "bus_aon_root", base + 0x9440, 0, &share_count_sai1);
+-	clks[IMX93_CLK_SAI2_GATE] = imx_clk_hw_gate2_shared2("sai2_mclk", "sai2_root", base + 0x9480, 0, &share_count_sai2);
+-	clks[IMX93_CLK_SAI2_IPG] = imx_clk_hw_gate2_shared2("sai2_ipg_clk", "bus_wakeup_root", base + 0x9480, 0, &share_count_sai2);
+-	clks[IMX93_CLK_SAI3_GATE] = imx_clk_hw_gate2_shared2("sai3_mclk", "sai3_root", base + 0x94c0, 0, &share_count_sai3);
+-	clks[IMX93_CLK_SAI3_IPG] = imx_clk_hw_gate2_shared2("sai3_ipg_clk", "bus_wakeup_root", base + 0x94c0, 0, &share_count_sai3);
+-
+ 	imx_check_clk_hws(clks, IMX93_CLK_END);
+ 
+ 	ret = of_clk_add_hw_provider(np, of_clk_hw_onecell_get, clk_hw_data);
+diff --git a/drivers/clk/imx/clk-pllv4.c b/drivers/clk/imx/clk-pllv4.c
+index 6e7e34571..adbaad3e0 100644
+--- a/drivers/clk/imx/clk-pllv4.c
++++ b/drivers/clk/imx/clk-pllv4.c
+@@ -47,7 +47,7 @@ struct clk_pllv4 {
+ };
+ 
+ /* Valid PLL MULT Table */
+-static const int pllv4_mult_table[] = {33, 27, 22, 20, 17, 16};
++static const int pllv4_mult_table[] = {40, 33, 27, 22, 20, 17, 16};
+ 
+ #define to_clk_pllv4(__hw) container_of(__hw, struct clk_pllv4, hw)
+ 
+diff --git a/drivers/clk/imx/clk.c b/drivers/clk/imx/clk.c
+index c7e6020f6..93823c735 100644
+--- a/drivers/clk/imx/clk.c
++++ b/drivers/clk/imx/clk.c
+@@ -18,6 +18,8 @@ DEFINE_SPINLOCK(imx_ccm_lock);
+ EXPORT_SYMBOL_GPL(imx_ccm_lock);
+ 
+ bool uart_from_osc;
++bool mcore_booted;
++EXPORT_SYMBOL_GPL(mcore_booted);
+ 
+ void imx_unregister_clocks(struct clk *clks[], unsigned int count)
+ {
+diff --git a/drivers/clk/imx/clk.h b/drivers/clk/imx/clk.h
+index 69213778a..e28b25c1b 100644
+--- a/drivers/clk/imx/clk.h
++++ b/drivers/clk/imx/clk.h
+@@ -8,6 +8,7 @@
+ #include <soc/imx/src.h>
+ 
+ extern spinlock_t imx_ccm_lock;
++extern bool mcore_booted;
+ 
+ void imx_check_clocks(struct clk *clks[], unsigned int count);
+ void imx_check_clk_hws(struct clk_hw *clks[], unsigned int count);
+@@ -693,11 +694,16 @@ struct clk_hw *imx93_clk_composite_flags(const char *name,
+ 					 const char * const *parent_names,
+ 					 int num_parents,
+ 					 void __iomem *reg,
++					 u32 domain_id,
+ 					 unsigned long flags);
+-#define imx93_clk_composite(name, parent_names, num_parents, reg) \
+-	imx93_clk_composite_flags(name, parent_names, num_parents, reg, \
++#define imx93_clk_composite(name, parent_names, num_parents, reg, domain_id) \
++	imx93_clk_composite_flags(name, parent_names, num_parents, reg, domain_id \
+ 				  CLK_SET_RATE_NO_REPARENT | CLK_OPS_PARENT_ENABLE)
+ 
++struct clk_hw *imx93_clk_gate(struct device *dev, const char *name, const char *parent_name,
++			      unsigned long flags, void __iomem *reg, u32 bit_idx, u32 val,
++			      u32 mask, u32 domain_id, unsigned int *share_count);
++
+ struct clk_hw *imx_clk_hw_divider_gate(const char *name, const char *parent_name,
+ 		unsigned long flags, void __iomem *reg, u8 shift, u8 width,
+ 		u8 clk_divider_flags, const struct clk_div_table *table,
+diff --git a/drivers/clk/s32/Kconfig b/drivers/clk/s32/Kconfig
+new file mode 100644
+index 000000000..c28bdbbfa
+--- /dev/null
++++ b/drivers/clk/s32/Kconfig
+@@ -0,0 +1,4 @@
++config ARCH_S32_CLK
++	bool "Enable S32 CLK Framework"
++	help
++	  Support for the Clock Framework on S32 SoCs.
+diff --git a/drivers/clk/s32/Makefile b/drivers/clk/s32/Makefile
+new file mode 100644
+index 000000000..169b8b590
+--- /dev/null
++++ b/drivers/clk/s32/Makefile
+@@ -0,0 +1,2 @@
++obj-$(CONFIG_ARCH_S32_CLK) += clk-core.o
++obj-$(CONFIG_ARCH_S32_CLK) += s32v234/
+diff --git a/drivers/clk/s32/clk-core.c b/drivers/clk/s32/clk-core.c
+new file mode 100644
+index 000000000..a8cca66f7
+--- /dev/null
++++ b/drivers/clk/s32/clk-core.c
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright 2015 Freescale Semiconductor, Inc.
++ * Copyright 2017 NXP
++ */
++
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/of.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include "clk.h"
++
++void __init s32_check_clocks(struct clk *clks[], unsigned int count)
++{
++	unsigned int i;
++
++	for (i = 0; i < count; i++)
++		if (IS_ERR(clks[i]))
++			pr_err("S32 clk %u: register failed with %ld\n",
++			       i, PTR_ERR(clks[i]));
++}
++
++static struct clk * __init s32_obtain_fixed_clock_from_dt(const char *name)
++{
++	struct of_phandle_args phandle;
++	struct clk *clk = ERR_PTR(-ENODEV);
++	char *path;
++
++	path = kasprintf(GFP_KERNEL, "/clocks/%s", name);
++	if (!path)
++		return ERR_PTR(-ENOMEM);
++
++	phandle.np = of_find_node_by_path(path);
++	kfree(path);
++
++	if (phandle.np) {
++		clk = of_clk_get_from_provider(&phandle);
++		of_node_put(phandle.np);
++	}
++	return clk;
++}
++
++struct clk * __init s32_obtain_fixed_clock(
++			const char *name, unsigned long rate)
++{
++	struct clk *clk;
++
++	clk = s32_obtain_fixed_clock_from_dt(name);
++	if (IS_ERR(clk))
++		clk = s32_clk_fixed(name, rate);
++	return clk;
++}
+diff --git a/drivers/clk/s32/clk.h b/drivers/clk/s32/clk.h
+new file mode 100644
+index 000000000..831006411
+--- /dev/null
++++ b/drivers/clk/s32/clk.h
+@@ -0,0 +1,55 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2018 NXP
++ */
++
++#ifndef __MACH_S32_CLK_H
++#define __MACH_S32_CLK_H
++
++#include <linux/spinlock.h>
++#include <linux/clk-provider.h>
++
++#define PNAME(x) \
++	static const char *x[] __initconst
++
++void s32_check_clocks(struct clk *clks[], unsigned int count);
++
++struct clk *s32_obtain_fixed_clock(
++			const char *name, unsigned long rate);
++
++static inline struct clk *s32_clk_fixed(const char *name, unsigned long rate)
++{
++	return clk_register_fixed_rate(NULL, name, NULL, 0, rate);
++}
++
++static inline struct clk *s32_clk_divider(const char *name, const char *parent,
++					  void __iomem *reg, u8 shift, u8 width,
++					  spinlock_t *lock)
++{
++	struct clk *tmp_clk = clk_register_divider(NULL, name, parent,
++			      CLK_SET_RATE_PARENT,
++			      reg, shift, width, 0, lock);
++
++	return tmp_clk;
++}
++
++static inline struct clk *s32_clk_mux(const char *name, void __iomem *reg,
++				      u8 shift, u8 width, const char **parents,
++				      u8 num_parents, spinlock_t *lock)
++{
++	return clk_register_mux(NULL, name, parents, num_parents,
++			CLK_SET_RATE_NO_REPARENT, reg, shift,
++			width, 0, lock);
++}
++
++static inline struct clk *s32_clk_fixed_factor(const char *name,
++					       const char *parent,
++					       unsigned int mult,
++					       unsigned int div)
++{
++	return clk_register_fixed_factor(NULL, name, parent,
++			CLK_SET_RATE_PARENT, mult, div);
++}
++
++#endif
+diff --git a/drivers/clk/s32/s32v234/Makefile b/drivers/clk/s32/s32v234/Makefile
+new file mode 100644
+index 000000000..7ddf9f4b5
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_ARCH_S32_CLK) += clk.o clk-plldig.o clk-dfs.o
+diff --git a/drivers/clk/s32/s32v234/clk-dfs.c b/drivers/clk/s32/s32v234/clk-dfs.c
+new file mode 100644
+index 000000000..2bd569e13
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/clk-dfs.c
+@@ -0,0 +1,236 @@
++/*
++ * Copyright 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2018 NXP
++ *
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/io.h>
++#include <linux/slab.h>
++#include <linux/err.h>
++#include "clk.h"
++
++/**
++ * struct clk_dfs - S32 DFS clock
++ * @clk_hw:	clock source
++ * @reg:	DFS register address
++ * @idx:	the index of DFS encoded in the register
++ *
++ * DFS clock found on S32 series. Each register for DFS has 4 clk_dfs
++ * data encoded, and member idx is used to specify the one.
++ * Only ARMPLL(3 DFS), ENETPLL(4 DFS) and DDRPLL(3 DFS) has DFS outputs.
++ */
++struct clk_dfs {
++	struct clk_hw	hw;
++	void __iomem	*reg;
++	enum s32v234_plldig_type plltype;
++	u8		idx;
++	u32		mfn;
++};
++
++#define to_clk_dfs(_hw) container_of(_hw, struct clk_dfs, hw)
++
++static int get_pllx_dfs_nr(enum s32v234_plldig_type plltype)
++{
++	switch (plltype) {
++	case S32_PLLDIG_ARM:
++		return ARMPLL_DFS_NR;
++	case S32_PLLDIG_ENET:
++		return ENETPLL_DFS_NR;
++	case S32_PLLDIG_DDR:
++		return DDRPLL_DFS_NR;
++	case S32_PLLDIG_PERIPH:
++	case S32_PLLDIG_VIDEO:
++		pr_warn("Current selected PLL has no DFS\n");
++		break;
++	}
++
++	return -EINVAL;
++}
++static unsigned long get_pllx_dfsy_max_rate(enum s32v234_plldig_type plltype,
++					    int dfsno)
++{
++	switch (plltype) {
++	case S32_PLLDIG_ARM:
++		switch (dfsno) {
++		case 0:
++			return ARMPLL_DFS0_MAX_RATE;
++		case 1:
++			return ARMPLL_DFS1_MAX_RATE;
++		case 2:
++			return ARMPLL_DFS2_MAX_RATE;
++		}
++		break;
++	case S32_PLLDIG_ENET:
++		switch (dfsno) {
++		case 0:
++			return ENETPLL_DFS0_MAX_RATE;
++		case 1:
++			return ENETPLL_DFS1_MAX_RATE;
++		case 2:
++			return ENETPLL_DFS2_MAX_RATE;
++		case 3:
++			return ENETPLL_DFS3_MAX_RATE;
++		}
++		break;
++	case S32_PLLDIG_DDR:
++		switch (dfsno) {
++		case 0:
++			return DDRPLL_DFS0_MAX_RATE;
++		case 1:
++			return DDRPLL_DFS1_MAX_RATE;
++		case 2:
++			return DDRPLL_DFS2_MAX_RATE;
++		}
++		break;
++	case S32_PLLDIG_PERIPH:
++	case S32_PLLDIG_VIDEO:
++		pr_warn("Current selected PLL has no DFS.");
++		break;
++	default:
++		pr_warn("Unsupported PLL. Use %d or %d\n",
++			S32_PLLDIG_ARM,	S32_PLLDIG_VIDEO);
++		break;
++	}
++
++	return -EINVAL;
++}
++static int clk_dfs_enable(struct clk_hw *hw)
++{
++	/*
++	 * TODO: When SOC is available, this function
++	 * should be tested and implemented for DFS
++	 * if it is possible
++	 */
++	return 0;
++}
++
++static void clk_dfs_disable(struct clk_hw *hw)
++{
++	/*
++	 * TODO: When SOC is available, this function
++	 * should be tested and implemented for DFS
++	 * if it is possible
++	 */
++}
++
++static unsigned long clk_dfs_recalc_rate(struct clk_hw *hw,
++					 unsigned long parent_rate)
++{
++	struct clk_dfs *dfs = to_clk_dfs(hw);
++	u32 mfn, mfi, rate;
++	u32 dvport = readl_relaxed(DFS_DVPORTn(dfs->reg, dfs->idx));
++
++	mfn = (dvport & DFS_DVPORTn_MFN_MASK) >> DFS_DVPORTn_MFN_OFFSET;
++	mfi = (dvport & DFS_DVPORTn_MFI_MASK) >> DFS_DVPORTn_MFI_OFFSET;
++	mfi <<= 8;
++	rate = parent_rate / (mfi + mfn);
++	rate <<= 8;
++
++	return rate;
++}
++
++static long clk_dfs_round_rate(struct clk_hw *hw, unsigned long rate,
++			       unsigned long *prate)
++{
++	struct clk_dfs *dfs = to_clk_dfs(hw);
++	unsigned long max_allowed_rate;
++
++	max_allowed_rate = get_pllx_dfsy_max_rate(dfs->plltype, dfs->idx);
++
++	if (rate > max_allowed_rate)
++		rate = max_allowed_rate;
++
++	return rate;
++}
++
++static int clk_dfs_set_rate(struct clk_hw *hw, unsigned long rate,
++			    unsigned long parent_rate)
++{
++	struct clk_dfs *dfs = to_clk_dfs(hw);
++	u32 mfi;
++	u32 portreset = readl_relaxed(DFS_PORTRESET(dfs->reg));
++
++	writel_relaxed(DFS_CTRL_DLL_RESET, DFS_CTRL(dfs->reg));
++	writel_relaxed(portreset | ~DFS_PORTRESET_PORTRESET_SET(dfs->idx),
++			DFS_PORTRESET(dfs->reg));
++
++	mfi = parent_rate/rate;
++	writel_relaxed(DFS_DVPORTn_MFI_SET(mfi) |
++		       DFS_DVPORTn_MFN_SET(dfs->mfn),
++		       DFS_DVPORTn(dfs->reg, dfs->idx));
++
++	writel_relaxed(~DFS_CTRL_DLL_RESET, DFS_CTRL(dfs->reg));
++
++	while (readl_relaxed(DFS_PORTSR(dfs->reg)) & (1 << (dfs->idx)))
++		;
++
++	return 0;
++}
++
++static int clk_dfs_is_enabled(struct clk_hw *hw)
++{
++	struct clk_dfs *dfs = to_clk_dfs(hw);
++
++	/* Check if current DFS output port is locked */
++	if (readl_relaxed(DFS_PORTSR(dfs->reg)) & (1 << (dfs->idx)))
++		return 0;
++
++	return 1;
++}
++
++static const struct clk_ops clk_dfs_ops = {
++	.enable		= clk_dfs_enable,
++	.disable	= clk_dfs_disable,
++	.recalc_rate	= clk_dfs_recalc_rate,
++	.round_rate	= clk_dfs_round_rate,
++	.set_rate	= clk_dfs_set_rate,
++	.is_enabled	= clk_dfs_is_enabled,
++};
++
++struct clk *s32v234_clk_dfs(enum s32v234_plldig_type type, const char *name,
++			const char *parent_name, void __iomem *reg,
++			u8 idx, u32 mfn)
++{
++	struct clk_dfs *dfs;
++	struct clk *clk;
++	struct clk_init_data init;
++
++	/* PERIPH and VIDEO PLL do not have DFS */
++	if (type == S32_PLLDIG_PERIPH || type == S32_PLLDIG_VIDEO)
++		return ERR_PTR(-EINVAL);
++
++	/* check if DFS index is valid for current pll */
++	if (idx >= get_pllx_dfs_nr(type))
++		return ERR_PTR(-EINVAL);
++
++	dfs = kzalloc(sizeof(*dfs), GFP_KERNEL);
++	if (!dfs)
++		return ERR_PTR(-ENOMEM);
++
++	dfs->reg = reg;
++	dfs->idx = idx;
++	dfs->mfn = mfn;
++	dfs->plltype = type;
++
++	init.name = name;
++	init.ops = &clk_dfs_ops;
++	init.flags = 0;
++	init.parent_names = &parent_name;
++	init.num_parents = 1;
++
++	dfs->hw.init = &init;
++
++	clk = clk_register(NULL, &dfs->hw);
++	if (IS_ERR(clk))
++		kfree(dfs);
++
++	return clk;
++}
+diff --git a/drivers/clk/s32/s32v234/clk-plldig.c b/drivers/clk/s32/s32v234/clk-plldig.c
+new file mode 100644
+index 000000000..6ed23974e
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/clk-plldig.c
+@@ -0,0 +1,240 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2018 NXP
++ */
++
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/slab.h>
++#include <linux/jiffies.h>
++#include <linux/err.h>
++#include "clk.h"
++
++/*
++ * struct clk_plldig - S32 PLLDIG clock
++ * @clk_hw:	   clock source
++ * @base:	   base address of PLL registers
++ * @plldv_mfd:	   multiplication loop factor divider
++ * @plldv_rfdphi:  PHI reduced frequency divider
++ * @plldv_rfdphi1: PHI reduced frequency divider
++ *
++ * PLLDIG clock version 1, found on S32 series.
++ */
++struct clk_plldig {
++	struct clk_hw	hw;
++	void __iomem	*base;
++	enum s32v234_plldig_type type;
++	u32		plldv_mfd;
++	u32		pllfd_mfn;
++	u32		plldv_rfdphi;
++	u32		plldv_rfdphi1;
++};
++
++#define to_clk_plldig(_hw) container_of(_hw, struct clk_plldig, hw)
++
++static unsigned long get_pllx_max_vco_rate(enum s32v234_plldig_type plltype)
++{
++	switch (plltype) {
++	case S32_PLLDIG_PERIPH:
++		return PERIPHPLL_MAX_VCO_RATE;
++	default:
++		pr_warn("Unsupported PLL.\n");
++			return -EINVAL;
++	}
++}
++
++static unsigned long get_pllx_phiy_max_rate(enum s32v234_plldig_type plltype,
++					    unsigned int phino)
++{
++	switch (plltype) {
++	case S32_PLLDIG_PERIPH:
++		switch (phino) {
++		case 0:
++			return PERIPHPLL_MAX_PHI0_MAX_RATE;
++		case 1:
++			return PERIPHPLL_MAX_PHI1_MAX_RATE;
++		default:
++			break;
++		}
++		break;
++	default:
++		pr_warn("Unsupported PLL.\n");
++		break;
++	}
++	return -EINVAL;
++}
++
++static int clk_plldig_prepare(struct clk_hw *hw)
++{
++	return 0;
++}
++
++static void clk_plldig_unprepare(struct clk_hw *hw)
++{
++}
++
++static unsigned long clk_plldig_recalc_rate(struct clk_hw *hw,
++					    unsigned long parent_rate)
++{
++	struct clk_plldig *pll = to_clk_plldig(hw);
++	u32 plldv = readl_relaxed(PLLDIG_PLLDV(pll->base));
++	u32 pllfd = readl_relaxed(PLLDIG_PLLFD(pll->base));
++	u32 prediv, mfd, mfn, vco;
++
++	prediv = (plldv & PLLDIG_PLLDV_PREDIV_MASK)
++			 >> PLLDIG_PLLDV_PREDIV_OFFSET;
++	mfd = (plldv & PLLDIG_PLLDV_MFD_MASK);
++
++	mfn = (pllfd & PLLDIG_PLLFD_MFN_MASK);
++
++	if (prediv == 0)
++		prediv = 1;
++
++	/*
++	 * This formula is from platform reference manual
++	 * (Rev. 1, 6/2015), PLLDIG chapter.
++	 */
++	vco = (parent_rate / prediv) * (mfd + mfn / 20480);
++
++	return vco;
++}
++
++static long clk_plldig_round_rate(struct clk_hw *hw, unsigned long rate,
++				  unsigned long *prate)
++{
++	struct clk_plldig *pll = to_clk_plldig(hw);
++	unsigned long max_allowed_rate = get_pllx_max_vco_rate(pll->type);
++
++	if (rate > max_allowed_rate)
++		rate = max_allowed_rate;
++	else if (rate < MIN_VCO_RATE)
++		rate = MIN_VCO_RATE;
++
++	return rate;
++}
++
++static int clk_plldig_set_rate(struct clk_hw *hw, unsigned long rate,
++			       unsigned long parent_rate)
++{
++	struct clk_plldig *pll = to_clk_plldig(hw);
++	u32 pllfd, prediv;
++
++	unsigned long max_allowed_rate = get_pllx_max_vco_rate(pll->type);
++	unsigned long phi0_max_rate =  get_pllx_phiy_max_rate(pll->type, 0);
++	unsigned long phi1_max_rate =  get_pllx_phiy_max_rate(pll->type, 1);
++
++	if (rate < MIN_VCO_RATE || rate > max_allowed_rate)
++		return -EINVAL;
++
++	if (((rate / pll->plldv_rfdphi) > phi0_max_rate) ||
++	    ((rate / pll->plldv_rfdphi) > phi1_max_rate))
++		return -EINVAL;
++
++	pllfd = readl_relaxed(PLLDIG_PLLFD(pll->base));
++	prediv = (parent_rate / rate) *
++		 (pll->plldv_mfd + pll->pllfd_mfn / 20480);
++
++	writel_relaxed(PLLDIG_PLLDV_RFDPHI1_SET(pll->plldv_rfdphi1) |
++			PLLDIG_PLLDV_RFDPHI_SET(pll->plldv_rfdphi) |
++			PLLDIG_PLLDV_PREDIV_SET(prediv) |
++			PLLDIG_PLLDV_MFD_SET(pll->plldv_mfd),
++			PLLDIG_PLLDV(pll->base));
++
++	writel_relaxed(pllfd | PLLDIG_PLLFD_MFN_SET(pll->pllfd_mfn),
++		       PLLDIG_PLLFD(pll->base));
++
++	/*
++	 * To be implemented the wait_lock or an equivalent state
++	 * return clk_plldig_wait_lock(pll);
++	 */
++	return 0;
++}
++
++static const struct clk_ops clk_plldig_ops = {
++	.prepare	= clk_plldig_prepare,
++	.unprepare	= clk_plldig_unprepare,
++	.recalc_rate	= clk_plldig_recalc_rate,
++	.round_rate	= clk_plldig_round_rate,
++	.set_rate	= clk_plldig_set_rate,
++};
++
++struct clk *s32v234_clk_plldig_phi(enum s32v234_plldig_type type,
++				   const char *name, const char *parent,
++				   void __iomem *base, u32 phi)
++{
++	u32 plldv, rfd_phi;
++
++	if (!base)
++		return ERR_PTR(-ENOMEM);
++
++	plldv = readl_relaxed(PLLDIG_PLLDV(base));
++
++	switch (phi) {
++	/* PHI0 */
++	case 0:
++		rfd_phi = (plldv & PLLDIG_PLLDV_RFDPHI_MASK)
++			  >> PLLDIG_PLLDV_RFDPHI_OFFSET;
++		break;
++	/* PHI1 */
++	case 1:
++		rfd_phi = (plldv & PLLDIG_PLLDV_RFDPHI1_MASK)
++			  >> PLLDIG_PLLDV_RFDPHI1_OFFSET;
++
++		if (rfd_phi == 0)
++			rfd_phi = 1;
++
++		break;
++	default:
++		return ERR_PTR(-EINVAL);
++	}
++
++	return clk_register_fixed_factor(NULL, name, parent,
++			CLK_SET_RATE_PARENT, 1, rfd_phi);
++}
++
++struct clk *s32v234_clk_plldig(enum s32v234_plldig_type type, const char *name,
++			       const char *parent_name, void __iomem *base,
++			       u32 plldv_mfd, u32 pllfd_mfn,
++			       u32 plldv_rfdphi, u32 plldv_rfdphi1)
++{
++	struct clk_plldig *pll;
++	const struct clk_ops *ops;
++	struct clk *clk;
++	struct clk_init_data init;
++
++	if (plldv_rfdphi > PLLDIG_PLLDV_RFDPHI_MAXVALUE)
++		return ERR_PTR(-EINVAL);
++
++	if (plldv_rfdphi1 > PLLDIG_PLLDV_RFDPHI1_MAXVALUE)
++		return ERR_PTR(-EINVAL);
++
++	pll = kzalloc(sizeof(*pll), GFP_KERNEL);
++	if (!pll)
++		return ERR_PTR(-ENOMEM);
++
++	ops = &clk_plldig_ops;
++
++	pll->base = base;
++	pll->type = type;
++	pll->plldv_mfd = plldv_mfd;
++	pll->pllfd_mfn = pllfd_mfn;
++	pll->plldv_rfdphi = plldv_rfdphi;
++	pll->plldv_rfdphi1 = plldv_rfdphi1;
++
++	init.name = name;
++	init.ops = ops;
++	init.flags = 0;
++	init.parent_names = &parent_name;
++	init.num_parents = 1;
++
++	pll->hw.init = &init;
++
++	clk = clk_register(NULL, &pll->hw);
++	if (IS_ERR(clk))
++		kfree(pll);
++
++	return clk;
++}
+diff --git a/drivers/clk/s32/s32v234/clk.c b/drivers/clk/s32/s32v234/clk.c
+new file mode 100644
+index 000000000..ad88c6b45
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/clk.c
+@@ -0,0 +1,299 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2018 NXP
++ */
++
++#include <linux/of_address.h>
++#include <linux/clk.h>
++#include <dt-bindings/clock/s32v234-clock.h>
++
++#include "clk.h"
++
++static void __iomem *mc_cgm0_base;
++static void __iomem *mc_cgm1_base;
++static void __iomem *mc_cgm2_base;
++static void __iomem *mc_cgm3_base;
++static void __iomem *mc_me_base;
++static void __iomem *src_base;
++
++DEFINE_SPINLOCK(s32v234_lock);
++
++/* sources for multiplexer clocks, this is used multiple times */
++PNAME(osc_sels) = {"firc", "fxosc", };
++
++PNAME(sys_sels) = {"firc", "fxosc", "armpll_dfs0", };
++
++PNAME(can_sels) = {"firc", "fxosc", "dummy",
++		   "periphpll_phi0_div5", };
++
++PNAME(lin_sels) = {"firc", "fxosc", "dummy",
++		   "periphpll_phi0_div3", "dummy", "dummy",
++		   "dummy", "dummy", "sys6",};
++
++PNAME(sdhc_sels) = {"firc", "fxosc", "dummy", "dummy",
++		    "enetpll_dfs3",};
++
++PNAME(enet_sels) = {"firc", "fxosc", "dummy",
++		    "dummy", "enetpll_phi0",};
++
++PNAME(enet_time_sels) = {"firc", "fxosc", "dummy",
++			 "dummy", "enetpll_phi0",};
++
++static struct clk *clk[S32V234_CLK_END];
++static struct clk_onecell_data clk_data;
++
++static void __init s32v234_clocks_init(struct device_node *mc_cgm0_node)
++{
++	struct device_node *np;
++
++	clk[S32V234_CLK_DUMMY] = s32_clk_fixed("dummy", 0);
++	clk[S32V234_CLK_FXOSC] = s32_obtain_fixed_clock("fxosc", 0);
++	clk[S32V234_CLK_FIRC] = s32_obtain_fixed_clock("firc", 0);
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,s32v234-mc_me");
++	mc_me_base = of_iomap(np, 0);
++	if (WARN_ON(!mc_me_base))
++		return;
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,s32v234-src");
++	src_base = of_iomap(np, 0);
++	if (WARN_ON(!src_base))
++		return;
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,s32v234-mc_cgm1");
++	mc_cgm1_base = of_iomap(np, 0);
++	if (WARN_ON(!mc_cgm1_base))
++		return;
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,s32v234-mc_cgm2");
++	mc_cgm2_base = of_iomap(np, 0);
++	if (WARN_ON(!mc_cgm2_base))
++		return;
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,s32v234-mc_cgm3");
++	mc_cgm3_base = of_iomap(np, 0);
++	if (WARN_ON(!mc_cgm3_base))
++		return;
++
++	np = mc_cgm0_node;
++	mc_cgm0_base = of_iomap(np, 0);
++	if (WARN_ON(!mc_cgm0_base))
++		return;
++
++	enable_cpumodes_onperipheralconfig(mc_me_base, MC_ME_RUN_PCn_DRUN |
++					    MC_ME_RUN_PCn_RUN0 |
++					    MC_ME_RUN_PCn_RUN1 |
++					    MC_ME_RUN_PCn_RUN2 |
++					    MC_ME_RUN_PCn_RUN3,
++					    0);
++
++	/* turn on XOSC and FIRC */
++	enable_clocks_sources(MC_ME_MODE_MC_MVRON, MC_ME_MODE_MC_XOSCON |
++			      MC_ME_MODE_MC_FIRCON,
++			      MC_ME_RUNn_MC(mc_me_base, 0));
++
++	/* transition the core to RUN0 mode */
++	entry_to_target_mode(mc_me_base, MC_ME_MCTL_RUN0);
++
++	clk[S32V234_CLK_ARMPLL_SRC_SEL] = s32_clk_mux("armpll_sel",
++		SRC_GPR1, SRC_GPR1_ARMPLL_SRC_SEL_OFFSET,
++		SRC_GPR1_XPLL_SRC_SEL_SIZE,
++		osc_sels, ARRAY_SIZE(osc_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_PERIPHPLL_SRC_SEL] = s32_clk_mux("periphpll_sel",
++		SRC_GPR1, SRC_GPR1_PERIPHPLL_SRC_SEL_OFFSET,
++		SRC_GPR1_XPLL_SRC_SEL_SIZE,
++		osc_sels, ARRAY_SIZE(osc_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_ENETPLL_SRC_SEL] = s32_clk_mux("enetpll_sel",
++		SRC_GPR1, SRC_GPR1_ENETPLL_SRC_SEL_OFFSET,
++		SRC_GPR1_XPLL_SRC_SEL_SIZE,
++		osc_sels, ARRAY_SIZE(osc_sels), &s32v234_lock);
++
++	/* ARM_PLL */
++	clk[S32V234_CLK_ARMPLL_VCO] = s32v234_clk_plldig(S32_PLLDIG_ARM,
++		"armpll_vco", "armpll_sel", ARMPLL_PLLDIG(mc_cgm0_base),
++		ARMPLL_PLLDIG_PLLDV_MFD, ARMPLL_PLLDIG_PLLDV_MFN,
++		ARMPLL_PLLDIG_PLLDV_RFDPHI0, ARMPLL_PLLDIG_PLLDV_RFDPHI1);
++
++	clk[S32V234_CLK_ARMPLL_PHI0] = s32v234_clk_plldig_phi(S32_PLLDIG_ARM,
++		"armpll_phi0", "armpll_vco",
++		ARMPLL_PLLDIG(mc_cgm0_base), 0);
++
++	clk[S32V234_CLK_ARMPLL_PHI1] = s32v234_clk_plldig_phi(S32_PLLDIG_ARM,
++		"armpll_phi1", "armpll_vco",
++		ARMPLL_PLLDIG(mc_cgm0_base), 1);
++
++	clk[S32V234_CLK_ARMPLL_DFS0] = s32v234_clk_dfs(S32_PLLDIG_ARM,
++		 "armpll_dfs0", "armpll_phi1",
++		 ARMPLL_PLLDIG_DFS(mc_cgm0_base), 0,
++		 ARMPLL_PLLDIG_DFS0_MFN);
++
++	clk[S32V234_CLK_ARMPLL_DFS1] = s32v234_clk_dfs(S32_PLLDIG_ARM,
++		 "armpll_dfs1", "armpll_phi1",
++		 ARMPLL_PLLDIG_DFS(mc_cgm0_base), 1,
++		 ARMPLL_PLLDIG_DFS1_MFN);
++
++	clk[S32V234_CLK_ARMPLL_DFS2] = s32v234_clk_dfs(S32_PLLDIG_ARM,
++		 "armpll_dfs2", "armpll_phi1",
++		 ARMPLL_PLLDIG_DFS(mc_cgm0_base), 2,
++		 ARMPLL_PLLDIG_DFS2_MFN);
++
++	clk[S32V234_CLK_SYS_SEL] = s32_clk_mux("sys_sel",
++		MC_ME_RUNn_MC(mc_me_base, 0),
++		MC_ME_MODE_MC_SYSCLK_OFFSET,
++		MC_ME_MODE_MC_SYSCLK_SIZE,
++		sys_sels, ARRAY_SIZE(sys_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_SYS3] = s32_clk_divider("sys3", "sys_sel",
++		CGM_SC_DCn(mc_cgm0_base, 0), MC_CGM_SC_DCn_PREDIV_OFFSET,
++		MC_CGM_SC_DCn_PREDIV_SIZE, &s32v234_lock);
++
++	clk[S32V234_CLK_SYS6] = s32_clk_divider("sys6", "sys_sel",
++		CGM_SC_DCn(mc_cgm0_base, 1), MC_CGM_SC_DCn_PREDIV_OFFSET,
++		MC_CGM_SC_DCn_PREDIV_SIZE, &s32v234_lock);
++
++	clk[S32V234_CLK_SYS6_DIV2] = s32_clk_divider("sys6_div2", "sys_sel",
++		CGM_SC_DCn(mc_cgm0_base, 2), MC_CGM_SC_DCn_PREDIV_OFFSET,
++		MC_CGM_SC_DCn_PREDIV_SIZE, &s32v234_lock);
++
++	/* PERIPH_PLL */
++	clk[S32V234_CLK_PERIPHPLL_VCO] = s32v234_clk_plldig(S32_PLLDIG_PERIPH,
++		"periphpll_vco", "periphpll_sel",
++		PERIPHPLL_PLLDIG(mc_cgm0_base),
++		PERIPHPLL_PLLDIG_PLLDV_MFD, PERIPHPLL_PLLDIG_PLLDV_MFN,
++		PERIPHPLL_PLLDIG_PLLDV_RFDPHI0,
++		PERIPHPLL_PLLDIG_PLLDV_RFDPHI1);
++
++	clk[S32V234_CLK_PERIPHPLL_PHI0] =
++		s32v234_clk_plldig_phi(S32_PLLDIG_PERIPH,
++		"periphpll_phi0", "periphpll_vco",
++		PERIPHPLL_PLLDIG(mc_cgm0_base), 0);
++
++	clk[S32V234_CLK_PERIPHPLL_PHI1] =
++		s32v234_clk_plldig_phi(S32_PLLDIG_PERIPH,
++		"periphpll_phi1", "periphpll_vco",
++		PERIPHPLL_PLLDIG(mc_cgm0_base), 1);
++
++	clk[S32V234_CLK_PERIPHPLL_PHI0_DIV3] = s32_clk_fixed_factor(
++		"periphpll_phi0_div3", "periphpll_phi0", 1, 3);
++
++	clk[S32V234_CLK_PERIPHPLL_PHI0_DIV5] = s32_clk_fixed_factor(
++		"periphpll_phi0_div5", "periphpll_phi0", 1, 5);
++
++	clk[S32V234_CLK_CAN_SEL] = s32_clk_mux("can_sel",
++		CGM_ACn_SC(mc_cgm0_base, 6),
++		MC_CGM_ACn_SEL_OFFSET,
++		MC_CGM_ACn_SEL_SIZE,
++		can_sels, ARRAY_SIZE(can_sels), &s32v234_lock);
++
++	/* CAN Clock */
++	clk[S32V234_CLK_CAN] = s32_clk_divider("can", "can_sel",
++		CGM_ACn_DCm(mc_cgm0_base, 6, 0),
++		MC_CGM_ACn_DCm_PREDIV_OFFSET,
++		MC_CGM_ACn_DCm_PREDIV_SIZE, &s32v234_lock);
++
++	/* Lin Clock */
++	clk[S32V234_CLK_LIN_SEL] = s32_clk_mux("lin_sel",
++		CGM_ACn_SC(mc_cgm0_base, 3),
++		MC_CGM_ACn_SEL_OFFSET,
++		MC_CGM_ACn_SEL_SIZE,
++		lin_sels, ARRAY_SIZE(lin_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_LIN] = s32_clk_divider("lin", "lin_sel",
++		CGM_ACn_DCm(mc_cgm0_base, 3, 0),
++		MC_CGM_ACn_DCm_PREDIV_OFFSET,
++		MC_CGM_ACn_DCm_PREDIV_SIZE, &s32v234_lock);
++
++	clk[S32V234_CLK_LIN_IPG] = s32_clk_fixed_factor("lin_ipg",
++		"lin", 1, 2);
++
++	/* enable PERIPHPLL */
++	enable_clocks_sources(0, MC_ME_MODE_MC_PERIPHPLL,
++			      MC_ME_RUNn_MC(mc_me_base, 0));
++
++	/* ENET_PLL */
++	clk[S32V234_CLK_ENETPLL_VCO] = s32v234_clk_plldig(S32_PLLDIG_ENET,
++		"enetpll_vco", "enetpll_sel", ENETPLL_PLLDIG(mc_cgm0_base),
++		ENETPLL_PLLDIG_PLLDV_MFD, ENETPLL_PLLDIG_PLLDV_MFN,
++		ENETPLL_PLLDIG_PLLDV_RFDPHI0, ENETPLL_PLLDIG_PLLDV_RFDPHI1);
++
++	clk[S32V234_CLK_ENETPLL_PHI0] = s32v234_clk_plldig_phi(S32_PLLDIG_ENET,
++		"enetpll_phi0", "enetpll_vco",
++		ENETPLL_PLLDIG(mc_cgm0_base), 0);
++
++	clk[S32V234_CLK_ENETPLL_PHI1] = s32v234_clk_plldig_phi(S32_PLLDIG_ENET,
++		"enetpll_phi1", "enetpll_vco",
++		ENETPLL_PLLDIG(mc_cgm0_base), 1);
++
++	clk[S32V234_CLK_ENETPLL_DFS0] = s32v234_clk_dfs(S32_PLLDIG_ENET,
++		 "enetpll_dfs0", "enetpll_phi1",
++		 ENETPLL_PLLDIG_DFS(mc_cgm0_base), 0,
++		 ENETPLL_PLLDIG_DFS0_MFN);
++
++	clk[S32V234_CLK_ENETPLL_DFS1] = s32v234_clk_dfs(S32_PLLDIG_ENET,
++		 "enetpll_dfs1", "enetpll_phi1",
++		 ENETPLL_PLLDIG_DFS(mc_cgm0_base), 1,
++		 ENETPLL_PLLDIG_DFS1_MFN);
++
++	clk[S32V234_CLK_ENETPLL_DFS2] = s32v234_clk_dfs(S32_PLLDIG_ENET,
++		 "enetpll_dfs2", "enetpll_phi1",
++		 ENETPLL_PLLDIG_DFS(mc_cgm0_base), 2,
++		 ENETPLL_PLLDIG_DFS2_MFN);
++
++	clk[S32V234_CLK_ENETPLL_DFS3] = s32v234_clk_dfs(S32_PLLDIG_ENET,
++		 "enetpll_dfs3", "enetpll_phi1",
++		 ENETPLL_PLLDIG_DFS(mc_cgm0_base), 3,
++		 ENETPLL_PLLDIG_DFS3_MFN);
++
++	/* ENET Clock */
++	clk[S32V234_CLK_ENET_SEL] = s32_clk_mux("enet_sel",
++		CGM_ACn_SC(mc_cgm2_base, 2),
++		MC_CGM_ACn_SEL_OFFSET,
++		MC_CGM_ACn_SEL_SIZE,
++		enet_sels, ARRAY_SIZE(enet_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_ENET_TIME_SEL] = s32_clk_mux("enet_time_sel",
++		CGM_ACn_SC(mc_cgm0_base, 7),
++		MC_CGM_ACn_SEL_OFFSET,
++		MC_CGM_ACn_SEL_SIZE,
++		enet_time_sels, ARRAY_SIZE(enet_time_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_ENET] = s32_clk_divider("enet", "enet_sel",
++		CGM_ACn_DCm(mc_cgm2_base, 2, 0),
++		MC_CGM_ACn_DCm_PREDIV_OFFSET,
++		MC_CGM_ACn_DCm_PREDIV_SIZE, &s32v234_lock);
++
++	clk[S32V234_CLK_ENET_TIME] = s32_clk_divider("enet_time",
++		"enet_time_sel",
++		CGM_ACn_DCm(mc_cgm0_base, 7, 1),
++		MC_CGM_ACn_DCm_PREDIV_OFFSET,
++		MC_CGM_ACn_DCm_PREDIV_SIZE, &s32v234_lock);
++
++	/* SDHC Clock */
++	clk[S32V234_CLK_SDHC_SEL] = s32_clk_mux("sdhc_sel",
++		CGM_ACn_SC(mc_cgm0_base, 15),
++		MC_CGM_ACn_SEL_OFFSET,
++		MC_CGM_ACn_SEL_SIZE,
++		sdhc_sels, ARRAY_SIZE(sdhc_sels), &s32v234_lock);
++
++	clk[S32V234_CLK_SDHC] = s32_clk_divider("sdhc", "sdhc_sel",
++		CGM_ACn_DCm(mc_cgm0_base, 15, 0),
++		MC_CGM_ACn_DCm_PREDIV_OFFSET,
++		MC_CGM_ACn_DCm_PREDIV_SIZE, &s32v234_lock);
++
++	/* set the system clock */
++	enable_sysclock(MC_ME_MODE_MC_SYSCLK(0x2),
++			MC_ME_RUNn_MC(mc_me_base, 0));
++
++	/* transition the core to RUN0 mode */
++	entry_to_target_mode(mc_me_base, MC_ME_MCTL_RUN0);
++
++	/* Add the clocks to provider list */
++	clk_data.clks = clk;
++	clk_data.clk_num = ARRAY_SIZE(clk);
++	of_clk_add_provider(np, of_clk_src_onecell_get, &clk_data);
++}
++
++CLK_OF_DECLARE(S32V234, "fsl,s32v234-mc_cgm0", s32v234_clocks_init);
+diff --git a/drivers/clk/s32/s32v234/clk.h b/drivers/clk/s32/s32v234/clk.h
+new file mode 100644
+index 000000000..82a222483
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/clk.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright 2015-2016 Freescale Semiconductor, Inc.
++ * Copyright 2017-2018 NXP
++ */
++
++#ifndef __MACH_S32V234_CLK_H
++#define __MACH_S32V234_CLK_H
++
++#include <linux/spinlock.h>
++#include <linux/clk-provider.h>
++#include "mc_cgm.h"
++#include "mc_me.h"
++#include "pll.h"
++#include "src.h"
++#include "dfs.h"
++#include "../clk.h"
++
++struct clk *s32v234_clk_plldig(enum s32v234_plldig_type type, const char *name,
++			       const char *parent_name, void __iomem *base,
++			       u32 plldv_mfd, u32 plldv_mfn,
++			       u32 plldv_rfdphi, u32 plldv_rfdphi1);
++
++struct clk *s32v234_clk_plldig_phi(enum s32v234_plldig_type type,
++				   const char *name, const char *parent,
++				   void __iomem *base, u32 phi);
++
++struct clk *s32v234_clk_dfs(enum s32v234_plldig_type type, const char *name,
++			    const char *parent_name,
++			    void __iomem *reg, u8 idx, u32 mfn);
++#endif
+diff --git a/drivers/clk/s32/s32v234/dfs.h b/drivers/clk/s32/s32v234/dfs.h
+new file mode 100644
+index 000000000..be3104f7a
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/dfs.h
+@@ -0,0 +1,78 @@
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ * Copyright 2018 NXP
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++#ifndef _DFS_S32V234_H
++#define _DFS_S32V234_H
++
++/* DFS Control Register (DFS_CTRL) */
++#define DFS_CTRL(base)		((base) + 0x00000018)
++#define DFS_CTRL_DLL_LOLIE	(1 << 0)
++#define DFS_CTRL_DLL_RESET	(1 << 1)
++
++/* DFS Port Status (DFS_PORTSR) */
++#define DFS_PORTSR(base)	((base) + 0x0000000C)
++#define DFS_PORTSR_MASK		(0x0000000F)
++#define DFS_PORTSR_OFFSET	(28)
++
++/* DFS Port Reset Register (DFS_PORTRESET) */
++#define DFS_PORTRESET(base)	((base) + 0x00000014)
++#define DFS_PORTRESET_PORTRESET_SET(val) \
++		(DFS_PORTRESET_PORTRESET_MASK | \
++		(((val) & DFS_PORTRESET_PORTRESET_MAXVAL) \
++		<< DFS_PORTRESET_PORTRESET_OFFSET))
++#define DFS_PORTRESET_PORTRESET_MAXVAL		(0xF)
++#define DFS_PORTRESET_PORTRESET_MASK		(0x0000000F)
++#define DFS_PORTRESET_PORTRESET_OFFSET		(28)
++
++/* DFS Divide Register Portn (DFS_DVPORTn) */
++#define DFS_DVPORTn(base, n)		((base) + (0x0000001C + \
++					((n) * sizeof(u32))))
++#define DFS_DVPORTn_MFI_SET(val)	(DFS_DVPORTn_MFI_MASK & \
++					(((val) & DFS_DVPORTn_MFI_MAXVAL) \
++					<< DFS_DVPORTn_MFI_OFFSET))
++#define DFS_DVPORTn_MFN_SET(val)	(DFS_DVPORTn_MFN_MASK & \
++					(((val) & DFS_DVPORTn_MFN_MAXVAL) \
++					<< DFS_DVPORTn_MFN_OFFSET))
++#define DFS_DVPORTn_MFI_MASK		(0x0000FF00)
++#define DFS_DVPORTn_MFN_MASK		(0x000000FF)
++#define DFS_DVPORTn_MFI_MAXVAL		(0xFF)
++#define DFS_DVPORTn_MFN_MAXVAL		(0xFF)
++#define DFS_DVPORTn_MFI_OFFSET		(8)
++#define DFS_DVPORTn_MFN_OFFSET		(0)
++#define DFS_MAXNUMBER			(4)
++
++/*
++ * Naming convention for PLL:
++ * ARMPLL - PLL0
++ * PERIPHPLL - PLL1
++ * ENETPLL - PLL2
++ * DDRPLL - PLL3
++ * VIDEOPLL - PLL4
++ */
++
++/* The max values for PLL DFS is in Hz */
++/* ARMPLL */
++#define ARMPLL_DFS0_MAX_RATE		(266000000)
++#define ARMPLL_DFS1_MAX_RATE		(600000000)
++#define ARMPLL_DFS2_MAX_RATE		(600000000)
++/* ENETPLL */
++#define ENETPLL_DFS0_MAX_RATE		(350000000)
++#define ENETPLL_DFS1_MAX_RATE		(350000000)
++#define ENETPLL_DFS2_MAX_RATE		(416000000)
++#define ENETPLL_DFS3_MAX_RATE		(104000000)
++/* DDRPLL */
++#define DDRPLL_DFS0_MAX_RATE		(500000000)
++#define DDRPLL_DFS1_MAX_RATE		(500000000)
++#define DDRPLL_DFS2_MAX_RATE		(350000000)
++
++#define ARMPLL_DFS_NR			(3)
++#define ENETPLL_DFS_NR			(4)
++#define DDRPLL_DFS_NR			(3)
++
++#endif
+diff --git a/drivers/clk/s32/s32v234/mc_cgm.h b/drivers/clk/s32/s32v234/mc_cgm.h
+new file mode 100644
+index 000000000..aeac68771
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/mc_cgm.h
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ * Copyright (C) 2017 NXP
++ */
++#ifndef _MC_CGM_H
++#define _MC_CGM_H
++
++#define ARMPLL_PLLDIG(mc_cgm)		(mc_cgm)
++#define ARMPLL_PLLDIG_DFS(mc_cgm)	((mc_cgm) + 0x40)
++#define ARMPLL_PLLDIG_PLLDV_MFD		(50)
++#define ARMPLL_PLLDIG_PLLDV_MFN		(0)
++#define ARMPLL_PLLDIG_PLLDV_RFDPHI0	(1)
++#define ARMPLL_PLLDIG_PLLDV_RFDPHI1	(1)
++#define ARMPLL_PLLDIG_DFS0_MFN		(195)
++#define ARMPLL_PLLDIG_DFS1_MFN		(171)
++#define ARMPLL_PLLDIG_DFS2_MFN		(171)
++
++#define PERIPHPLL_PLLDIG(mc_cgm)	((mc_cgm) + 0x80)
++#define PERIPHPLL_PLLDIG_PLLDV_MFD	(30)
++#define PERIPHPLL_PLLDIG_PLLDV_MFN	(0)
++#define PERIPHPLL_PLLDIG_PLLDV_RFDPHI0	(0x1)
++#define PERIPHPLL_PLLDIG_PLLDV_RFDPHI1	(0x1)
++
++#define ENETPLL_PLLDIG(mc_cgm)		((mc_cgm) + 0x100)
++#define ENETPLL_PLLDIG_DFS(mc_cgm)	((mc_cgm) + 0x100 + 0x40)
++#define ENETPLL_PLLDIG_PLLDV_MFD	(50)
++#define ENETPLL_PLLDIG_PLLDV_MFN	(0)
++#define ENETPLL_PLLDIG_PLLDV_RFDPHI0	(0x1)
++#define ENETPLL_PLLDIG_PLLDV_RFDPHI1	(0x1)
++#define ENETPLL_PLLDIG_DFS0_MFN		(220)
++#define ENETPLL_PLLDIG_DFS1_MFN		(220)
++#define ENETPLL_PLLDIG_DFS2_MFN		(33)
++#define ENETPLL_PLLDIG_DFS3_MFN		(1)
++
++/* MC_CGM_SC_SS */
++#define CGM_SC_SS(mc_cgm)		(((mc_cgm) + 0x7E4))
++
++/* MC_CGM_SC_DCn */
++#define CGM_SC_DCn(mc_cgm, dc)		(((mc_cgm) + 0x7E8) + ((dc) * 0x4))
++
++#define MC_CGM_SC_DCn_PREDIV_OFFSET	(16)
++#define MC_CGM_SC_DCn_PREDIV_SIZE	(3)
++#define MC_CGM_SC_DCn_DE		(1 << 31)
++#define MC_CGM_SC_SEL_OFFSET		(24)
++#define MC_CGM_SC_SEL_SIZE		(4)
++
++/* MC_CGM_ACn_DCm */
++#define CGM_ACn_DCm(mc_cgm, ac, dc)	(((mc_cgm) + 0x808) + ((ac) * 0x20)\
++					+ ((dc) * 0x4))
++
++#define MC_CGM_ACn_DCm_PREDIV(val)	(MC_CGM_ACn_DCm_PREDIV_MASK & \
++					((val) \
++					<< MC_CGM_ACn_DCm_PREDIV_OFFSET))
++#define MC_CGM_ACn_DCm_PREDIV_MASK	(0x001F0000)
++#define MC_CGM_ACn_DCm_PREDIV_OFFSET	(16)
++#define MC_CGM_ACn_DCm_PREDIV_SIZE	(5)
++#define MC_CGM_ACn_DCm_DE		(1 << 31)
++
++/* MC_CGM_ACn_SC/MC_CGM_ACn_SS */
++#define CGM_ACn_SC(mc_cgm, ac)		(((mc_cgm) + 0x800) + ((ac) * 0x20))
++#define CGM_ACn_SS(mc_cgm, ac)		(((mc_cgm) + 0x804) + ((ac) * 0x24))
++#define MC_CGM_ACn_SEL_MASK		(0x07000000)
++#define MC_CGM_ACn_SEL_SET(source)	(MC_CGM_ACn_SEL_MASK & \
++					(((source) & 0x7) \
++					<< MC_CGM_ACn_SEL_OFFSET))
++#define MC_CGM_ACn_SEL_OFFSET		(24)
++#define MC_CGM_ACn_SEL_SIZE		(4)
++
++#endif
+diff --git a/drivers/clk/s32/s32v234/mc_me.h b/drivers/clk/s32/s32v234/mc_me.h
+new file mode 100644
+index 000000000..718f1d1a0
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/mc_me.h
+@@ -0,0 +1,110 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ * Copyright (C) 2017 NXP
++ */
++
++#ifndef _MC_ME_H
++#define _MC_ME_H
++
++/* MC_ME registers definitions */
++/* MC_ME_GS */
++ #define MC_ME_GS(mc_me)                ((mc_me) + 0x00000000)
++
++/* MC_ME_MCTL */
++#define MC_ME_MCTL(mc_me)               ((mc_me) + 0x00000004)
++#define MC_ME_MCTL_RESET                (0x0 << 28)
++#define MC_ME_MCTL_TEST                 (0x1 << 28)
++#define MC_ME_MCTL_DRUN                 (0x3 << 28)
++#define MC_ME_MCTL_RUN0                 (0x4 << 28)
++#define MC_ME_MCTL_RUN1                 (0x5 << 28)
++#define MC_ME_MCTL_RUN2                 (0x6 << 28)
++#define MC_ME_MCTL_RUN3                 (0x7 << 28)
++
++#define MC_ME_GS_S_MTRANS               (1 << 27)
++
++#define MC_ME_MCTL_KEY                  (0x00005AF0)
++#define MC_ME_MCTL_INVERTEDKEY          (0x0000A50F)
++
++/*
++ * MC_ME_RESET_MC/MC_ME_TEST_MC
++ * MC_ME_DRUN_MC
++ * MC_ME_RUNn_MC
++ */
++#define MC_ME_RESET_MC(mc_me)           ((mc_me) + 0x00000020)
++#define MC_ME_TEST_MC(mc_me)            ((mc_me) + 0x00000024)
++#define MC_ME_DRUN_MC(mc_me)            ((mc_me) + 0x0000002C)
++#define MC_ME_RUNn_MC(mc_me, n)         ((mc_me) + 0x00000030 + 0x4 * (n))
++#define MC_ME_MODE_MC_SYSCLK_OFFSET     (0)
++#define MC_ME_MODE_MC_SYSCLK_SIZE       (0x3)
++#define MC_ME_MODE_MC_SYSCLK(val)       (MC_ME_MODE_MC_SYSCLK_MASK & (val))
++#define MC_ME_MODE_MC_SYSCLK_MASK       (0x0000000F)
++#define MC_ME_MODE_MC_FIRCON            (1 << 4)
++#define MC_ME_MODE_MC_XOSCON            (1 << 5)
++#define MC_ME_MODE_MC_ARMPLL            (1 << 6)
++#define MC_ME_MODE_MC_PERIPHPLL         (1 << 7)
++#define MC_ME_MODE_MC_ENETPLL           (1 << 8)
++#define MC_ME_MODE_MC_DDRPLL            (1 << 9)
++#define MC_ME_MODE_MC_VIDEOPLL          (1 << 10)
++#define MC_ME_MODE_MC_MVRON             (1 << 20)
++
++/* MC_ME_DRUN_SEC_CC_I */
++#define MC_ME_DRUN_SEC_CC_I(mc_me)              ((mc_me) + 0x260)
++/* MC_ME_RUNn_SEC_CC_I */
++#define MC_ME_RUNn_SEC_CC_I(mc_me, n)           ((mc_me) + 0x270 + (n) * 0x10)
++#define MC_ME_MODE_SEC_CC_I_SYSCLK1_OFFSET      (4)
++#define MC_ME_MODE_SEC_CC_I_SYSCLK2_OFFSET      (8)
++#define MC_ME_MODE_SEC_CC_I_SYSCLK3_OFFSET      (12)
++/* Consider only the defined clocks */
++#define MC_ME_MODE_SEC_CC_I_SYSCLK1_SIZE        (0x3)
++#define MC_ME_MODE_SEC_CC_I_SYSCLK2_SIZE        (0x3)
++#define MC_ME_MODE_SEC_CC_I_SYSCLK3_SIZE        (0x3)
++
++/* MC_ME_RUN_PCn */
++#define MC_ME_RUN_PCn(mc_me, n)         (mc_me + 0x00000080 + 0x4 * (n))
++
++#define MC_ME_RUN_PCn_MAX_IDX           (7)
++#define MC_ME_RUN_PCn_RESET             (1 << 0)
++#define MC_ME_RUN_PCn_TEST              (1 << 1)
++#define MC_ME_RUN_PCn_DRUN              (1 << 3)
++#define MC_ME_RUN_PCn_RUN0              (1 << 4)
++#define MC_ME_RUN_PCn_RUN1              (1 << 5)
++#define MC_ME_RUN_PCn_RUN2              (1 << 6)
++#define MC_ME_RUN_PCn_RUN3              (1 << 7)
++
++#define MC_ME_PCTLn(mc_me, n)           (mc_me + 0xC0 + 4 * (n >> 2) + \
++					(3 - (n) % 4))
++
++static inline void entry_to_target_mode(void __iomem *mc_me, u32 mode)
++{
++	writel_relaxed(mode | MC_ME_MCTL_KEY, MC_ME_MCTL(mc_me));
++	writel_relaxed(mode | MC_ME_MCTL_INVERTEDKEY, MC_ME_MCTL(mc_me));
++	while ((readl_relaxed(MC_ME_GS(mc_me)) &
++		MC_ME_GS_S_MTRANS) != 0x00000000)
++		;
++}
++
++static inline void enable_cpumodes_onperipheralconfig(void __iomem *mc_me,
++						      u32 modes, u32 run_pc_idx)
++{
++	WARN_ON(run_pc_idx > MC_ME_RUN_PCn_MAX_IDX);
++	if (run_pc_idx > MC_ME_RUN_PCn_MAX_IDX)
++		return;
++
++	writel_relaxed(modes, MC_ME_RUN_PCn(mc_me, run_pc_idx));
++}
++
++static inline void enable_clocks_sources(u32 flags, u32 clks,
++					 void __iomem *xrun_mc_addr)
++{
++	writel_relaxed(readl_relaxed(xrun_mc_addr) | flags | clks,
++		       xrun_mc_addr);
++}
++
++static inline void enable_sysclock(u32 clk, void __iomem *xrun_mc_addr)
++{
++	writel_relaxed(readl_relaxed(xrun_mc_addr) & clk,
++		       xrun_mc_addr);
++}
++
++#endif
+diff --git a/drivers/clk/s32/s32v234/pll.h b/drivers/clk/s32/s32v234/pll.h
+new file mode 100644
+index 000000000..b7bcc50f0
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/pll.h
+@@ -0,0 +1,78 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ * Copyright (C) 2017-2018 NXP
++ */
++#ifndef _PLL_S32V234_H
++#define _PLL_S32V234_H
++
++/* PLLDIG PLL Divider Register (PLLDIG_PLLDV) */
++#define PLLDIG_PLLDV(base)		((base) + 0x00000028)
++#define PLLDIG_PLLDV_MFD_SET(val)	(PLLDIG_PLLDV_MFD_MASK & (val))
++#define PLLDIG_PLLDV_MFD_MASK		(0x000000FF)
++
++#define PLLDIG_PLLDV_RFDPHI_SET(val)	(PLLDIG_PLLDV_RFDPHI_MASK & \
++					(((val) & \
++					PLLDIG_PLLDV_RFDPHI_MAXVALUE) \
++					<< PLLDIG_PLLDV_RFDPHI_OFFSET))
++#define PLLDIG_PLLDV_RFDPHI_MASK	(0x003F0000)
++#define PLLDIG_PLLDV_RFDPHI_MAXVALUE	(0x3F)
++
++#define PLLDIG_PLLDV_RFDPHI_OFFSET	(16)
++
++#define PLLDIG_PLLDV_RFDPHI1_SET(val)   (PLLDIG_PLLDV_RFDPHI1_MASK & \
++					(((val) & \
++					PLLDIG_PLLDV_RFDPHI1_MAXVALUE) \
++					<< PLLDIG_PLLDV_RFDPHI1_OFFSET))
++#define PLLDIG_PLLDV_RFDPHI1_MASK	(0x7E000000)
++#define PLLDIG_PLLDV_RFDPHI1_MAXVALUE	(0x3F)
++#define PLLDIG_PLLDV_RFDPHI1_OFFSET	(25)
++
++#define PLLDIG_PLLDV_PREDIV_SET(val)	(PLLDIG_PLLDV_PREDIV_MASK & \
++					(((val) & \
++					PLLDIG_PLLDV_PREDIV_MAXVALUE) \
++					<< PLLDIG_PLLDV_PREDIV_OFFSET))
++#define PLLDIG_PLLDV_PREDIV_MASK	(0x00007000)
++#define PLLDIG_PLLDV_PREDIV_MAXVALUE	(0x7)
++#define PLLDIG_PLLDV_PREDIV_OFFSET	(12)
++
++/* PLLDIG PLL Fractional  Divide Register (PLLDIG_PLLFD) */
++#define PLLDIG_PLLFD(base)		((base) + 0x00000030)
++#define PLLDIG_PLLFD_MFN_SET(val)	(PLLDIG_PLLFD_MFN_MASK & (val))
++#define PLLDIG_PLLFD_MFN_MASK		(0x00007FFF)
++
++/* PLL Calibration Register 1 (PLLDIG_PLLCAL1) */
++#define PLLDIG_PLLCAL1(base)	((base) + 0x00000038)
++#define PLLDIG_PLLCAL1_NDAC1_SET(val)	(PLLDIG_PLLCAL1_NDAC1_MASK & \
++					((val) \
++					 << PLLDIG_PLLCAL1_NDAC1_OFFSET))
++#define PLLDIG_PLLCAL1_NDAC1_OFFSET	(24)
++#define PLLDIG_PLLCAL1_NDAC1_MASK	(0x7F000000)
++
++/* Naming convention for PLL:
++ * ARMPLL - PLL0
++ * PERIPHPLL - PLL1
++ * ENETPLL - PLL2
++ * DDRPLL - PLL3
++ * VIDEOPLL - PLL4
++ */
++/* The min,max values for PLL VCO (Hz) */
++#define PERIPHPLL_MAX_VCO_RATE          (1200000000)
++
++/* The min,max values for PLL PHI0 and PHI1 outputs (Hz) */
++#define PERIPHPLL_MAX_PHI0_MAX_RATE	(400000000)
++#define PERIPHPLL_MAX_PHI1_MAX_RATE	(100000000)
++
++/* The maximum value for PLL VCO according to data sheet */
++#define MAX_VCO_RATE			(1300000000)
++#define MIN_VCO_RATE			(650000000)
++
++enum s32v234_plldig_type {
++	S32_PLLDIG_ARM,
++	S32_PLLDIG_PERIPH,
++	S32_PLLDIG_ENET,
++	S32_PLLDIG_DDR,
++	S32_PLLDIG_VIDEO,
++};
++
++#endif
+diff --git a/drivers/clk/s32/s32v234/src.h b/drivers/clk/s32/s32v234/src.h
+new file mode 100644
+index 000000000..39fa973b7
+--- /dev/null
++++ b/drivers/clk/s32/s32v234/src.h
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2016 Freescale Semiconductor, Inc.
++ */
++#ifndef _SRC_H
++#define _SRC_H
++
++/* Source Reset Control: General Purpose Register 1 */
++#define SRC_GPR1                                (src_base + 0x100)
++#define SRC_GPR1_ARMPLL_SRC_SEL_OFFSET          (27)
++#define SRC_GPR1_ENETPLL_SRC_SEL_OFFSET         (28)
++#define SRC_GPR1_DDRPLL_SRC_SEL_OFFSET          (29)
++#define SRC_GPR1_PERIPHPLL_SRC_SEL_OFFSET       (30)
++#define SRC_GPR1_VIDEOPLL_SRC_SEL_OFFSET        (31)
++#define SRC_GPR1_XPLL_SRC_SEL_SIZE              (1)
++
++#endif
+diff --git a/include/dt-bindings/clock/imx93-clock.h b/include/dt-bindings/clock/imx93-clock.h
+index 50caa9124..8e02859d8 100644
+--- a/include/dt-bindings/clock/imx93-clock.h
++++ b/include/dt-bindings/clock/imx93-clock.h
+@@ -28,13 +28,9 @@
+ #define IMX93_CLK_M33_SYSTICK		19
+ #define IMX93_CLK_FLEXIO1		20
+ #define IMX93_CLK_FLEXIO2		21
+-#define IMX93_CLK_LPIT1			22
+-#define IMX93_CLK_LPIT2			23
+ #define IMX93_CLK_LPTMR1		24
+ #define IMX93_CLK_LPTMR2		25
+-#define IMX93_CLK_TPM1			26
+ #define IMX93_CLK_TPM2			27
+-#define IMX93_CLK_TPM3			28
+ #define IMX93_CLK_TPM4			29
+ #define IMX93_CLK_TPM5			30
+ #define IMX93_CLK_TPM6			31
+@@ -199,6 +195,10 @@
+ #define IMX93_CLK_SAI1_IPG		190
+ #define IMX93_CLK_SAI2_IPG		191
+ #define IMX93_CLK_SAI3_IPG		192
+-#define IMX93_CLK_END			193
++#define IMX93_CLK_MU1_A_GATE		193
++#define IMX93_CLK_MU1_B_GATE		194
++#define IMX93_CLK_MU2_A_GATE		195
++#define IMX93_CLK_MU2_B_GATE		196
++#define IMX93_CLK_END			197
+ 
+ #endif
+diff --git a/include/dt-bindings/firmware/imx/rsrc.h b/include/dt-bindings/firmware/imx/rsrc.h
+index 00fceda4b..0f7692a9b 100644
+--- a/include/dt-bindings/firmware/imx/rsrc.h
++++ b/include/dt-bindings/firmware/imx/rsrc.h
+@@ -13,30 +13,30 @@
+  * never be changed or removed (only added to at the end of the list).
+  */
+ 
+-#define IMX_SC_R_A53			0
+-#define IMX_SC_R_A53_0			1
+-#define IMX_SC_R_A53_1			2
+-#define IMX_SC_R_A53_2			3
+-#define IMX_SC_R_A53_3			4
+-#define IMX_SC_R_A72			5
+-#define IMX_SC_R_A72_0			6
+-#define IMX_SC_R_A72_1			7
+-#define IMX_SC_R_A72_2			8
+-#define IMX_SC_R_A72_3			9
++#define IMX_SC_R_AP_0			0
++#define IMX_SC_R_AP_0_0			1
++#define IMX_SC_R_AP_0_1			2
++#define IMX_SC_R_AP_0_2			3
++#define IMX_SC_R_AP_0_3			4
++#define IMX_SC_R_AP_1			5
++#define IMX_SC_R_AP_1_0			6
++#define IMX_SC_R_AP_1_1			7
++#define IMX_SC_R_AP_1_2			8
++#define IMX_SC_R_AP_1_3			9
+ #define IMX_SC_R_CCI			10
+ #define IMX_SC_R_DB			11
+ #define IMX_SC_R_DRC_0			12
+ #define IMX_SC_R_DRC_1			13
+ #define IMX_SC_R_GIC_SMMU		14
+-#define IMX_SC_R_IRQSTR_M4_0		15
+-#define IMX_SC_R_IRQSTR_M4_1		16
+-#define IMX_SC_R_SMMU			17
+-#define IMX_SC_R_GIC			18
++#define IMX_SC_R_IRQSTR_MCU_0		15
++#define IMX_SC_R_IRQSTR_MCU_1		16
++#define IMX_SC_R_SMMU_0			17
++#define IMX_SC_R_GIC_0			18
+ #define IMX_SC_R_DC_0_BLIT0		19
+ #define IMX_SC_R_DC_0_BLIT1		20
+ #define IMX_SC_R_DC_0_BLIT2		21
+ #define IMX_SC_R_DC_0_BLIT_OUT		22
+-#define IMX_SC_R_PERF			23
++#define IMX_SC_R_PERF_0			23
+ #define IMX_SC_R_USB_1_PHY		24
+ #define IMX_SC_R_DC_0_WARP		25
+ #define IMX_SC_R_V2X_MU_0		26
+@@ -56,11 +56,14 @@
+ #define IMX_SC_R_V2X_MU_3		40
+ #define IMX_SC_R_V2X_MU_4		41
+ #define IMX_SC_R_DC_1_WARP		42
++#define IMX_SC_R_STM			43
+ #define IMX_SC_R_SECVIO			44
+ #define IMX_SC_R_DC_1_VIDEO0		45
+ #define IMX_SC_R_DC_1_VIDEO1		46
+ #define IMX_SC_R_DC_1_FRAC0		47
++#define IMX_SC_R_V2X			48
+ #define IMX_SC_R_DC_1			49
++#define IMX_SC_R_UNUSED14		50
+ #define IMX_SC_R_DC_1_PLL_0		51
+ #define IMX_SC_R_DC_1_PLL_1		52
+ #define IMX_SC_R_SPI_0			53
+@@ -151,10 +154,10 @@
+ #define IMX_SC_R_DMA_1_CH29		137
+ #define IMX_SC_R_DMA_1_CH30		138
+ #define IMX_SC_R_DMA_1_CH31		139
+-#define IMX_SC_R_UNUSED1		140
+-#define IMX_SC_R_UNUSED2		141
+-#define IMX_SC_R_UNUSED3		142
+-#define IMX_SC_R_UNUSED4		143
++#define IMX_SC_R_V2X_PID0		140
++#define IMX_SC_R_V2X_PID1		141
++#define IMX_SC_R_V2X_PID2		142
++#define IMX_SC_R_V2X_PID3		143
+ #define IMX_SC_R_GPU_0_PID0		144
+ #define IMX_SC_R_GPU_0_PID1		145
+ #define IMX_SC_R_GPU_0_PID2		146
+@@ -183,7 +186,7 @@
+ #define IMX_SC_R_PCIE_B			169
+ #define IMX_SC_R_SATA_0			170
+ #define IMX_SC_R_SERDES_1		171
+-#define IMX_SC_R_HSIO_GPIO		172
++#define IMX_SC_R_HSIO_GPIO_0		172
+ #define IMX_SC_R_MATCH_15		173
+ #define IMX_SC_R_MATCH_16		174
+ #define IMX_SC_R_MATCH_17		175
+@@ -250,15 +253,15 @@
+ #define IMX_SC_R_ROM_0			236
+ #define IMX_SC_R_FSPI_0			237
+ #define IMX_SC_R_FSPI_1			238
+-#define IMX_SC_R_IEE			239
+-#define IMX_SC_R_IEE_R0			240
+-#define IMX_SC_R_IEE_R1			241
+-#define IMX_SC_R_IEE_R2			242
+-#define IMX_SC_R_IEE_R3			243
+-#define IMX_SC_R_IEE_R4			244
+-#define IMX_SC_R_IEE_R5			245
+-#define IMX_SC_R_IEE_R6			246
+-#define IMX_SC_R_IEE_R7			247
++#define IMX_SC_R_IEE_0			239
++#define IMX_SC_R_IEE_0_R0		240
++#define IMX_SC_R_IEE_0_R1		241
++#define IMX_SC_R_IEE_0_R2		242
++#define IMX_SC_R_IEE_0_R3		243
++#define IMX_SC_R_IEE_0_R4		244
++#define IMX_SC_R_IEE_0_R5		245
++#define IMX_SC_R_IEE_0_R6		246
++#define IMX_SC_R_IEE_0_R7		247
+ #define IMX_SC_R_SDHC_0			248
+ #define IMX_SC_R_SDHC_1			249
+ #define IMX_SC_R_SDHC_2			250
+@@ -288,46 +291,50 @@
+ #define IMX_SC_R_LVDS_2_PWM_0		275
+ #define IMX_SC_R_LVDS_2_I2C_0		276
+ #define IMX_SC_R_LVDS_2_I2C_1		277
+-#define IMX_SC_R_M4_0_PID0		278
+-#define IMX_SC_R_M4_0_PID1		279
+-#define IMX_SC_R_M4_0_PID2		280
+-#define IMX_SC_R_M4_0_PID3		281
+-#define IMX_SC_R_M4_0_PID4		282
+-#define IMX_SC_R_M4_0_RGPIO		283
+-#define IMX_SC_R_M4_0_SEMA42		284
+-#define IMX_SC_R_M4_0_TPM		285
+-#define IMX_SC_R_M4_0_PIT		286
+-#define IMX_SC_R_M4_0_UART		287
+-#define IMX_SC_R_M4_0_I2C		288
+-#define IMX_SC_R_M4_0_INTMUX		289
+-#define IMX_SC_R_M4_0_MU_0B		292
+-#define IMX_SC_R_M4_0_MU_0A0		293
+-#define IMX_SC_R_M4_0_MU_0A1		294
+-#define IMX_SC_R_M4_0_MU_0A2		295
+-#define IMX_SC_R_M4_0_MU_0A3		296
+-#define IMX_SC_R_M4_0_MU_1A		297
+-#define IMX_SC_R_M4_1_PID0		298
+-#define IMX_SC_R_M4_1_PID1		299
+-#define IMX_SC_R_M4_1_PID2		300
+-#define IMX_SC_R_M4_1_PID3		301
+-#define IMX_SC_R_M4_1_PID4		302
+-#define IMX_SC_R_M4_1_RGPIO		303
+-#define IMX_SC_R_M4_1_SEMA42		304
+-#define IMX_SC_R_M4_1_TPM		305
+-#define IMX_SC_R_M4_1_PIT		306
+-#define IMX_SC_R_M4_1_UART		307
+-#define IMX_SC_R_M4_1_I2C		308
+-#define IMX_SC_R_M4_1_INTMUX		309
+-#define IMX_SC_R_M4_1_MU_0B		312
+-#define IMX_SC_R_M4_1_MU_0A0		313
+-#define IMX_SC_R_M4_1_MU_0A1		314
+-#define IMX_SC_R_M4_1_MU_0A2		315
+-#define IMX_SC_R_M4_1_MU_0A3		316
+-#define IMX_SC_R_M4_1_MU_1A		317
++#define IMX_SC_R_MCU_0_PID0		278
++#define IMX_SC_R_MCU_0_PID1		279
++#define IMX_SC_R_MCU_0_PID2		280
++#define IMX_SC_R_MCU_0_PID3		281
++#define IMX_SC_R_MCU_0_PID4		282
++#define IMX_SC_R_MCU_0_RGPIO		283
++#define IMX_SC_R_MCU_0_SEMA42		284
++#define IMX_SC_R_MCU_0_TPM		285
++#define IMX_SC_R_MCU_0_PIT		286
++#define IMX_SC_R_MCU_0_UART		287
++#define IMX_SC_R_MCU_0_I2C		288
++#define IMX_SC_R_MCU_0_INTMUX		289
++#define IMX_SC_R_ENET_0_A0		290
++#define IMX_SC_R_ENET_0_A1		291
++#define IMX_SC_R_MCU_0_MU_0B		292
++#define IMX_SC_R_MCU_0_MU_0A0		293
++#define IMX_SC_R_MCU_0_MU_0A1		294
++#define IMX_SC_R_MCU_0_MU_0A2		295
++#define IMX_SC_R_MCU_0_MU_0A3		296
++#define IMX_SC_R_MCU_0_MU_1A		297
++#define IMX_SC_R_MCU_1_PID0		298
++#define IMX_SC_R_MCU_1_PID1		299
++#define IMX_SC_R_MCU_1_PID2		300
++#define IMX_SC_R_MCU_1_PID3		301
++#define IMX_SC_R_MCU_1_PID4		302
++#define IMX_SC_R_MCU_1_RGPIO		303
++#define IMX_SC_R_MCU_1_SEMA42		304
++#define IMX_SC_R_MCU_1_TPM		305
++#define IMX_SC_R_MCU_1_PIT		306
++#define IMX_SC_R_MCU_1_UART		307
++#define IMX_SC_R_MCU_1_I2C		308
++#define IMX_SC_R_MCU_1_INTMUX		309
++#define IMX_SC_R_UNUSED17		310
++#define IMX_SC_R_UNUSED18		311
++#define IMX_SC_R_MCU_1_MU_0B		312
++#define IMX_SC_R_MCU_1_MU_0A0		313
++#define IMX_SC_R_MCU_1_MU_0A1		314
++#define IMX_SC_R_MCU_1_MU_0A2		315
++#define IMX_SC_R_MCU_1_MU_0A3		316
++#define IMX_SC_R_MCU_1_MU_1A		317
+ #define IMX_SC_R_SAI_0			318
+ #define IMX_SC_R_SAI_1			319
+ #define IMX_SC_R_SAI_2			320
+-#define IMX_SC_R_IRQSTR_SCU2		321
++#define IMX_SC_R_IRQSTR_AP_0		321
+ #define IMX_SC_R_IRQSTR_DSP		322
+ #define IMX_SC_R_ELCDIF_PLL		323
+ #define IMX_SC_R_OCRAM			324
+@@ -372,33 +379,33 @@
+ #define IMX_SC_R_VPU_PID5		363
+ #define IMX_SC_R_VPU_PID6		364
+ #define IMX_SC_R_VPU_PID7		365
+-#define IMX_SC_R_VPU_UART		366
+-#define IMX_SC_R_VPUCORE		367
+-#define IMX_SC_R_VPUCORE_0		368
+-#define IMX_SC_R_VPUCORE_1		369
+-#define IMX_SC_R_VPUCORE_2		370
+-#define IMX_SC_R_VPUCORE_3		371
++#define IMX_SC_R_ENET_0_A2		366
++#define IMX_SC_R_ENET_1_A0		367
++#define IMX_SC_R_ENET_1_A1		368
++#define IMX_SC_R_ENET_1_A2		369
++#define IMX_SC_R_ENET_1_A3		370
++#define IMX_SC_R_ENET_1_A4		371
+ #define IMX_SC_R_DMA_4_CH0		372
+ #define IMX_SC_R_DMA_4_CH1		373
+ #define IMX_SC_R_DMA_4_CH2		374
+ #define IMX_SC_R_DMA_4_CH3		375
+ #define IMX_SC_R_DMA_4_CH4		376
+-#define IMX_SC_R_ISI_CH0		377
+-#define IMX_SC_R_ISI_CH1		378
+-#define IMX_SC_R_ISI_CH2		379
+-#define IMX_SC_R_ISI_CH3		380
+-#define IMX_SC_R_ISI_CH4		381
+-#define IMX_SC_R_ISI_CH5		382
+-#define IMX_SC_R_ISI_CH6		383
+-#define IMX_SC_R_ISI_CH7		384
+-#define IMX_SC_R_MJPEG_DEC_S0		385
+-#define IMX_SC_R_MJPEG_DEC_S1		386
+-#define IMX_SC_R_MJPEG_DEC_S2		387
+-#define IMX_SC_R_MJPEG_DEC_S3		388
+-#define IMX_SC_R_MJPEG_ENC_S0		389
+-#define IMX_SC_R_MJPEG_ENC_S1		390
+-#define IMX_SC_R_MJPEG_ENC_S2		391
+-#define IMX_SC_R_MJPEG_ENC_S3		392
++#define IMX_SC_R_ISI_0_CH0		377
++#define IMX_SC_R_ISI_0_CH1		378
++#define IMX_SC_R_ISI_0_CH2		379
++#define IMX_SC_R_ISI_0_CH3		380
++#define IMX_SC_R_ISI_0_CH4		381
++#define IMX_SC_R_ISI_0_CH5		382
++#define IMX_SC_R_ISI_0_CH6		383
++#define IMX_SC_R_ISI_0_CH7		384
++#define IMX_SC_R_MJPEG_0_DEC_S0		385
++#define IMX_SC_R_MJPEG_0_DEC_S1		386
++#define IMX_SC_R_MJPEG_0_DEC_S2		387
++#define IMX_SC_R_MJPEG_0_DEC_S3		388
++#define IMX_SC_R_MJPEG_0_ENC_S0		389
++#define IMX_SC_R_MJPEG_0_ENC_S1		390
++#define IMX_SC_R_MJPEG_0_ENC_S2		391
++#define IMX_SC_R_MJPEG_0_ENC_S3		392
+ #define IMX_SC_R_MIPI_0			393
+ #define IMX_SC_R_MIPI_0_PWM_0		394
+ #define IMX_SC_R_MIPI_0_I2C_0		395
+@@ -513,11 +520,11 @@
+ #define IMX_SC_R_SECO_MU_3		504
+ #define IMX_SC_R_SECO_MU_4		505
+ #define IMX_SC_R_HDMI_RX_PWM_0		506
+-#define IMX_SC_R_A35			507
+-#define IMX_SC_R_A35_0			508
+-#define IMX_SC_R_A35_1			509
+-#define IMX_SC_R_A35_2			510
+-#define IMX_SC_R_A35_3			511
++#define IMX_SC_R_AP_2			507
++#define IMX_SC_R_AP_2_0			508
++#define IMX_SC_R_AP_2_1			509
++#define IMX_SC_R_AP_2_2			510
++#define IMX_SC_R_AP_2_3			511
+ #define IMX_SC_R_DSP			512
+ #define IMX_SC_R_DSP_RAM		513
+ #define IMX_SC_R_CAAM_JR1_OUT		514
+@@ -538,8 +545,8 @@
+ #define IMX_SC_R_BOARD_R5		529
+ #define IMX_SC_R_BOARD_R6		530
+ #define IMX_SC_R_BOARD_R7		531
+-#define IMX_SC_R_MJPEG_DEC_MP		532
+-#define IMX_SC_R_MJPEG_ENC_MP		533
++#define IMX_SC_R_MJPEG_0_DEC_MP		532
++#define IMX_SC_R_MJPEG_0_ENC_MP		533
+ #define IMX_SC_R_VPU_TS_0		534
+ #define IMX_SC_R_VPU_MU_0		535
+ #define IMX_SC_R_VPU_MU_1		536
+@@ -571,6 +578,105 @@
+ #define IMX_SC_PM_CLK_PLL		4	/* PLL */
+ #define IMX_SC_PM_CLK_BYPASS		4	/* Bypass clock */
+ 
++/*
++ * Compatibility defines for sc_rsrc_t
++ */
++#define IMX_SC_R_A35			IMX_SC_R_AP_2
++#define IMX_SC_R_A35_0			IMX_SC_R_AP_2_0
++#define IMX_SC_R_A35_1			IMX_SC_R_AP_2_1
++#define IMX_SC_R_A35_2			IMX_SC_R_AP_2_2
++#define IMX_SC_R_A35_3			IMX_SC_R_AP_2_3
++#define IMX_SC_R_A53			IMX_SC_R_AP_0
++#define IMX_SC_R_A53_0			IMX_SC_R_AP_0_0
++#define IMX_SC_R_A53_1			IMX_SC_R_AP_0_1
++#define IMX_SC_R_A53_2			IMX_SC_R_AP_0_2
++#define IMX_SC_R_A53_3			IMX_SC_R_AP_0_3
++#define IMX_SC_R_A72			IMX_SC_R_AP_1
++#define IMX_SC_R_A72_0			IMX_SC_R_AP_1_0
++#define IMX_SC_R_A72_1			IMX_SC_R_AP_1_1
++#define IMX_SC_R_A72_2			IMX_SC_R_AP_1_2
++#define IMX_SC_R_A72_3			IMX_SC_R_AP_1_3
++#define IMX_SC_R_GIC			IMX_SC_R_GIC_0
++#define IMX_SC_R_HSIO_GPIO		IMX_SC_R_HSIO_GPIO_0
++#define IMX_SC_R_IEE			IMX_SC_R_IEE_0
++#define IMX_SC_R_IEE_R0			IMX_SC_R_IEE_0_R0
++#define IMX_SC_R_IEE_R1			IMX_SC_R_IEE_0_R1
++#define IMX_SC_R_IEE_R2			IMX_SC_R_IEE_0_R2
++#define IMX_SC_R_IEE_R3			IMX_SC_R_IEE_0_R3
++#define IMX_SC_R_IEE_R4			IMX_SC_R_IEE_0_R4
++#define IMX_SC_R_IEE_R5			IMX_SC_R_IEE_0_R5
++#define IMX_SC_R_IEE_R6			IMX_SC_R_IEE_0_R6
++#define IMX_SC_R_IEE_R7			IMX_SC_R_IEE_0_R7
++#define IMX_SC_R_IRQSTR_M4_0		IMX_SC_R_IRQSTR_MCU_0
++#define IMX_SC_R_IRQSTR_M4_1		IMX_SC_R_IRQSTR_MCU_1
++#define IMX_SC_R_IRQSTR_SCU2		IMX_SC_R_IRQSTR_AP_0
++#define IMX_SC_R_ISI_CH0		IMX_SC_R_ISI_0_CH0
++#define IMX_SC_R_ISI_CH1		IMX_SC_R_ISI_0_CH1
++#define IMX_SC_R_ISI_CH2		IMX_SC_R_ISI_0_CH2
++#define IMX_SC_R_ISI_CH3		IMX_SC_R_ISI_0_CH3
++#define IMX_SC_R_ISI_CH4		IMX_SC_R_ISI_0_CH4
++#define IMX_SC_R_ISI_CH5		IMX_SC_R_ISI_0_CH5
++#define IMX_SC_R_ISI_CH6		IMX_SC_R_ISI_0_CH6
++#define IMX_SC_R_ISI_CH7		IMX_SC_R_ISI_0_CH7
++#define IMX_SC_R_M4_0_I2C		IMX_SC_R_MCU_0_I2C
++#define IMX_SC_R_M4_0_INTMUX		IMX_SC_R_MCU_0_INTMUX
++#define IMX_SC_R_M4_0_MU_0A0		IMX_SC_R_MCU_0_MU_0A0
++#define IMX_SC_R_M4_0_MU_0A1		IMX_SC_R_MCU_0_MU_0A1
++#define IMX_SC_R_M4_0_MU_0A2		IMX_SC_R_MCU_0_MU_0A2
++#define IMX_SC_R_M4_0_MU_0A3		IMX_SC_R_MCU_0_MU_0A3
++#define IMX_SC_R_M4_0_MU_0B		IMX_SC_R_MCU_0_MU_0B
++#define IMX_SC_R_M4_0_MU_1A		IMX_SC_R_MCU_0_MU_1A
++#define IMX_SC_R_M4_0_PID0		IMX_SC_R_MCU_0_PID0
++#define IMX_SC_R_M4_0_PID1		IMX_SC_R_MCU_0_PID1
++#define IMX_SC_R_M4_0_PID2		IMX_SC_R_MCU_0_PID2
++#define IMX_SC_R_M4_0_PID3		IMX_SC_R_MCU_0_PID3
++#define IMX_SC_R_M4_0_PID4		IMX_SC_R_MCU_0_PID4
++#define IMX_SC_R_M4_0_PIT		IMX_SC_R_MCU_0_PIT
++#define IMX_SC_R_M4_0_RGPIO		IMX_SC_R_MCU_0_RGPIO
++#define IMX_SC_R_M4_0_SEMA42		IMX_SC_R_MCU_0_SEMA42
++#define IMX_SC_R_M4_0_TPM		IMX_SC_R_MCU_0_TPM
++#define IMX_SC_R_M4_0_UART		IMX_SC_R_MCU_0_UART
++#define IMX_SC_R_M4_1_I2C		IMX_SC_R_MCU_1_I2C
++#define IMX_SC_R_M4_1_INTMUX		IMX_SC_R_MCU_1_INTMUX
++#define IMX_SC_R_M4_1_MU_0A0		IMX_SC_R_MCU_1_MU_0A0
++#define IMX_SC_R_M4_1_MU_0A1		IMX_SC_R_MCU_1_MU_0A1
++#define IMX_SC_R_M4_1_MU_0A2		IMX_SC_R_MCU_1_MU_0A2
++#define IMX_SC_R_M4_1_MU_0A3		IMX_SC_R_MCU_1_MU_0A3
++#define IMX_SC_R_M4_1_MU_0B		IMX_SC_R_MCU_1_MU_0B
++#define IMX_SC_R_M4_1_MU_1A		IMX_SC_R_MCU_1_MU_1A
++#define IMX_SC_R_M4_1_PID0		IMX_SC_R_MCU_1_PID0
++#define IMX_SC_R_M4_1_PID1		IMX_SC_R_MCU_1_PID1
++#define IMX_SC_R_M4_1_PID2		IMX_SC_R_MCU_1_PID2
++#define IMX_SC_R_M4_1_PID3		IMX_SC_R_MCU_1_PID3
++#define IMX_SC_R_M4_1_PID4		IMX_SC_R_MCU_1_PID4
++#define IMX_SC_R_M4_1_PIT		IMX_SC_R_MCU_1_PIT
++#define IMX_SC_R_M4_1_RGPIO		IMX_SC_R_MCU_1_RGPIO
++#define IMX_SC_R_M4_1_SEMA42		IMX_SC_R_MCU_1_SEMA42
++#define IMX_SC_R_M4_1_TPM		IMX_SC_R_MCU_1_TPM
++#define IMX_SC_R_M4_1_UART		IMX_SC_R_MCU_1_UART
++#define IMX_SC_R_MJPEG_DEC_MP		IMX_SC_R_MJPEG_0_DEC_MP
++#define IMX_SC_R_MJPEG_DEC_S0		IMX_SC_R_MJPEG_0_DEC_S0
++#define IMX_SC_R_MJPEG_DEC_S1		IMX_SC_R_MJPEG_0_DEC_S1
++#define IMX_SC_R_MJPEG_DEC_S2		IMX_SC_R_MJPEG_0_DEC_S2
++#define IMX_SC_R_MJPEG_DEC_S3		IMX_SC_R_MJPEG_0_DEC_S3
++#define IMX_SC_R_MJPEG_ENC_MP		IMX_SC_R_MJPEG_0_ENC_MP
++#define IMX_SC_R_MJPEG_ENC_S0		IMX_SC_R_MJPEG_0_ENC_S0
++#define IMX_SC_R_MJPEG_ENC_S1		IMX_SC_R_MJPEG_0_ENC_S1
++#define IMX_SC_R_MJPEG_ENC_S2		IMX_SC_R_MJPEG_0_ENC_S2
++#define IMX_SC_R_MJPEG_ENC_S3		IMX_SC_R_MJPEG_0_ENC_S3
++#define IMX_SC_R_PERF			IMX_SC_R_PERF_0
++#define IMX_SC_R_SMMU			IMX_SC_R_SMMU_0
++#define IMX_SC_R_VPU_UART		IMX_SC_R_ENET_0_A2
++#define IMX_SC_R_VPUCORE		IMX_SC_R_ENET_1_A0
++#define IMX_SC_R_VPUCORE_0		IMX_SC_R_ENET_1_A1
++#define IMX_SC_R_VPUCORE_1		IMX_SC_R_ENET_1_A2
++#define IMX_SC_R_VPUCORE_2		IMX_SC_R_ENET_1_A3
++#define IMX_SC_R_VPUCORE_3		IMX_SC_R_ENET_1_A4
++#define IMX_SC_R_UNUSED1		IMX_SC_R_V2X_PID0
++#define IMX_SC_R_UNUSED2		IMX_SC_R_V2X_PID1
++#define IMX_SC_R_UNUSED3		IMX_SC_R_V2X_PID2
++#define IMX_SC_R_UNUSED4		IMX_SC_R_V2X_PID3
++
+ /*
+  * Defines for SC CONTROL
+  */
+@@ -636,6 +742,10 @@
+ #define IMX_SC_C_INTF_SEL			59
+ #define IMX_SC_C_RXC_DLY			60
+ #define IMX_SC_C_TIMER_SEL			61
+-#define IMX_SC_C_LAST				62
++#define IMX_SC_C_MISC0				62
++#define IMX_SC_C_MISC1				63
++#define IMX_SC_C_MISC2				64
++#define IMX_SC_C_MISC3				65
++#define IMX_SC_C_LAST				66
+ 
+ #endif /* __DT_BINDINGS_RSCRC_IMX_H */
+-- 
+2.25.1
+

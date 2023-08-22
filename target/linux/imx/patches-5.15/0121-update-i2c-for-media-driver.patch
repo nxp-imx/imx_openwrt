@@ -1,0 +1,2915 @@
+From 9006605c31d23a5a633d242267663c1b993d4f9c Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 11 Aug 2023 11:44:32 +0800
+Subject: [PATCH 21/24] update i2c for media driver
+
+---
+ drivers/media/i2c/Kconfig   |   18 +
+ drivers/media/i2c/Makefile  |    2 +
+ drivers/media/i2c/ad5820.c  |   10 +-
+ drivers/media/i2c/ap1302.c  |  726 +++++++++++++++++++++++
+ drivers/media/i2c/imx219.c  |  255 ++++----
+ drivers/media/i2c/max9286.c |    2 -
+ drivers/media/i2c/mt9m114.c | 1120 +++++++++++++++++++++++++++++++++++
+ drivers/media/i2c/ov2740.c  |    4 +-
+ drivers/media/i2c/ov5640.c  |  193 ++++--
+ drivers/media/i2c/ov5675.c  |    4 +-
+ drivers/media/i2c/ov7670.c  |    2 +-
+ drivers/media/i2c/ov772x.c  |    3 +-
+ 12 files changed, 2185 insertions(+), 154 deletions(-)
+ create mode 100644 drivers/media/i2c/ap1302.c
+ create mode 100644 drivers/media/i2c/mt9m114.c
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index 6157e73ee..2620f36c5 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -1224,6 +1224,13 @@ config VIDEO_MT9M111
+ 	  This driver supports MT9M111, MT9M112 and MT9M131 cameras from
+ 	  Micron/Aptina
+ 
++config VIDEO_MT9M114
++	tristate "mt9m114 support"
++	depends on I2C && VIDEO_V4L2
++	select V4L2_FWNODE
++	help
++	  This driver supports MT9M114 cameras from ON Semiconductor
++
+ config VIDEO_MT9P031
+ 	tristate "Aptina MT9P031 support"
+ 	depends on I2C && VIDEO_V4L2
+@@ -1296,6 +1303,17 @@ config VIDEO_NOON010PC30
+ 	help
+ 	  This driver supports NOON010PC30 CIF camera from Siliconfile
+ 
++config VIDEO_AP1302
++	tristate "ON Semiconductor's Advanced Image Coporcessor AP1302 support"
++	depends on OF
++	depends on GPIOLIB && VIDEO_V4L2 && I2C
++	select MEDIA_CONTROLLER
++	select VIDEO_V4L2_SUBDEV_API
++	select V4L2_FWNODE
++	help
++	  This is a Video4Linux2 sensor driver for the ONSEMI AP1302 camera
++	  sensor with a MIPI CSI-2 interface
++
+ source "drivers/media/i2c/m5mols/Kconfig"
+ 
+ config VIDEO_MAX9271_LIB
+diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
+index 83268f20a..ecf74f1d1 100644
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -92,6 +92,7 @@ obj-$(CONFIG_VIDEO_OV13858) += ov13858.o
+ obj-$(CONFIG_VIDEO_MT9M001) += mt9m001.o
+ obj-$(CONFIG_VIDEO_MT9M032) += mt9m032.o
+ obj-$(CONFIG_VIDEO_MT9M111) += mt9m111.o
++obj-$(CONFIG_VIDEO_MT9M114) += mt9m114.o
+ obj-$(CONFIG_VIDEO_MT9P031) += mt9p031.o
+ obj-$(CONFIG_VIDEO_MT9T001) += mt9t001.o
+ obj-$(CONFIG_VIDEO_MT9T112) += mt9t112.o
+@@ -134,3 +135,4 @@ obj-$(CONFIG_VIDEO_RDACM20)	+= rdacm20.o
+ obj-$(CONFIG_VIDEO_RDACM21)	+= rdacm21.o
+ obj-$(CONFIG_VIDEO_ST_MIPID02) += st-mipid02.o
+ obj-$(CONFIG_SDR_MAX2175) += max2175.o
++obj-$(CONFIG_VIDEO_AP1302)     += ap1302.o
+diff --git a/drivers/media/i2c/ad5820.c b/drivers/media/i2c/ad5820.c
+index 07639ecc8..2958a4694 100644
+--- a/drivers/media/i2c/ad5820.c
++++ b/drivers/media/i2c/ad5820.c
+@@ -327,18 +327,18 @@ static int ad5820_probe(struct i2c_client *client,
+ 
+ 	ret = media_entity_pads_init(&coil->subdev.entity, 0, NULL);
+ 	if (ret < 0)
+-		goto clean_mutex;
++		goto cleanup2;
+ 
+ 	ret = v4l2_async_register_subdev(&coil->subdev);
+ 	if (ret < 0)
+-		goto clean_entity;
++		goto cleanup;
+ 
+ 	return ret;
+ 
+-clean_entity:
+-	media_entity_cleanup(&coil->subdev.entity);
+-clean_mutex:
++cleanup2:
+ 	mutex_destroy(&coil->power_lock);
++cleanup:
++	media_entity_cleanup(&coil->subdev.entity);
+ 	return ret;
+ }
+ 
+diff --git a/drivers/media/i2c/ap1302.c b/drivers/media/i2c/ap1302.c
+new file mode 100644
+index 000000000..7beca1d41
+--- /dev/null
++++ b/drivers/media/i2c/ap1302.c
+@@ -0,0 +1,726 @@
++/*
++ * Copyright (c) 2013 Intel Corporation. All Rights Reserved.
++ * Copyright 2022 NXP
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License version
++ * 2 as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/firmware.h>
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/of_device.h>
++#include <linux/of_gpio.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/regulator/consumer.h>
++#include <linux/regmap.h>
++#include <linux/v4l2-mediabus.h>
++#include <media/v4l2-device.h>
++#include <media/v4l2-ctrls.h>
++
++#define AP1302_NAME		"ap1302_mipi"
++#define AP1302_CHIP_ID		0x265
++#define AP1302_I2C_MAX_LEN	65534
++#define AP1302_FW_WINDOW_OFFSET	0x8000
++#define AP1302_FW_WINDOW_SIZE	0x2000
++#define AP1302_NUM_CONSUMERS	3
++
++/* AP1302 registers */
++#define REG_CHIP_VERSION	0x0000
++#define REG_CHIP_REV		0x0050
++#define REG_MF_ID		0x0004
++#define REG_ERROR		0x0006
++#define REG_CTRL		0x1000
++#define REG_DZ_TGT_FCT		0x1010
++#define REG_SFX_MODE		0x1016
++#define REG_SS_HEAD_PT0		0x1174
++#define REG_ATOMIC		0x1184
++#define REG_PREVIEW_WIDTH	0x2000
++#define REG_PREVIEW_HEIGHT	0x2002
++#define REG_AE_BV_OFF		0x5014
++#define REG_AE_BV_BIAS		0x5016
++#define REG_AWB_CTRL		0x5100
++#define REG_FLICK_CTRL		0x5440
++#define REG_SCENE_CTRL		0x5454
++#define REG_BOOTDATA_STAGE	0x6002
++#define REG_SENSOR_SELECT	0x600C
++#define REG_SYS_START		0x601A
++#define REG_BOOTDATA_CHECKSUM	0x6134
++#define REG_SIP_CRC		0xF052
++
++#define AP1302_SENS_PAD_SOURCE	0
++#define AP1302_SENS_PADS_NUM	1
++
++struct ap1302_res_info {
++	u32 width;
++	u32 height;
++	u32 hact;
++	u32 vact;
++};
++
++struct ap1302_firmware {
++	u32 crc;
++	u32 checksum;
++	u32 pll_init_size;
++	u32 total_size;
++};
++
++enum AP1302_AF_MODE {
++	AF_MODE_AUTO,
++	AF_MODE_MANUAL,
++};
++
++struct ap1302_device {
++	struct v4l2_subdev subdev;
++	struct v4l2_mbus_framefmt fmt;
++	struct v4l2_fract frame_interval;
++	struct media_pad pads[AP1302_SENS_PADS_NUM];
++
++	struct i2c_client *i2c_client;
++
++	struct mutex lock;
++	struct regmap *regmap16;
++
++	struct regulator_bulk_data supplies[AP1302_NUM_CONSUMERS];
++
++	/* GPIO descriptor */
++	struct gpio_desc *reset;
++	struct gpio_desc *isp_en;
++
++	const struct firmware *fw;
++	const struct ap1302_res_info *cur_mode;
++
++	bool mode_change;
++};
++/* Static definitions */
++static struct regmap_config ap1302_reg16_config = {
++	.reg_bits = 16,
++	.val_bits = 16,
++	.reg_format_endian = REGMAP_ENDIAN_BIG,
++	.val_format_endian = REGMAP_ENDIAN_BIG,
++};
++
++/* regulator supplies */
++static const char * const ap1302_supply_name[] = {
++	"AVDD",
++	"DVDD",
++	"VDDIO",
++};
++
++static const struct ap1302_res_info ap1302_preview_res[] = {
++	{
++		.width  = 1920,
++		.height = 1080,
++		.hact   = 1920,
++		.vact   = 1080,
++	}, {
++		.width  = 1280,
++		.height = 800,
++		.hact   = 1280,
++		.vact   = 800,
++	},
++	{
++		.width  = 1280,
++		.height = 720,
++		.hact   = 1280,
++		.vact   = 720,
++	},
++	{
++		.width  = 640,
++		.height = 480,
++		.hact   = 640,
++		.vact   = 480,
++	},
++};
++
++static int ap1302_s_stream(struct v4l2_subdev *sd, int enable);
++#define to_ap1302_device(sub_dev) \
++		container_of(sub_dev, struct ap1302_device, subdev)
++
++static int ap1302_write_reg(struct ap1302_device *ap1302_dev, u16 reg,  u16 val)
++{
++	struct i2c_client *client = ap1302_dev->i2c_client;
++	u8 au8Buf[4] = {0};
++
++	au8Buf[0] = reg >> 8;
++	au8Buf[1] = reg & 0xff;
++	au8Buf[2] = val >> 8;
++	au8Buf[3] = val & 0xff;
++
++	if (i2c_master_send(client, au8Buf, 4) < 0) {
++		dev_err(&client->dev, "Write reg error: reg=0x%x, val=0x%x\n", reg, val);
++		return -1;
++	}
++
++	return 0;
++}
++
++static int ap1302_read_reg(struct ap1302_device *ap1302_dev, u16 reg, u16 *val)
++{
++	struct i2c_client *client = ap1302_dev->i2c_client;
++
++	u8 RegBuf[2] = {0};
++	u8 ValBuf[2] = {0};
++
++	RegBuf[0] = reg >> 8;
++	RegBuf[1] = reg & 0xff;
++
++	if (i2c_master_send(client, RegBuf, 2) != 2) {
++		dev_err(&client->dev, "Read reg error: reg=0x%x\n", reg);
++		return -1;
++	}
++
++	if (i2c_master_recv(client, ValBuf, 2) != 2) {
++		dev_err(&client->dev, "Read reg error: reg=0x%x\n", reg);
++		return -1;
++	}
++
++	*val = ((u16)ValBuf[0] << 8) | (u16)ValBuf[1];
++
++	return 0;
++}
++
++/* When loading firmware, host writes firmware data from address 0x8000.
++ * When the address reaches 0x9FFF, the next address should return to 0x8000.
++ * This function handles this address window and load firmware data to AP1302.
++ * win_pos indicates the offset within this window. Firmware loading procedure
++ * may call this function several times. win_pos records the current position
++ * that has been written to.
++ */
++
++static int ap1302_write_fw_window(struct ap1302_device *dev,
++				  u16 *win_pos, const u8 *buf, u32 len)
++{
++	int ret;
++	u32 pos;
++	u32 sub_len;
++
++	for (pos = 0; pos < len; pos += sub_len) {
++		if (len - pos < AP1302_FW_WINDOW_SIZE - *win_pos)
++			sub_len = len - pos;
++		else
++			sub_len = AP1302_FW_WINDOW_SIZE - *win_pos;
++
++		ret = regmap_raw_write(dev->regmap16,
++					*win_pos + AP1302_FW_WINDOW_OFFSET,
++					buf + pos, sub_len);
++
++		if (ret)
++			return ret;
++		*win_pos += sub_len;
++		if (*win_pos >= AP1302_FW_WINDOW_SIZE)
++			*win_pos = 0;
++	}
++	return 0;
++}
++
++static void ap1302_fw_handler(const struct firmware *fw, void *context)
++{
++	struct ap1302_device *ap1302_dev = context;
++	struct device *dev = &ap1302_dev->i2c_client->dev;
++	struct v4l2_subdev *sd = &ap1302_dev->subdev;
++	struct ap1302_firmware *ap1302_fw;
++	const u8 *fw_data;
++	u16 regVal, win_pos = 0;
++	int ret;
++
++	if (fw == NULL) {
++		dev_err(dev, "Failed to request_firmware\n");
++		return;
++	}
++
++	ap1302_fw = (struct ap1302_firmware *)fw->data;
++
++	/* The fw binary contains a header of struct ap1302_firmware.
++	 * Following the header is the bootdata of AP1302.
++	 * The bootdata pointer can be referenced as &fw[1].
++	 */
++	fw_data = (u8 *)&ap1302_fw[1];
++
++	/* Clear crc register. */
++	ret = ap1302_write_reg(ap1302_dev, REG_SIP_CRC, 0xffff);
++	if (ret) {
++		dev_err(dev, "Fail to write AP1302[0x%x], ret=%d\n",
++			REG_SIP_CRC, ret);
++		return;
++	}
++
++	/* Load FW data for PLL init stage. */
++	ret = ap1302_write_fw_window(ap1302_dev, &win_pos, fw_data,
++				     ap1302_fw->pll_init_size);
++	if (ret) {
++		dev_err(dev, "Fail to write AP1302 firware window ret=%d\n", ret);
++		return;
++	}
++
++	/* Write 2 to bootdata_stage register to apply basic_init_hp
++	 * settings and enable PLL.
++	 */
++	ret = ap1302_write_reg(ap1302_dev, REG_BOOTDATA_STAGE, 0x0002);
++	if (ret) {
++		dev_err(dev, "Fail to write AP1302[0x%x], ret=%d\n",
++			REG_BOOTDATA_STAGE, ret);
++		return;
++	}
++
++	/* Wait 1ms for PLL to lock. */
++	msleep(20);
++
++	/* Load the rest of bootdata content. */
++	ret = ap1302_write_fw_window(ap1302_dev, &win_pos,
++				     fw_data + ap1302_fw->pll_init_size,
++				     ap1302_fw->total_size - ap1302_fw->pll_init_size);
++	if (ret) {
++		dev_err(dev, "Fail to write AP1302 firware window, ret=%d\n", ret);
++		return;
++	}
++
++	/* Write 0xFFFF to bootdata_stage register to indicate AP1302 that
++	 * the whole bootdata content has been loaded.
++	 */
++	ret = ap1302_write_reg(ap1302_dev, REG_BOOTDATA_STAGE, 0xFFFF);
++	if (ret) {
++		dev_err(dev, "Fail to write AP1302[0x%x], ret=%d\n",
++			REG_BOOTDATA_STAGE, ret);
++		return;
++	}
++
++	/* Delay 50ms */
++	msleep(50);
++
++	ret = ap1302_read_reg(ap1302_dev, REG_BOOTDATA_CHECKSUM, &regVal);
++	if (ret) {
++		dev_err(dev, "Fail to read AP1302[0x%x], ret=%d\n",
++			REG_BOOTDATA_CHECKSUM, ret);
++		return;
++	}
++
++	if (regVal != ap1302_fw->checksum) {
++		dev_err(dev, "checksum does not match. T:0x%04X F:0x%04X\n",
++			ap1302_fw->checksum, regVal);
++		return;
++	}
++	ap1302_write_reg(ap1302_dev, 0x6124, 0x0001);
++
++	release_firmware(fw);
++	ap1302_s_stream(sd, 0);
++
++	dev_info(dev, "Load firmware successfully.\n");
++}
++
++static void ap1302_reset(struct ap1302_device *ap1302_dev)
++{
++	gpiod_set_value_cansleep(ap1302_dev->reset, 1);
++	udelay(5000);
++
++	gpiod_set_value_cansleep(ap1302_dev->reset, 0);
++	msleep(20);
++}
++
++static int ap1302_get_regulators(struct ap1302_device *sensor)
++{
++	int i;
++
++	for (i = 0; i < AP1302_NUM_CONSUMERS; i++)
++		sensor->supplies[i].supply = ap1302_supply_name[i];
++
++	return devm_regulator_bulk_get(&sensor->i2c_client->dev,
++				       AP1302_NUM_CONSUMERS, sensor->supplies);
++}
++
++static void ap1302_set_af_mode(struct ap1302_device *ap1302_dev,
++			       enum AP1302_AF_MODE mode)
++{
++	if (mode == AF_MODE_AUTO) {
++		ap1302_write_reg(ap1302_dev, 0x5058, 0x0186);
++	} else {
++		ap1302_write_reg(ap1302_dev, 0x5058, 0x0183);
++		ap1302_write_reg(ap1302_dev, 0x505C, 100);
++	}
++}
++
++static const struct ap1302_res_info *
++ap1302_find_mode(struct ap1302_device *ap1302_dev, u32 width, u32 height)
++{
++	struct device *dev = &ap1302_dev->i2c_client->dev;
++	const struct ap1302_res_info *mode;
++
++	mode = v4l2_find_nearest_size(ap1302_preview_res,
++				      ARRAY_SIZE(ap1302_preview_res),
++				      hact, vact,
++				      width, height);
++	if (!mode) {
++		dev_err(dev, "Invalid resolution: w/h=(%d, %d)\n", width, height);
++		return NULL;
++	}
++
++	return mode;
++}
++
++/*!
++ * ap1302_s_power - V4L2 sensor interface handler for VIDIOC_S_POWER ioctl
++ * @s: pointer to standard V4L2 device structure
++ * @on: indicates power mode (on or off)
++ *
++ * Turns the power on or off, depending on the value of on and returns the
++ * appropriate error code.
++ */
++static int ap1302_s_power(struct v4l2_subdev *sd, int on)
++{
++	return 0;
++}
++
++static int ap1302_enum_mbus_code(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *sd_state,
++				 struct v4l2_subdev_mbus_code_enum *code)
++{
++	if (code->pad != 0)
++		return -EINVAL;
++
++	if (code->index)
++		return -EINVAL;
++
++	code->code = MEDIA_BUS_FMT_UYVY8_2X8;
++	return 0;
++}
++
++static int ap1302_set_fmt(struct v4l2_subdev *sd,
++			  struct v4l2_subdev_state *sd_state,
++			  struct v4l2_subdev_format *format)
++{
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++	struct v4l2_mbus_framefmt *fmt = &ap1302_dev->fmt;
++	struct v4l2_mbus_framefmt *mbus_fmt = &format->format;
++	const struct ap1302_res_info *mode;
++
++	if (format->pad != 0)
++		return -EINVAL;
++
++	mutex_lock(&ap1302_dev->lock);
++	mode = ap1302_find_mode(ap1302_dev, mbus_fmt->width, mbus_fmt->height);
++	if (!mode)
++	      return -EINVAL;
++
++	ap1302_dev->mode_change = false;
++	if (mode != ap1302_dev->cur_mode) {
++		ap1302_dev->cur_mode = mode;
++		ap1302_dev->mode_change = true;
++	}
++
++	memcpy(fmt, mbus_fmt, sizeof(*fmt));
++	fmt->width  = mode->hact;
++	fmt->height = mode->vact;
++	mutex_unlock(&ap1302_dev->lock);
++
++	return 0;
++}
++
++static int ap1302_get_fmt(struct v4l2_subdev *sd,
++			  struct v4l2_subdev_state *sd_state,
++			  struct v4l2_subdev_format *format)
++{
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++	struct v4l2_mbus_framefmt *fmt = &ap1302_dev->fmt;
++
++	if (format->pad != 0)
++		return -EINVAL;
++
++	mutex_lock(&ap1302_dev->lock);
++	format->format = *fmt;
++	mutex_unlock(&ap1302_dev->lock);
++
++	return 0;
++}
++
++/*!
++ * ap1302_enum_frame_size - V4L2 sensor interface handler for
++ *			   VIDIOC_ENUM_FRAMESIZES ioctl
++ * @s: pointer to standard V4L2 device structure
++ * @fsize: standard V4L2 VIDIOC_ENUM_FRAMESIZES ioctl structure
++ *
++ * Return 0 if successful, otherwise -EINVAL.
++ */
++static int ap1302_enum_frame_size(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *sd_state,
++				  struct v4l2_subdev_frame_size_enum *fse)
++{
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++
++	if (fse->pad != 0)
++		return -EINVAL;
++
++	if (fse->index >= ARRAY_SIZE(ap1302_preview_res))
++		return -EINVAL;
++
++	mutex_lock(&ap1302_dev->lock);
++	fse->min_width  = ap1302_preview_res[fse->index].width;
++	fse->min_height = ap1302_preview_res[fse->index].height;
++	fse->max_width  = ap1302_preview_res[fse->index].width;
++	fse->max_height = ap1302_preview_res[fse->index].height;
++	mutex_unlock(&ap1302_dev->lock);
++
++	return 0;
++}
++
++static int ap1302_g_frame_interval(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_frame_interval *fi)
++{
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++
++	mutex_lock(&ap1302_dev->lock);
++	fi->interval = ap1302_dev->frame_interval;
++	mutex_unlock(&ap1302_dev->lock);
++
++	return 0;
++}
++
++static int ap1302_s_frame_interval(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_frame_interval *fi)
++{
++	return 0;
++}
++
++static int ap1302_s_stream(struct v4l2_subdev *sd, int enable)
++{
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++	struct v4l2_mbus_framefmt *fmt = &ap1302_dev->fmt;
++
++	mutex_lock(&ap1302_dev->lock);
++
++	ap1302_write_reg(ap1302_dev, 0x601A, 0x0080);
++
++	if (enable) {
++		ap1302_write_reg(ap1302_dev, 0x601A, 0x0380);
++		mdelay(50);
++		if (ap1302_dev->mode_change) {
++			ap1302_write_reg(ap1302_dev, REG_ATOMIC, 0x1);
++			ap1302_write_reg(ap1302_dev, REG_PREVIEW_WIDTH, fmt->width);
++			ap1302_write_reg(ap1302_dev, REG_PREVIEW_HEIGHT, fmt->height);
++			ap1302_write_reg(ap1302_dev, REG_ATOMIC, 0xB);
++			mdelay(50);
++		}
++	}
++	else {
++		ap1302_write_reg(ap1302_dev, 0x601A, 0x0180);
++		mdelay(50);
++	}
++	mutex_unlock(&ap1302_dev->lock);
++	return 0;
++}
++
++static int ap1302_link_setup(struct media_entity *entity,
++				const struct media_pad *local,
++				const struct media_pad *remote, u32 flags)
++{
++	return 0;
++}
++
++static struct v4l2_subdev_video_ops ap1302_subdev_video_ops = {
++	.g_frame_interval = ap1302_g_frame_interval,
++	.s_frame_interval = ap1302_s_frame_interval,
++	.s_stream = ap1302_s_stream,
++};
++
++static struct v4l2_subdev_core_ops ap1302_subdev_core_ops = {
++	.s_power	= ap1302_s_power,
++};
++
++static const struct v4l2_subdev_pad_ops ap1302_subdev_pad_ops = {
++	.enum_mbus_code        = ap1302_enum_mbus_code,
++	.enum_frame_size       = ap1302_enum_frame_size,
++	.get_fmt               = ap1302_get_fmt,
++	.set_fmt               = ap1302_set_fmt,
++};
++
++static struct v4l2_subdev_ops ap1302_subdev_ops = {
++	.core	= &ap1302_subdev_core_ops,
++	.video	= &ap1302_subdev_video_ops,
++	.pad	= &ap1302_subdev_pad_ops,
++};
++
++static const struct media_entity_operations ap1302_sd_media_ops = {
++	.link_setup = ap1302_link_setup,
++};
++
++/*!
++ * ap1302 I2C probe function
++ *
++ * @param adapter            struct i2c_adapter *
++ * @return  Error code indicating success or failure
++ */
++static int ap1302_probe(struct i2c_client *client,
++			const struct i2c_device_id *id)
++{
++	struct device *dev = &client->dev;
++	struct ap1302_device *ap1302_dev;
++	struct v4l2_mbus_framefmt *fmt;
++	struct v4l2_subdev *sd;
++	u16 regVal;
++	int ret;
++
++	/* allocate device & init sub device */
++	ap1302_dev = devm_kmalloc(dev, sizeof(*ap1302_dev), GFP_KERNEL);
++	if (!ap1302_dev) {
++		dev_err(dev, "Fail to alloc memory for ap1302\n");
++		return -ENOMEM;
++	}
++
++	/* Set initial values for the sensor struct. */
++	memset(ap1302_dev, 0, sizeof(*ap1302_dev));
++
++	ap1302_dev->i2c_client = client;
++	mutex_init(&ap1302_dev->lock);
++
++	/* request reset pin */
++	ap1302_dev->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ap1302_dev->reset)) {
++		ret = PTR_ERR(ap1302_dev->reset);
++		dev_err(dev, "fail to get reset pin for AP1302 ret=%d\n", ret);
++		return ret;
++	}
++
++	ap1302_dev->isp_en = devm_gpiod_get_optional(dev, "isp_en", GPIOD_OUT_HIGH);
++	if (IS_ERR(ap1302_dev->isp_en)) {
++		ret = PTR_ERR(ap1302_dev->isp_en);
++		dev_err(dev, "fail to get enable isp pin for AP1302 ret=%d\n", ret);
++		return ret;
++	}
++	/*Enable ISP by default*/
++	gpiod_set_value_cansleep(ap1302_dev->isp_en, 1);
++
++	ap1302_dev->regmap16 = devm_regmap_init_i2c(client, &ap1302_reg16_config);
++	if (IS_ERR(ap1302_dev->regmap16)) {
++		ret = PTR_ERR(ap1302_dev->regmap16);
++		dev_err(dev, "Failed to allocate 16bit register map: %d\n", ret);
++		return ret;
++	}
++
++	ret = ap1302_get_regulators(ap1302_dev);
++	if (ret) {
++		dev_err(dev, "Fail to get regulators for AP1302\n");
++		return ret;
++	}
++
++	ret = regulator_bulk_enable(AP1302_NUM_CONSUMERS, ap1302_dev->supplies);
++	if (ret) {
++		dev_err(dev, "Fail to enable regulators for AP1302\n");
++		return ret;
++	}
++
++	/* reset AP1302 */
++	ap1302_reset(ap1302_dev);
++
++	/* chip id */
++	ret = ap1302_read_reg(ap1302_dev, REG_CHIP_VERSION, &regVal);
++	if (ret || regVal != AP1302_CHIP_ID) {
++		dev_err(dev, "Fail to get AP1302 chip id(ret=%d)\n", ret);
++		goto fail;
++	}
++	dev_info(dev, "AP1302 Chip ID is 0x%X\n", regVal);
++
++	/* request firmware for AP1302 */
++	ret = request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
++				"imx/camera/ap1302.fw", dev, GFP_KERNEL,
++				ap1302_dev, ap1302_fw_handler);
++	if (ret) {
++		dev_err(dev, "Failed request_firmware_nowait err %d\n", ret);
++		goto fail;
++	}
++
++	/* config auto AF mode by default */
++	ap1302_set_af_mode(ap1302_dev, AF_MODE_AUTO);
++
++	/* format initialization */
++	fmt = &ap1302_dev->fmt;
++	fmt->code         = MEDIA_BUS_FMT_UYVY8_2X8;
++	fmt->colorspace   = V4L2_COLORSPACE_SRGB;
++	fmt->ycbcr_enc    = V4L2_MAP_YCBCR_ENC_DEFAULT(fmt->colorspace);
++	fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
++	fmt->xfer_func    = V4L2_MAP_XFER_FUNC_DEFAULT(fmt->colorspace);
++	fmt->width        = ap1302_preview_res[1].width;
++	fmt->height       = ap1302_preview_res[1].height;
++	fmt->field        = V4L2_FIELD_NONE;
++	ap1302_dev->cur_mode = &ap1302_preview_res[1];
++
++	/* default 60fps */
++	ap1302_dev->frame_interval.numerator = 1;
++	ap1302_dev->frame_interval.denominator = 60;
++
++	/* Initilize v4l2_subdev */
++	sd = &ap1302_dev->subdev;
++	sd->flags          |= V4L2_SUBDEV_FL_HAS_DEVNODE;
++	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
++	sd->entity.ops      = &ap1302_sd_media_ops;
++	v4l2_i2c_subdev_init(sd, client, &ap1302_subdev_ops);
++
++	ap1302_dev->pads[AP1302_SENS_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
++	ret = media_entity_pads_init(&sd->entity, AP1302_SENS_PADS_NUM,
++				     ap1302_dev->pads);
++	if (ret)
++		goto fail;
++
++	ret = v4l2_async_register_subdev_sensor(sd);
++	if (ret < 0) {
++		dev_err(dev, "Async register failed, ret=%d\n", ret);
++		goto fail;
++	}
++
++	dev_info(dev, "AP1302 is found\n");
++	return 0;
++
++fail:
++	regulator_bulk_disable(AP1302_NUM_CONSUMERS, ap1302_dev->supplies);
++	return ret;
++}
++
++static int ap1302_remove(struct i2c_client *client)
++{
++	struct v4l2_subdev *sd = i2c_get_clientdata(client);
++	struct ap1302_device *ap1302_dev = to_ap1302_device(sd);
++
++	v4l2_async_unregister_subdev(sd);
++	media_entity_cleanup(&sd->entity);
++	mutex_destroy(&ap1302_dev->lock);
++	return 0;
++}
++
++static const struct i2c_device_id ap1302_id[] = {
++	{AP1302_NAME, 0},
++	{},
++};
++
++MODULE_DEVICE_TABLE(i2c, ap1302_id);
++
++static const struct of_device_id ap1302_dt_ids[] = {
++	{ .compatible = "onsemi,ap1302" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, ap1302_dt_ids);
++
++static struct i2c_driver ap1302_i2c_driver = {
++	.probe    = ap1302_probe,
++	.remove   = ap1302_remove,
++	.id_table = ap1302_id,
++	.driver = {
++		.owner = THIS_MODULE,
++		.name  = AP1302_NAME,
++		.of_match_table	= ap1302_dt_ids,
++	},
++};
++module_i2c_driver(ap1302_i2c_driver);
++
++MODULE_AUTHOR("NXP Semiconductor, Inc.");
++MODULE_DESCRIPTION("i.MX AP1302 Driver");
++MODULE_LICENSE("GPL");
++MODULE_VERSION("1.0");
++MODULE_ALIAS("MIPI CSI");
+diff --git a/drivers/media/i2c/imx219.c b/drivers/media/i2c/imx219.c
+index de1f0aa6f..e10af3f74 100644
+--- a/drivers/media/i2c/imx219.c
++++ b/drivers/media/i2c/imx219.c
+@@ -89,12 +89,6 @@
+ 
+ #define IMX219_REG_ORIENTATION		0x0172
+ 
+-/* Binning  Mode */
+-#define IMX219_REG_BINNING_MODE		0x0174
+-#define IMX219_BINNING_NONE		0x0000
+-#define IMX219_BINNING_2X2		0x0101
+-#define IMX219_BINNING_2X2_ANALOG	0x0303
+-
+ /* Test Pattern Control */
+ #define IMX219_REG_TEST_PATTERN		0x0600
+ #define IMX219_TEST_PATTERN_DISABLE	0
+@@ -149,66 +143,25 @@ struct imx219_mode {
+ 
+ 	/* Default register values */
+ 	struct imx219_reg_list reg_list;
+-
+-	/* 2x2 binning is used */
+-	bool binning;
+ };
+ 
+-static const struct imx219_reg imx219_common_regs[] = {
+-	{0x0100, 0x00},	/* Mode Select */
+-
+-	/* To Access Addresses 3000-5fff, send the following commands */
++/*
++ * Register sets lifted off the i2C interface from the Raspberry Pi firmware
++ * driver.
++ * 3280x2464 = mode 2, 1920x1080 = mode 1, 1640x1232 = mode 4, 640x480 = mode 7.
++ */
++static const struct imx219_reg mode_3280x2464_regs[] = {
++	{0x0100, 0x00},
+ 	{0x30eb, 0x0c},
+ 	{0x30eb, 0x05},
+ 	{0x300a, 0xff},
+ 	{0x300b, 0xff},
+ 	{0x30eb, 0x05},
+ 	{0x30eb, 0x09},
+-
+-	/* PLL Clock Table */
+-	{0x0301, 0x05},	/* VTPXCK_DIV */
+-	{0x0303, 0x01},	/* VTSYSCK_DIV */
+-	{0x0304, 0x03},	/* PREPLLCK_VT_DIV 0x03 = AUTO set */
+-	{0x0305, 0x03}, /* PREPLLCK_OP_DIV 0x03 = AUTO set */
+-	{0x0306, 0x00},	/* PLL_VT_MPY */
+-	{0x0307, 0x39},
+-	{0x030b, 0x01},	/* OP_SYS_CLK_DIV */
+-	{0x030c, 0x00},	/* PLL_OP_MPY */
+-	{0x030d, 0x72},
+-
+-	/* Undocumented registers */
+-	{0x455e, 0x00},
+-	{0x471e, 0x4b},
+-	{0x4767, 0x0f},
+-	{0x4750, 0x14},
+-	{0x4540, 0x00},
+-	{0x47b4, 0x14},
+-	{0x4713, 0x30},
+-	{0x478b, 0x10},
+-	{0x478f, 0x10},
+-	{0x4793, 0x10},
+-	{0x4797, 0x0e},
+-	{0x479b, 0x0e},
+-
+-	/* Frame Bank Register Group "A" */
+-	{0x0162, 0x0d},	/* Line_Length_A */
+-	{0x0163, 0x78},
+-	{0x0170, 0x01}, /* X_ODD_INC_A */
+-	{0x0171, 0x01}, /* Y_ODD_INC_A */
+-
+-	/* Output setup registers */
+-	{0x0114, 0x01},	/* CSI 2-Lane Mode */
+-	{0x0128, 0x00},	/* DPHY Auto Mode */
+-	{0x012a, 0x18},	/* EXCK_Freq */
++	{0x0114, 0x01},
++	{0x0128, 0x00},
++	{0x012a, 0x18},
+ 	{0x012b, 0x00},
+-};
+-
+-/*
+- * Register sets lifted off the i2C interface from the Raspberry Pi firmware
+- * driver.
+- * 3280x2464 = mode 2, 1920x1080 = mode 1, 1640x1232 = mode 4, 640x480 = mode 7.
+- */
+-static const struct imx219_reg mode_3280x2464_regs[] = {
+ 	{0x0164, 0x00},
+ 	{0x0165, 0x00},
+ 	{0x0166, 0x0c},
+@@ -221,13 +174,53 @@ static const struct imx219_reg mode_3280x2464_regs[] = {
+ 	{0x016d, 0xd0},
+ 	{0x016e, 0x09},
+ 	{0x016f, 0xa0},
++	{0x0170, 0x01},
++	{0x0171, 0x01},
++	{0x0174, 0x00},
++	{0x0175, 0x00},
++	{0x0301, 0x05},
++	{0x0303, 0x01},
++	{0x0304, 0x03},
++	{0x0305, 0x03},
++	{0x0306, 0x00},
++	{0x0307, 0x39},
++	{0x030b, 0x01},
++	{0x030c, 0x00},
++	{0x030d, 0x72},
+ 	{0x0624, 0x0c},
+ 	{0x0625, 0xd0},
+ 	{0x0626, 0x09},
+ 	{0x0627, 0xa0},
++	{0x455e, 0x00},
++	{0x471e, 0x4b},
++	{0x4767, 0x0f},
++	{0x4750, 0x14},
++	{0x4540, 0x00},
++	{0x47b4, 0x14},
++	{0x4713, 0x30},
++	{0x478b, 0x10},
++	{0x478f, 0x10},
++	{0x4793, 0x10},
++	{0x4797, 0x0e},
++	{0x479b, 0x0e},
++	{0x0162, 0x0d},
++	{0x0163, 0x78},
+ };
+ 
+ static const struct imx219_reg mode_1920_1080_regs[] = {
++	{0x0100, 0x00},
++	{0x30eb, 0x05},
++	{0x30eb, 0x0c},
++	{0x300a, 0xff},
++	{0x300b, 0xff},
++	{0x30eb, 0x05},
++	{0x30eb, 0x09},
++	{0x0114, 0x01},
++	{0x0128, 0x00},
++	{0x012a, 0x18},
++	{0x012b, 0x00},
++	{0x0162, 0x0d},
++	{0x0163, 0x78},
+ 	{0x0164, 0x02},
+ 	{0x0165, 0xa8},
+ 	{0x0166, 0x0a},
+@@ -240,13 +233,49 @@ static const struct imx219_reg mode_1920_1080_regs[] = {
+ 	{0x016d, 0x80},
+ 	{0x016e, 0x04},
+ 	{0x016f, 0x38},
++	{0x0170, 0x01},
++	{0x0171, 0x01},
++	{0x0174, 0x00},
++	{0x0175, 0x00},
++	{0x0301, 0x05},
++	{0x0303, 0x01},
++	{0x0304, 0x03},
++	{0x0305, 0x03},
++	{0x0306, 0x00},
++	{0x0307, 0x39},
++	{0x030b, 0x01},
++	{0x030c, 0x00},
++	{0x030d, 0x72},
+ 	{0x0624, 0x07},
+ 	{0x0625, 0x80},
+ 	{0x0626, 0x04},
+ 	{0x0627, 0x38},
++	{0x455e, 0x00},
++	{0x471e, 0x4b},
++	{0x4767, 0x0f},
++	{0x4750, 0x14},
++	{0x4540, 0x00},
++	{0x47b4, 0x14},
++	{0x4713, 0x30},
++	{0x478b, 0x10},
++	{0x478f, 0x10},
++	{0x4793, 0x10},
++	{0x4797, 0x0e},
++	{0x479b, 0x0e},
+ };
+ 
+ static const struct imx219_reg mode_1640_1232_regs[] = {
++	{0x0100, 0x00},
++	{0x30eb, 0x0c},
++	{0x30eb, 0x05},
++	{0x300a, 0xff},
++	{0x300b, 0xff},
++	{0x30eb, 0x05},
++	{0x30eb, 0x09},
++	{0x0114, 0x01},
++	{0x0128, 0x00},
++	{0x012a, 0x18},
++	{0x012b, 0x00},
+ 	{0x0164, 0x00},
+ 	{0x0165, 0x00},
+ 	{0x0166, 0x0c},
+@@ -259,13 +288,53 @@ static const struct imx219_reg mode_1640_1232_regs[] = {
+ 	{0x016d, 0x68},
+ 	{0x016e, 0x04},
+ 	{0x016f, 0xd0},
++	{0x0170, 0x01},
++	{0x0171, 0x01},
++	{0x0174, 0x01},
++	{0x0175, 0x01},
++	{0x0301, 0x05},
++	{0x0303, 0x01},
++	{0x0304, 0x03},
++	{0x0305, 0x03},
++	{0x0306, 0x00},
++	{0x0307, 0x39},
++	{0x030b, 0x01},
++	{0x030c, 0x00},
++	{0x030d, 0x72},
+ 	{0x0624, 0x06},
+ 	{0x0625, 0x68},
+ 	{0x0626, 0x04},
+ 	{0x0627, 0xd0},
++	{0x455e, 0x00},
++	{0x471e, 0x4b},
++	{0x4767, 0x0f},
++	{0x4750, 0x14},
++	{0x4540, 0x00},
++	{0x47b4, 0x14},
++	{0x4713, 0x30},
++	{0x478b, 0x10},
++	{0x478f, 0x10},
++	{0x4793, 0x10},
++	{0x4797, 0x0e},
++	{0x479b, 0x0e},
++	{0x0162, 0x0d},
++	{0x0163, 0x78},
+ };
+ 
+ static const struct imx219_reg mode_640_480_regs[] = {
++	{0x0100, 0x00},
++	{0x30eb, 0x05},
++	{0x30eb, 0x0c},
++	{0x300a, 0xff},
++	{0x300b, 0xff},
++	{0x30eb, 0x05},
++	{0x30eb, 0x09},
++	{0x0114, 0x01},
++	{0x0128, 0x00},
++	{0x012a, 0x18},
++	{0x012b, 0x00},
++	{0x0162, 0x0d},
++	{0x0163, 0x78},
+ 	{0x0164, 0x03},
+ 	{0x0165, 0xe8},
+ 	{0x0166, 0x08},
+@@ -278,10 +347,35 @@ static const struct imx219_reg mode_640_480_regs[] = {
+ 	{0x016d, 0x80},
+ 	{0x016e, 0x01},
+ 	{0x016f, 0xe0},
++	{0x0170, 0x01},
++	{0x0171, 0x01},
++	{0x0174, 0x03},
++	{0x0175, 0x03},
++	{0x0301, 0x05},
++	{0x0303, 0x01},
++	{0x0304, 0x03},
++	{0x0305, 0x03},
++	{0x0306, 0x00},
++	{0x0307, 0x39},
++	{0x030b, 0x01},
++	{0x030c, 0x00},
++	{0x030d, 0x72},
+ 	{0x0624, 0x06},
+ 	{0x0625, 0x68},
+ 	{0x0626, 0x04},
+ 	{0x0627, 0xd0},
++	{0x455e, 0x00},
++	{0x471e, 0x4b},
++	{0x4767, 0x0f},
++	{0x4750, 0x14},
++	{0x4540, 0x00},
++	{0x47b4, 0x14},
++	{0x4713, 0x30},
++	{0x478b, 0x10},
++	{0x478f, 0x10},
++	{0x4793, 0x10},
++	{0x4797, 0x0e},
++	{0x479b, 0x0e},
+ };
+ 
+ static const struct imx219_reg raw8_framefmt_regs[] = {
+@@ -391,7 +485,6 @@ static const struct imx219_mode supported_modes[] = {
+ 			.num_of_regs = ARRAY_SIZE(mode_3280x2464_regs),
+ 			.regs = mode_3280x2464_regs,
+ 		},
+-		.binning = false,
+ 	},
+ 	{
+ 		/* 1080P 30fps cropped */
+@@ -408,7 +501,6 @@ static const struct imx219_mode supported_modes[] = {
+ 			.num_of_regs = ARRAY_SIZE(mode_1920_1080_regs),
+ 			.regs = mode_1920_1080_regs,
+ 		},
+-		.binning = false,
+ 	},
+ 	{
+ 		/* 2x2 binned 30fps mode */
+@@ -425,7 +517,6 @@ static const struct imx219_mode supported_modes[] = {
+ 			.num_of_regs = ARRAY_SIZE(mode_1640_1232_regs),
+ 			.regs = mode_1640_1232_regs,
+ 		},
+-		.binning = true,
+ 	},
+ 	{
+ 		/* 640x480 30fps mode */
+@@ -442,7 +533,6 @@ static const struct imx219_mode supported_modes[] = {
+ 			.num_of_regs = ARRAY_SIZE(mode_640_480_regs),
+ 			.regs = mode_640_480_regs,
+ 		},
+-		.binning = true,
+ 	},
+ };
+ 
+@@ -889,35 +979,6 @@ static int imx219_set_framefmt(struct imx219 *imx219)
+ 	return -EINVAL;
+ }
+ 
+-static int imx219_set_binning(struct imx219 *imx219)
+-{
+-	if (!imx219->mode->binning) {
+-		return imx219_write_reg(imx219, IMX219_REG_BINNING_MODE,
+-					IMX219_REG_VALUE_16BIT,
+-					IMX219_BINNING_NONE);
+-	}
+-
+-	switch (imx219->fmt.code) {
+-	case MEDIA_BUS_FMT_SRGGB8_1X8:
+-	case MEDIA_BUS_FMT_SGRBG8_1X8:
+-	case MEDIA_BUS_FMT_SGBRG8_1X8:
+-	case MEDIA_BUS_FMT_SBGGR8_1X8:
+-		return imx219_write_reg(imx219, IMX219_REG_BINNING_MODE,
+-					IMX219_REG_VALUE_16BIT,
+-					IMX219_BINNING_2X2_ANALOG);
+-
+-	case MEDIA_BUS_FMT_SRGGB10_1X10:
+-	case MEDIA_BUS_FMT_SGRBG10_1X10:
+-	case MEDIA_BUS_FMT_SGBRG10_1X10:
+-	case MEDIA_BUS_FMT_SBGGR10_1X10:
+-		return imx219_write_reg(imx219, IMX219_REG_BINNING_MODE,
+-					IMX219_REG_VALUE_16BIT,
+-					IMX219_BINNING_2X2);
+-	}
+-
+-	return -EINVAL;
+-}
+-
+ static const struct v4l2_rect *
+ __imx219_get_pad_crop(struct imx219 *imx219,
+ 		      struct v4l2_subdev_state *sd_state,
+@@ -980,13 +1041,6 @@ static int imx219_start_streaming(struct imx219 *imx219)
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	/* Send all registers that are common to all modes */
+-	ret = imx219_write_regs(imx219, imx219_common_regs, ARRAY_SIZE(imx219_common_regs));
+-	if (ret) {
+-		dev_err(&client->dev, "%s failed to send mfg header\n", __func__);
+-		goto err_rpm_put;
+-	}
+-
+ 	/* Apply default values of current mode */
+ 	reg_list = &imx219->mode->reg_list;
+ 	ret = imx219_write_regs(imx219, reg_list->regs, reg_list->num_of_regs);
+@@ -1002,13 +1056,6 @@ static int imx219_start_streaming(struct imx219 *imx219)
+ 		goto err_rpm_put;
+ 	}
+ 
+-	ret = imx219_set_binning(imx219);
+-	if (ret) {
+-		dev_err(&client->dev, "%s failed to set binning: %d\n",
+-			__func__, ret);
+-		goto err_rpm_put;
+-	}
+-
+ 	/* Apply customized values from user */
+ 	ret =  __v4l2_ctrl_handler_setup(imx219->sd.ctrl_handler);
+ 	if (ret)
+diff --git a/drivers/media/i2c/max9286.c b/drivers/media/i2c/max9286.c
+index 404a03f48..ce943702f 100644
+--- a/drivers/media/i2c/max9286.c
++++ b/drivers/media/i2c/max9286.c
+@@ -928,7 +928,6 @@ static int max9286_v4l2_register(struct max9286_priv *priv)
+ err_put_node:
+ 	fwnode_handle_put(ep);
+ err_async:
+-	v4l2_ctrl_handler_free(&priv->ctrls);
+ 	max9286_v4l2_notifier_unregister(priv);
+ 
+ 	return ret;
+@@ -937,7 +936,6 @@ static int max9286_v4l2_register(struct max9286_priv *priv)
+ static void max9286_v4l2_unregister(struct max9286_priv *priv)
+ {
+ 	fwnode_handle_put(priv->sd.fwnode);
+-	v4l2_ctrl_handler_free(&priv->ctrls);
+ 	v4l2_async_unregister_subdev(&priv->sd);
+ 	max9286_v4l2_notifier_unregister(priv);
+ }
+diff --git a/drivers/media/i2c/mt9m114.c b/drivers/media/i2c/mt9m114.c
+new file mode 100644
+index 000000000..fc0426830
+--- /dev/null
++++ b/drivers/media/i2c/mt9m114.c
+@@ -0,0 +1,1120 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * mt9m114.c Aptina MT9M114 sensor driver
++ *
++ * Copyright (c) 2012 Analog Devices Inc.
++ * Copyright 2022 NXP
++ */
++
++#include <linux/delay.h>
++#include <linux/errno.h>
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/types.h>
++#include <linux/regulator/consumer.h>
++#include <linux/videodev2.h>
++#include <media/v4l2-device.h>
++#include <media/v4l2-mediabus.h>
++#include <media/v4l2-fwnode.h>
++
++/* Sysctl registers */
++#define MT9M114_CHIP_ID					0x0000
++#define MT9M114_COMMAND_REGISTER			0x0080
++#define MT9M114_COMMAND_REGISTER_APPLY_PATCH		(1 << 0)
++#define MT9M114_COMMAND_REGISTER_SET_STATE		(1 << 1)
++#define MT9M114_COMMAND_REGISTER_REFRESH		(1 << 2)
++#define MT9M114_COMMAND_REGISTER_WAIT_FOR_EVENT		(1 << 3)
++#define MT9M114_COMMAND_REGISTER_OK			(1 << 15)
++#define MT9M114_SOFT_RESET				0x001a
++#define MT9M114_PAD_SLEW				0x001e
++#define MT9M114_PAD_CONTROL				0x0032
++
++/* XDMA registers */
++#define MT9M114_ACCESS_CTL_STAT				0x0982
++#define MT9M114_PHYSICAL_ADDRESS_ACCESS			0x098a
++#define MT9M114_LOGICAL_ADDRESS_ACCESS			0x098e
++
++/* Core registers */
++#define MT9M114_RESET_REGISTER				0x301a
++#define MT9M114_FLASH					0x3046
++#define MT9M114_CUSTOMER_REV				0x31fe
++
++/* Camera Control registers */
++#define MT9M114_CAM_SENSOR_CFG_Y_ADDR_START		0xc800
++#define MT9M114_CAM_SENSOR_CFG_X_ADDR_START		0xc802
++#define MT9M114_CAM_SENSOR_CFG_Y_ADDR_END		0xc804
++#define MT9M114_CAM_SENSOR_CFG_X_ADDR_END		0xc806
++#define MT9M114_CAM_SENSOR_CFG_PIXCLK			0xc808
++#define MT9M114_CAM_SENSOR_CFG_ROW_SPEED		0xc80c
++#define MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN	0xc80e
++#define MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX	0xc810
++#define MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES	0xc812
++#define MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK		0xc814
++#define MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION		0xc816
++#define MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW		0xc818
++#define MT9M114_CAM_SENSOR_CFG_REG_0_DATA		0xc826
++#define MT9M114_CAM_SENSOR_CONTROL_READ_MODE		0xc834
++#define MT9M114_CAM_CROP_WINDOW_XOFFSET			0xc854
++#define MT9M114_CAM_CROP_WINDOW_YOFFSET			0xc856
++#define MT9M114_CAM_CROP_WINDOW_WIDTH			0xc858
++#define MT9M114_CAM_CROP_WINDOW_HEIGHT			0xc85a
++#define MT9M114_CAM_CROP_CROPMODE			0xc85c
++#define MT9M114_CAM_OUTPUT_WIDTH			0xc868
++#define MT9M114_CAM_OUTPUT_HEIGHT			0xc86a
++#define MT9M114_CAM_OUTPUT_FORMAT			0xc86c
++#define MT9M114_CAM_OUTPUT_FORMAT_YUV			0xc86e
++#define MT9M114_CAM_AET_AEMODE				0xc878
++#define MT9M114_CAM_AET_MAX_FRAME_RATE			0xc88c
++#define MT9M114_CAM_AET_MIN_FRAME_RATE			0xc88e
++#define MT9M114_CAM_AWB_AWB_XSCALE			0xc8f2
++#define MT9M114_CAM_AWB_AWB_YSCALE			0xc8f3
++#define MT9M114_CAM_AWB_AWB_XSHIFT_PRE_ADJ		0xc904
++#define MT9M114_CAM_AWB_AWB_YSHIFT_PRE_ADJ		0xc906
++#define MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART		0xc914
++#define MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART		0xc916
++#define MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XEND		0xc918
++#define MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YEND		0xc91a
++#define MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART	0xc91c
++#define MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART	0xc91e
++#define MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XEND		0xc920
++#define MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YEND		0xc922
++#define MT9M114_CAM_SYSCTL_PLL_ENABLE			0xc97e
++#define MT9M114_CAM_SYSCTL_PLL_DIVIDER_M_N		0xc980
++#define MT9M114_CAM_SYSCTL_PLL_DIVIDER_P		0xc982
++#define MT9M114_CAM_PORT_OUTPUT_CONTROL			0xc984
++
++/* System Manager registers */
++#define MT9M114_SYSMGR_NEXT_STATE			0xdc00
++#define MT9M114_SYSMGR_CURRENT_STATE			0xdc01
++#define MT9M114_SYSMGR_CMD_STATUS			0xdc02
++
++/* Patch Loader registers */
++#define MT9M114_PATCHLDR_LOADER_ADDRESS			0xe000
++#define MT9M114_PATCHLDR_PATCH_ID			0xe002
++#define MT9M114_PATCHLDR_FIRMWARE_ID			0xe004
++#define MT9M114_PATCHLDR_APPLY_STATUS			0xe008
++#define MT9M114_PATCHLDR_NUM_PATCHES			0xe009
++#define MT9M114_PATCHLDR_PATCH_ID_0			0xe00a
++#define MT9M114_PATCHLDR_PATCH_ID_1			0xe00c
++#define MT9M114_PATCHLDR_PATCH_ID_2			0xe00e
++#define MT9M114_PATCHLDR_PATCH_ID_3			0xe010
++#define MT9M114_PATCHLDR_PATCH_ID_4			0xe012
++#define MT9M114_PATCHLDR_PATCH_ID_5			0xe014
++#define MT9M114_PATCHLDR_PATCH_ID_6			0xe016
++#define MT9M114_PATCHLDR_PATCH_ID_7			0xe018
++
++/* SYS_STATE values (for SYSMGR_NEXT_STATE and SYSMGR_CURRENT_STATE) */
++#define MT9M114_SYS_STATE_ENTER_CONFIG_CHANGE		0x28
++#define MT9M114_SYS_STATE_STREAMING			0x31
++#define MT9M114_SYS_STATE_START_STREAMING		0x34
++#define MT9M114_SYS_STATE_ENTER_SUSPEND			0x40
++#define MT9M114_SYS_STATE_SUSPENDED			0x41
++#define MT9M114_SYS_STATE_ENTER_STANDBY			0x50
++#define MT9M114_SYS_STATE_STANDBY			0x52
++#define MT9M114_SYS_STATE_LEAVE_STANDBY			0x54
++
++/* Result status of last SET_STATE comamnd */
++#define MT9M114_SET_STATE_RESULT_ENOERR			0x00
++#define MT9M114_SET_STATE_RESULT_EINVAL			0x0c
++#define MT9M114_SET_STATE_RESULT_ENOSPC			0x0d
++
++#define MT9M114_SENS_PAD_SOURCE	0
++#define MT9M114_SENS_PADS_NUM	1
++#define MAX_FRAME_RATE 30
++
++enum {
++	MT9M114_QVGA,
++	MT9M114_VGA,
++	MT9M114_WVGA,
++	MT9M114_720P,
++};
++
++struct mt9m114_resolution {
++	u32 width;
++	u32 height;
++	u32 hact;
++	u32 vact;
++};
++
++struct mt9m114_reg {
++	u16 reg;
++	u32 val;
++	s32 width;
++};
++
++struct mt9m114_format {
++	u32 mbus_code;
++	enum v4l2_colorspace colorspace;
++};
++
++/* regulator supplies */
++static const char * const mt9m114_supply_name[] = {
++	"DOVDD",  /* Digital I/O (1.8V) supply */
++	"AVDD",   /* Analog (2.8V) supply */
++	"DVDD",   /* Digital Core (1.8V) supply */
++	"EXTCLK", /* EXT CLOCK supply */
++};
++#define MT9M114_NUM_SUPPLIES ARRAY_SIZE(mt9m114_supply_name)
++
++struct mt9m114 {
++	struct v4l2_subdev sd;
++	struct v4l2_mbus_framefmt fmt;
++	struct v4l2_fract frame_interval;
++	struct media_pad pads[MT9M114_SENS_PADS_NUM];
++
++	struct i2c_client *i2c_client;
++	const struct mt9m114_resolution *curr_mode;
++	const struct mt9m114_resolution *last_mode;
++
++	/* lock to protect all members below */
++	struct mutex lock;
++
++	struct clk *xclk;
++	u32 xclk_freq;
++	bool pending_mode_change;
++
++	struct gpio_desc *reset_gpio;
++	struct gpio_desc *pwdn_gpio;
++
++	struct regulator_bulk_data supplies[MT9M114_NUM_SUPPLIES];
++};
++
++static const struct mt9m114_resolution mt9m114_resolutions[] = {
++	[MT9M114_QVGA] = {
++		.width  = 320,
++		.height = 240,
++		.hact   = 320,
++		.vact   = 240,
++	},
++	[MT9M114_VGA] = {
++		.width  = 640,
++		.height = 480,
++		.hact   = 640,
++		.vact   = 480,
++	},
++	[MT9M114_WVGA] = {
++		.width  = 800,
++		.height = 480,
++		.hact   = 800,
++		.vact   = 480,
++	},
++	[MT9M114_720P] = {
++		.width  = 1280,
++		.height = 720,
++		.hact   = 1280,
++		.vact   = 720,
++	},
++};
++
++static const struct mt9m114_reg mt9m114_init[] = {
++	/* PLL settings */
++	{ MT9M114_LOGICAL_ADDRESS_ACCESS,                0x1000, 2 },
++	{ MT9M114_CAM_SYSCTL_PLL_ENABLE,                 0x01,   1 },
++	{ MT9M114_CAM_SYSCTL_PLL_DIVIDER_M_N,            0x0120, 2 },
++	{ MT9M114_CAM_SYSCTL_PLL_DIVIDER_P,              0x0700, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_PIXCLK,                 0x2DC6C00, 4 },
++
++	/* Sensor optimization */
++	{ 0x316A, 0x8270, 2 },
++	{ 0x316C, 0x8270, 2 },
++	{ 0x3ED0, 0x2305, 2 },
++	{ 0x3ED2, 0x77CF, 2 },
++	{ 0x316E, 0x8202, 2 },
++	{ 0x3180, 0x87FF, 2 },
++	{ 0x30D4, 0x6080, 2 },
++	{ 0xA802, 0x0008, 2 },
++
++	{ 0x3E14, 0xFF39, 2 },
++
++	{ MT9M114_CAM_SENSOR_CFG_ROW_SPEED, 0x0001, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN, 0x00DB, 2},
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX, 0x07C2, 2},
++	{ MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES,  0x02FE, 2},
++	{ MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK, 0x0845, 2},
++
++	/*
++	 *  cam_sensor_cfg_fine_correction = 96
++	 *  cam_sensor_cfg_reg_0_data = 32
++	 *  cam_sensor_control_read_mode = 0
++	 *  cam_crop_window_xoffset = 0
++	 *  cam_crop_window_yoffset = 0
++	 *  cam_crop_cropmode = 3
++	 *  cam_aet_aemode = 0
++	 *  cam_aet_max_frame_rate = 7578
++	 *  cam_aet_min_frame_rate = 7578
++	 *  cam_stat_awb_clip_window_xstart = 0
++	 *  cam_stat_awb_clip_window_ystart = 0
++	 *  cam_stat_ae_initial_window_xstart = 0
++	 *  cam_stat_ae_initial_window_ystart = 0
++	 *  Pad slew rate
++	 *  Must set cam_output_format_yuv_clip for CSI
++	 */
++	{ MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION, 0x0060, 2},
++	{ MT9M114_CAM_SENSOR_CFG_REG_0_DATA, 0x0020, 2},
++	{ MT9M114_CAM_SENSOR_CONTROL_READ_MODE, 0x0000, 2},
++	{ MT9M114_CAM_CROP_WINDOW_XOFFSET, 0x0000, 2},
++	{ MT9M114_CAM_CROP_WINDOW_YOFFSET, 0x0000, 2},
++	{ MT9M114_CAM_CROP_CROPMODE, 0x03, 1},
++	{ MT9M114_CAM_AET_AEMODE, 0x00, 1},
++	{ MT9M114_CAM_AET_MAX_FRAME_RATE, 0x1D9A, 2},
++	{ MT9M114_CAM_AET_MIN_FRAME_RATE, 0x1D9A, 2},
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART, 0x0000, 2},
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART, 0x0000, 2},
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART, 0x0000, 2},
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART, 0x0000, 2},
++	{ MT9M114_PAD_SLEW, 0x0777, 2},
++	{ MT9M114_CAM_OUTPUT_FORMAT_YUV, 0x0038, 2},
++};
++
++static const struct mt9m114_reg mt9m114_regs_qvga[] = {
++	{ MT9M114_LOGICAL_ADDRESS_ACCESS,                0x1000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_START,           0x0000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_START,           0x0000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_END,             0x03CD, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_END,             0x050D, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_ROW_SPEED,              0x0001, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN,    0x01C3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX,    0x03F7, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES,     0x0500, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK,        0x04E2, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION,        0x00E0, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW,         0x01E3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_REG_0_DATA,             0x0020, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_XOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_YOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_WIDTH,                 0x0280, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_HEIGHT,                0x01E0, 2 },
++	{ MT9M114_CAM_CROP_CROPMODE,                     0x03,   1 },
++	{ MT9M114_CAM_OUTPUT_WIDTH,                      0x0140, 2 },
++	{ MT9M114_CAM_OUTPUT_HEIGHT,                     0x00F0, 2 },
++	{ MT9M114_CAM_AET_AEMODE,                        0x00,   1 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XEND,         0x013F, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YEND,         0x00EF, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XEND,       0x003F, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YEND,       0x002F, 2 },
++};
++
++static const struct mt9m114_reg mt9m114_regs_vga[] = {
++	{ MT9M114_LOGICAL_ADDRESS_ACCESS,                0x1000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_START,           0x0000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_START,           0x0000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_END,             0x03CD, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_END,             0x050D, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_ROW_SPEED,              0x0001, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN,    0x01C3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX,    0x03F7, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES,     0x0500, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK,        0x04E2, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION,        0x00E0, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW,         0x01E3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_REG_0_DATA,             0x0020, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_XOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_YOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_WIDTH,                 0x0280, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_HEIGHT,                0x01E0, 2 },
++	{ MT9M114_CAM_CROP_CROPMODE,                     0x03,   1 },
++	{ MT9M114_CAM_OUTPUT_WIDTH,                      0x0280, 2 },
++	{ MT9M114_CAM_OUTPUT_HEIGHT,                     0x01E0, 2 },
++	{ MT9M114_CAM_AET_AEMODE,                        0x00,   1 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XEND,         0x027F, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YEND,         0x01DF, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XEND,       0x007F, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YEND,       0x005F, 2 },
++};
++
++static const struct mt9m114_reg mt9m114_regs_wvga[] = {
++	{ MT9M114_LOGICAL_ADDRESS_ACCESS,                0x1000, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_START,           0x00F4, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_START,           0x00F4, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_END,             0x02DB, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_END,             0x041B, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_ROW_SPEED,              0x0001, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN,    0x00DB, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX,    0x045F, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES,     0x0500, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK,        0x04E2, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION,        0x0060, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW,         0x01E3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_REG_0_DATA,             0x0020, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_XOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_YOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_WIDTH,                 0x0320, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_HEIGHT,                0x01E0, 2 },
++	{ MT9M114_CAM_CROP_CROPMODE,                     0x03,   1 },
++	{ MT9M114_CAM_OUTPUT_WIDTH,                      0x0320, 2 },
++	{ MT9M114_CAM_OUTPUT_HEIGHT,                     0x01E0, 2 },
++	{ MT9M114_CAM_AET_AEMODE,                        0x00,   1 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XEND,         0x031F, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YEND,         0x01DF, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XEND,       0x009F, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YEND,       0x005F, 2 },
++};
++
++static const struct mt9m114_reg mt9m114_regs_720p[] = {
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_START,           0x0004, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_START,           0x0004, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_Y_ADDR_END,             0x03CB, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_X_ADDR_END,             0x050B, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_ROW_SPEED,              0x0001, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MIN,    0x00DB, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_INTEG_TIME_MAX,    0x05B3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES,     0x03EE, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK,        0x0636, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION,        0x0060, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW,         0x03C3, 2 },
++	{ MT9M114_CAM_SENSOR_CFG_REG_0_DATA,             0x0020, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_XOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_YOFFSET,               0x0000, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_WIDTH,                 0x0500, 2 },
++	{ MT9M114_CAM_CROP_WINDOW_HEIGHT,                0x03C0, 2 },
++	{ MT9M114_CAM_CROP_CROPMODE,                     0x03,   1 },
++	{ MT9M114_CAM_OUTPUT_WIDTH,                      0x0500, 2 },
++	{ MT9M114_CAM_OUTPUT_HEIGHT,                     0x02D0, 2 },
++	{ MT9M114_CAM_AET_AEMODE,                        0x00,   1 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YSTART,       0x0000, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_XEND,         0x04FF, 2 },
++	{ MT9M114_CAM_STAT_AWB_CLIP_WINDOW_YEND,         0x02CF, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YSTART,     0x0000, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_XEND,       0x00FF, 2 },
++	{ MT9M114_CAM_STAT_AE_INITIAL_WINDOW_YEND,       0x008F, 2 },
++};
++
++static const struct mt9m114_format mt9m114_formats[] = {
++	{
++		.mbus_code      = MEDIA_BUS_FMT_UYVY8_2X8,
++		.colorspace     = V4L2_COLORSPACE_JPEG,
++	}, {
++		.mbus_code      = MEDIA_BUS_FMT_YUYV8_2X8,
++		.colorspace     = V4L2_COLORSPACE_JPEG,
++	}, {
++		.mbus_code      = MEDIA_BUS_FMT_RGB565_2X8_LE,
++		.colorspace     = V4L2_COLORSPACE_SRGB,
++	}, {
++		.mbus_code      = MEDIA_BUS_FMT_RGB565_1X16,
++		.colorspace     = V4L2_COLORSPACE_SRGB,
++	},
++};
++
++static inline struct mt9m114 *to_mt9m114(struct v4l2_subdev *sd)
++{
++	return container_of(sd, struct mt9m114, sd);
++}
++
++static int mt9m114_write8(struct i2c_client *client, u16 reg, u8 val)
++{
++	int ret;
++	struct {
++		u16 reg;
++		u8 val;
++	} __packed buf;
++	struct i2c_msg msg = {
++		.addr   = client->addr,
++		.flags  = 0,
++		.len    = 3,
++		.buf    = (u8 *)&buf,
++	};
++	buf.reg = swab16(reg);
++	buf.val = val;
++
++	ret = i2c_transfer(client->adapter, &msg, 1);
++	if (ret < 0) {
++		v4l_err(client, "Failed to write register 0x%04x!\n", reg);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int mt9m114_read16(struct i2c_client *client, u16 reg, u16 *val)
++{
++	int ret;
++	u16 rval;
++	struct i2c_msg msg[] = {
++		{
++			.addr   = client->addr,
++			.flags  = 0,
++			.len    = 2,
++			.buf    = (u8 *)&reg,
++		},
++		{
++			.addr   = client->addr,
++			.flags  = I2C_M_RD,
++			.len    = 2,
++			.buf    = (u8 *)&rval,
++		},
++	};
++
++	reg = swab16(reg);
++
++	ret = i2c_transfer(client->adapter, msg, 2);
++	if (ret < 0) {
++		v4l_err(client, "Failed to read register 0x%04x!\n", reg);
++		return ret;
++	}
++	*val = swab16(rval);
++
++	return 0;
++}
++
++static int mt9m114_write16(struct i2c_client *client, u16 reg, u16 val)
++{
++	int ret;
++	struct {
++		u16 reg;
++		u16 val;
++	} __packed buf;
++	struct i2c_msg msg = {
++		.addr   = client->addr,
++		.flags  = 0,
++		.len    = 4,
++		.buf    = (u8 *)&buf,
++	};
++	buf.reg = swab16(reg);
++	buf.val = swab16(val);
++
++	ret = i2c_transfer(client->adapter, &msg, 1);
++	if (ret < 0) {
++		v4l_err(client, "Failed to write register 0x%04x!\n", reg);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int mt9m114_write32(struct i2c_client *client, u16 reg, u32 val)
++{
++	int ret;
++	struct {
++		u16 reg;
++		u32 val;
++	} __packed buf;
++	struct i2c_msg msg = {
++		.addr   = client->addr,
++		.flags  = 0,
++		.len    = 6,
++		.buf    = (u8 *)&buf,
++	};
++	buf.reg = swab16(reg);
++	buf.val = swab32(val);
++
++	ret = i2c_transfer(client->adapter, &msg, 1);
++	if (ret < 0) {
++		v4l_err(client, "Failed to write register 0x%04x!\n", reg);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int mt9m114_writeregs(struct i2c_client *client,
++		const struct mt9m114_reg *regs, int len)
++{
++	int i;
++
++	for (i = 0; i < len; i++) {
++		switch (regs[i].width) {
++		case 1:
++			mt9m114_write8(client, regs[i].reg, regs[i].val);
++			break;
++		case 2:
++			mt9m114_write16(client, regs[i].reg, regs[i].val);
++			break;
++		case 4:
++			mt9m114_write32(client, regs[i].reg, regs[i].val);
++			break;
++		default:
++			return -EINVAL;
++		}
++	}
++	return 0;
++}
++
++static int mt9m114_set_res(struct i2c_client *client, u32 width, u32 height)
++{
++	u16 read_mode;
++
++	if ((width  == mt9m114_resolutions[MT9M114_QVGA].width) &&
++	    (height == mt9m114_resolutions[MT9M114_QVGA].height)) {
++		mt9m114_writeregs(client, mt9m114_regs_qvga,
++				ARRAY_SIZE(mt9m114_regs_qvga));
++		mt9m114_read16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, &read_mode);
++		read_mode = (read_mode & 0xfccf) | 0x0330;
++		mt9m114_write16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, read_mode);
++	} else if ((width == mt9m114_resolutions[MT9M114_VGA].width) &&
++		   (height == mt9m114_resolutions[MT9M114_VGA].height)) {
++		mt9m114_writeregs(client, mt9m114_regs_vga,
++				ARRAY_SIZE(mt9m114_regs_vga));
++		mt9m114_read16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, &read_mode);
++		read_mode = (read_mode & 0xfccf) | 0x0330;
++		mt9m114_write16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, read_mode);
++	} else if ((width == mt9m114_resolutions[MT9M114_WVGA].width)
++		&& (height == mt9m114_resolutions[MT9M114_WVGA].height)) {
++		mt9m114_writeregs(client, mt9m114_regs_wvga,
++				ARRAY_SIZE(mt9m114_regs_wvga));
++		mt9m114_read16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, &read_mode);
++		read_mode &= 0xfccf;
++		mt9m114_write16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, read_mode);
++	} else if ((width == mt9m114_resolutions[MT9M114_720P].width)
++		&& (height == mt9m114_resolutions[MT9M114_720P].height)) {
++		mt9m114_writeregs(client, mt9m114_regs_720p,
++				ARRAY_SIZE(mt9m114_regs_720p));
++		mt9m114_read16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, &read_mode);
++		read_mode &= 0xfccf;
++		mt9m114_write16(client,
++			MT9M114_CAM_SENSOR_CONTROL_READ_MODE, read_mode);
++	} else {
++		v4l_err(client, "Failed to select resolution!\n");
++		return -EINVAL;
++	}
++	return 0;
++}
++
++static int mt9m114_set_state(struct i2c_client *client, u8 next_state)
++{
++	int timeout = 100, ret;
++	u16 command;
++
++	/* set the next desired state */
++	ret = mt9m114_write8(client, MT9M114_SYSMGR_NEXT_STATE, next_state);
++	if (ret < 0)
++		return ret;
++
++	/* wait for the state transition to complete */
++	while (timeout) {
++		ret = mt9m114_read16(client,
++				MT9M114_COMMAND_REGISTER, &command);
++		if (ret < 0)
++			return ret;
++		if (!(command & MT9M114_COMMAND_REGISTER_SET_STATE))
++			break;
++		msleep(10);
++		timeout--;
++	}
++
++	if (!timeout) {
++		v4l_err(client, "Failed to poll command register\n");
++		return -ETIMEDOUT;
++	}
++
++	/* start state transition */
++	ret = mt9m114_write16(client, MT9M114_COMMAND_REGISTER,
++			(MT9M114_COMMAND_REGISTER_OK
++			 | MT9M114_COMMAND_REGISTER_SET_STATE));
++	if (ret < 0)
++		return ret;
++
++	timeout = 100;
++	while (timeout) {
++		ret = mt9m114_read16(client,
++				MT9M114_COMMAND_REGISTER, &command);
++		if (ret < 0)
++			return ret;
++		if (!(command & MT9M114_COMMAND_REGISTER_SET_STATE))
++			break;
++		msleep(10);
++		timeout--;
++	}
++
++	if (!timeout) {
++		v4l_err(client, "Failed to poll command register2\n");
++		return -ETIMEDOUT;
++	}
++
++	/* check if the command is successful */
++	ret = mt9m114_read16(client,
++			MT9M114_COMMAND_REGISTER, &command);
++	if (ret < 0)
++		return ret;
++	if (command & MT9M114_COMMAND_REGISTER_OK)
++		return 0;
++	else
++		return -EFAULT;
++}
++
++static int mt9m114_s_stream(struct v4l2_subdev *sd, int enable)
++{
++	struct i2c_client *client = v4l2_get_subdevdata(sd);
++	struct mt9m114 *sensor = to_mt9m114(sd);
++	const struct mt9m114_resolution *mode = sensor->curr_mode;
++	int ret;
++
++	if (enable) {
++		if (sensor->pending_mode_change) {
++			sensor->last_mode = mode;
++			ret = mt9m114_set_res(client, mode->width, mode->height);
++			if (ret < 0)
++				return ret;
++			ret = mt9m114_set_state(client,
++					MT9M114_SYS_STATE_ENTER_CONFIG_CHANGE);
++			if (ret) {
++				dev_err(&client->dev,
++					"Failed to configure initialization state\n");
++				return ret;
++			}
++		}
++		ret = mt9m114_set_state(client,
++				MT9M114_SYS_STATE_START_STREAMING);
++	} else {
++		ret = mt9m114_set_state(client,
++				MT9M114_SYS_STATE_ENTER_SUSPEND);
++	}
++
++	if (ret < 0) {
++		dev_err(&client->dev, "set state config change fail\n");
++		return ret;
++	}
++	return 0;
++}
++
++static const struct mt9m114_resolution *
++mt9m114_find_mode(struct mt9m114 *sensor, u32 width, u32 height)
++{
++	struct device *dev = &sensor->i2c_client->dev;
++	const struct mt9m114_resolution *mode;
++
++	mode = v4l2_find_nearest_size(mt9m114_resolutions,
++				      ARRAY_SIZE(mt9m114_resolutions),
++				      hact, vact,
++				      width, height);
++	if (!mode) {
++		dev_err(dev, "Invalid resolution: w/h=(%d, %d)\n", width, height);
++		return NULL;
++	}
++
++	return mode;
++}
++
++static int mt9m114_s_power(struct v4l2_subdev *sd, int on)
++{
++	return 0;
++}
++
++static const struct v4l2_subdev_core_ops mt9m114_core_ops = {
++	.s_power = mt9m114_s_power,
++};
++
++static int mt9m114_g_frame_interval(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_frame_interval *fi)
++{
++	struct mt9m114 *sensor = to_mt9m114(sd);
++
++	mutex_lock(&sensor->lock);
++	fi->interval = sensor->frame_interval;
++	mutex_unlock(&sensor->lock);
++
++	return 0;
++}
++
++static int mt9m114_s_frame_interval(struct v4l2_subdev *sd,
++				   struct v4l2_subdev_frame_interval *fi)
++{
++	return 0;
++}
++
++static int mt9m114_enum_mbus_code(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *sd_state,
++				 struct v4l2_subdev_mbus_code_enum *code)
++{
++	if (code->pad != 0)
++		return -EINVAL;
++	if (code->index >= ARRAY_SIZE(mt9m114_formats))
++		return -EINVAL;
++
++	code->code = mt9m114_formats[code->index].mbus_code;
++	return 0;
++}
++
++static int mt9m114_get_fmt(struct v4l2_subdev *sd,
++			  struct v4l2_subdev_state *sd_state,
++			  struct v4l2_subdev_format *format)
++{
++	struct mt9m114 *sensor = to_mt9m114(sd);
++	struct v4l2_mbus_framefmt *fmt;
++
++	if (format->pad != 0)
++		return -EINVAL;
++
++	mutex_lock(&sensor->lock);
++	fmt = &sensor->fmt;
++	format->format = *fmt;
++	mutex_unlock(&sensor->lock);
++
++	return 0;
++}
++
++static int mt9m114_set_fmt(struct v4l2_subdev *sd,
++			  struct v4l2_subdev_state *sd_state,
++			  struct v4l2_subdev_format *format)
++{
++	struct mt9m114 *sensor = to_mt9m114(sd);
++	struct v4l2_mbus_framefmt *fmt = &sensor->fmt;
++	struct v4l2_mbus_framefmt *mbus_fmt = &format->format;
++	const struct mt9m114_resolution *new_mode;
++
++	if (format->pad != 0)
++		return -EINVAL;
++
++	mutex_lock(&sensor->lock);
++	new_mode = mt9m114_find_mode(sensor, mbus_fmt->width, mbus_fmt->height);
++	if (!new_mode)
++	      return -EINVAL;
++
++	sensor->curr_mode = new_mode;
++	if (sensor->curr_mode != sensor->last_mode) {
++		sensor->pending_mode_change = true;
++		memcpy(fmt, mbus_fmt, sizeof(*fmt));
++		fmt->width  = new_mode->hact;
++		fmt->height = new_mode->vact;
++	}
++
++	mutex_unlock(&sensor->lock);
++	return 0;
++}
++
++static int mt9m114_enum_frame_size(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *sd_state,
++				  struct v4l2_subdev_frame_size_enum *fse)
++{
++	struct mt9m114 *sensor = to_mt9m114(sd);
++
++	if (fse->pad != 0)
++		return -EINVAL;
++
++	if (fse->index >= ARRAY_SIZE(mt9m114_resolutions))
++		return -EINVAL;
++
++	mutex_lock(&sensor->lock);
++	fse->min_width  = mt9m114_resolutions[fse->index].width;
++	fse->min_height = mt9m114_resolutions[fse->index].height;
++	fse->max_width  = mt9m114_resolutions[fse->index].width;
++	fse->max_height = mt9m114_resolutions[fse->index].height;
++	mutex_unlock(&sensor->lock);
++
++	return 0;
++}
++
++static const struct v4l2_subdev_pad_ops mt9m114_pad_ops = {
++	.enum_mbus_code  = mt9m114_enum_mbus_code,
++	.enum_frame_size = mt9m114_enum_frame_size,
++	.get_fmt         = mt9m114_get_fmt,
++	.set_fmt         = mt9m114_set_fmt,
++};
++
++static const struct v4l2_subdev_video_ops mt9m114_video_ops = {
++	.g_frame_interval = mt9m114_g_frame_interval,
++	.s_frame_interval = mt9m114_s_frame_interval,
++	.s_stream         = mt9m114_s_stream,
++};
++
++static const struct v4l2_subdev_ops mt9m114_subdev_ops = {
++	.core  = &mt9m114_core_ops,
++	.video = &mt9m114_video_ops,
++	.pad   = &mt9m114_pad_ops,
++};
++
++static int mt9m114_get_regulators(struct mt9m114 *sensor)
++{
++	int i;
++
++	for (i = 0; i < MT9M114_NUM_SUPPLIES; i++)
++		sensor->supplies[i].supply = mt9m114_supply_name[i];
++
++	return devm_regulator_bulk_get(&sensor->i2c_client->dev,
++				       MT9M114_NUM_SUPPLIES,
++				       sensor->supplies);
++}
++
++static int mt9m114_set_power(struct mt9m114 *sensor, bool on)
++{
++	struct i2c_client *client = sensor->i2c_client;
++	int ret;
++
++	if (on) {
++		ret = regulator_bulk_enable(MT9M114_NUM_SUPPLIES, sensor->supplies);
++		if (ret < 0) {
++			dev_err(&client->dev, "failed to enable regulators\n");
++			return ret;
++		}
++	} else {
++		ret = regulator_bulk_disable(MT9M114_NUM_SUPPLIES, sensor->supplies);
++		if (ret < 0) {
++			dev_err(&client->dev, "failed to disable regulators\n");
++			return ret;
++		}
++	}
++	return 0;
++}
++
++static int mt9m114_get_gpios(struct mt9m114 *sensor)
++{
++	struct device *dev = &sensor->i2c_client->dev;
++	struct gpio_desc *gpiod;
++	int ret;
++
++	/* request optional power down pin */
++	gpiod = devm_gpiod_get_optional(dev, "powerdown", GPIOD_OUT_HIGH);
++	if (IS_ERR(gpiod)) {
++		ret = PTR_ERR(gpiod);
++		dev_err(dev, "fail to get power down pin, ret=%d\n", ret);
++		return ret;
++	}
++	sensor->pwdn_gpio = gpiod;
++
++	/* request optional reset pin */
++	gpiod = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(gpiod)) {
++		ret = PTR_ERR(gpiod);
++		dev_err(dev, "fail to get reset pin, ret=%d\n", ret);
++		return ret;
++	}
++	sensor->reset_gpio = gpiod;
++
++	return 0;
++}
++
++static void mt9m114_hw_reset(struct mt9m114 *sensor)
++{
++	gpiod_set_value_cansleep(sensor->reset_gpio, 0);
++	msleep(50);
++	gpiod_set_value_cansleep(sensor->reset_gpio, 1);
++	msleep(45);
++}
++
++static int mt9m114_get_chip_id(struct mt9m114 *sensor)
++{
++	struct i2c_client *client = sensor->i2c_client;
++	u32 ret;
++	u16 chip_id;
++
++	ret = mt9m114_read16(client, MT9M114_CHIP_ID, &chip_id);
++	if (ret < 0) {
++		v4l_err(client, "Failed to get chip id\n");
++		return -ENODEV;
++	}
++	if (chip_id != 0x2481) {
++		v4l_err(client, "chip id 0x%04x mismatch\n", chip_id);
++		return -ENODEV;
++	}
++	v4l_info(client, "chip found @ 0x%02x (%s)\n",
++		 client->addr << 1, client->adapter->name);
++
++	return 0;
++}
++
++static int mt9m114_soft_reset(struct mt9m114 *sensor)
++{
++	struct i2c_client *client = sensor->i2c_client;
++	int ret;
++
++	/* reset the sensor */
++	ret = mt9m114_write16(client, MT9M114_SOFT_RESET, 0x0001);
++	if (ret < 0) {
++		v4l_err(client, "Failed to reset the sensor\n");
++		return ret;
++	}
++	mdelay(1);
++	mt9m114_write16(client, MT9M114_SOFT_RESET, 0x0000);
++	mdelay(45);
++
++	return 0;
++}
++
++static int mt9m114_init_config(struct mt9m114 *sensor)
++{
++	struct i2c_client *client = sensor->i2c_client;
++	struct v4l2_mbus_framefmt *fmt = &sensor->fmt;
++	u16 output_fmt;
++	int ret;
++
++	ret = mt9m114_writeregs(client, mt9m114_init, ARRAY_SIZE(mt9m114_init));
++	if (ret < 0) {
++		v4l_err(client, "Failed to initialize the sensor\n");
++		return ret;
++	}
++
++	/* PIXCLK is only generated for valid output pixels. */
++	mt9m114_write16(client, MT9M114_CAM_PORT_OUTPUT_CONTROL, 0x8020);
++
++	/* Config 720P as default resolution */
++	ret = mt9m114_set_res(client, fmt->width, fmt->height);
++	if (ret < 0)
++		return ret;
++
++	/* Config UYVY as default format
++	 * 0xC86C: [9:8] 0 -> YUV
++	 *               1 -> RGB
++	 *               2 -> Bayer
++	 *               3 -> None
++	 *           [4] cam_output_format_bt656_crop_scale_disable
++	 *           [1] Swap output pixel hi byte with low byte
++	 *           [0] Swap R/B or Cr/Cb channels
++	 */
++	mt9m114_read16(client, MT9M114_CAM_OUTPUT_FORMAT, &output_fmt);
++	output_fmt |= 0x0002;
++	ret = mt9m114_write16(client, MT9M114_CAM_OUTPUT_FORMAT, output_fmt);
++	if (ret < 0)
++		return ret;
++
++	ret = mt9m114_set_state(client, MT9M114_SYS_STATE_ENTER_CONFIG_CHANGE);
++	if (ret) {
++		v4l_err(client, "Failed to configure initialization state\n");
++		return ret;
++	}
++
++	return 0;
++}
++
++static int mt9m114_link_setup(struct media_entity *entity,
++			      const struct media_pad *local,
++			      const struct media_pad *remote, u32 flags)
++{
++	return 0;
++}
++
++static const struct media_entity_operations mt9m114_sd_media_ops = {
++	.link_setup = mt9m114_link_setup,
++};
++
++static int mt9m114_probe(struct i2c_client *client)
++{
++	struct mt9m114 *sensor;
++	struct v4l2_subdev *sd;
++	struct v4l2_mbus_framefmt *fmt;
++	int ret;
++
++	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
++	if (!sensor)
++		return -ENOMEM;
++
++	sensor->i2c_client = client;
++
++	ret = mt9m114_get_regulators(sensor);
++	if (ret < 0) {
++		dev_err(&client->dev, "failed to get regulators\n");
++		return ret;
++	}
++
++	ret = mt9m114_set_power(sensor, true);
++	if (ret < 0)
++		return ret;
++
++	ret = mt9m114_get_gpios(sensor);
++	if (ret)
++		goto fail;
++
++	mt9m114_hw_reset(sensor);
++
++	ret = mt9m114_get_chip_id(sensor);
++	if (ret)
++		goto fail;
++
++	ret = mt9m114_soft_reset(sensor);
++	if (ret)
++		goto fail;
++
++	/*
++	 * config default format
++	 */
++	sensor->curr_mode = &mt9m114_resolutions[MT9M114_720P];
++	sensor->last_mode = sensor->curr_mode;
++	fmt = &sensor->fmt;
++	fmt->code         = MEDIA_BUS_FMT_UYVY8_2X8;
++	fmt->colorspace   = V4L2_COLORSPACE_SRGB;
++	fmt->ycbcr_enc    = V4L2_MAP_YCBCR_ENC_DEFAULT(fmt->colorspace);
++	fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
++	fmt->xfer_func    = V4L2_MAP_XFER_FUNC_DEFAULT(fmt->colorspace);
++	fmt->width        = sensor->curr_mode->width;
++	fmt->height       = sensor->curr_mode->height;
++	fmt->field        = V4L2_FIELD_NONE;
++	sensor->frame_interval.numerator   = 1;
++	sensor->frame_interval.denominator = 30;
++
++	ret = mt9m114_init_config(sensor);
++	if (ret)
++		goto fail;
++
++	sd = &sensor->sd;
++	sd->flags          |= V4L2_SUBDEV_FL_HAS_EVENTS;
++	sd->entity.ops      = &mt9m114_sd_media_ops;
++	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
++	v4l2_i2c_subdev_init(sd, client, &mt9m114_subdev_ops);
++
++	sensor->pads[MT9M114_SENS_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
++	ret = media_entity_pads_init(&sd->entity, MT9M114_SENS_PADS_NUM, sensor->pads);
++	if (ret)
++		goto fail;
++
++	ret = v4l2_async_register_subdev_sensor(sd);
++	if (ret)
++		goto fail;
++
++	v4l2_info(client, "MT9M114 is found\n");
++	return 0;
++
++fail:
++	mt9m114_set_power(sensor, false);
++	return ret;
++}
++
++static int mt9m114_remove(struct i2c_client *client)
++{
++	struct v4l2_subdev *sd = i2c_get_clientdata(client);
++	struct mt9m114 *sensor = to_mt9m114(sd);
++
++	v4l2_device_unregister_subdev(sd);
++	kfree(sensor);
++	return 0;
++}
++
++static const struct i2c_device_id mt9m114_id[] = {
++	{"mt9m114", 0},
++	{},
++};
++
++MODULE_DEVICE_TABLE(i2c, mt9m114_id);
++
++static const struct of_device_id mt9m114_dt_ids[] = {
++	{ .compatible = "on,mt9m114" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, mt9m114_dt_ids);
++
++static struct i2c_driver mt9m114_i2c_driver = {
++	.driver = {
++		.owner  = THIS_MODULE,
++		.name   = "mt9m114",
++		.of_match_table = mt9m114_dt_ids,
++	},
++	.probe_new = mt9m114_probe,
++	.remove    = mt9m114_remove,
++	.id_table  = mt9m114_id,
++};
++
++module_i2c_driver(mt9m114_i2c_driver);
++
++MODULE_DESCRIPTION("Aptina MT9M114 sensor driver");
++MODULE_AUTHOR("Scott Jiang <Scott.Jiang.Linux@gmail.com>");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/media/i2c/ov2740.c b/drivers/media/i2c/ov2740.c
+index 4b1ab3e07..934c9d65c 100644
+--- a/drivers/media/i2c/ov2740.c
++++ b/drivers/media/i2c/ov2740.c
+@@ -603,10 +603,8 @@ static int ov2740_init_controls(struct ov2740 *ov2740)
+ 				     V4L2_CID_TEST_PATTERN,
+ 				     ARRAY_SIZE(ov2740_test_pattern_menu) - 1,
+ 				     0, 0, ov2740_test_pattern_menu);
+-	if (ctrl_hdlr->error) {
+-		v4l2_ctrl_handler_free(ctrl_hdlr);
++	if (ctrl_hdlr->error)
+ 		return ctrl_hdlr->error;
+-	}
+ 
+ 	ov2740->sd.ctrl_handler = ctrl_hdlr;
+ 
+diff --git a/drivers/media/i2c/ov5640.c b/drivers/media/i2c/ov5640.c
+index a14155253..699a1e45b 100644
+--- a/drivers/media/i2c/ov5640.c
++++ b/drivers/media/i2c/ov5640.c
+@@ -112,7 +112,8 @@ enum ov5640_mode_id {
+ };
+ 
+ enum ov5640_frame_rate {
+-	OV5640_15_FPS = 0,
++	OV5640_08_FPS = 0,
++	OV5640_15_FPS,
+ 	OV5640_30_FPS,
+ 	OV5640_60_FPS,
+ 	OV5640_NUM_FRAMERATES,
+@@ -156,6 +157,7 @@ MODULE_PARM_DESC(virtual_channel,
+ 		 "MIPI CSI-2 virtual channel (0..3), default 0");
+ 
+ static const int ov5640_framerates[] = {
++	[OV5640_08_FPS] = 8,
+ 	[OV5640_15_FPS] = 15,
+ 	[OV5640_30_FPS] = 30,
+ 	[OV5640_60_FPS] = 60,
+@@ -359,10 +361,12 @@ static const struct reg_value ov5640_init_setting_30fps_VGA[] = {
+ 	{0x583b, 0x28, 0, 0}, {0x583c, 0x42, 0, 0}, {0x583d, 0xce, 0, 0},
+ 	{0x5025, 0x00, 0, 0}, {0x3a0f, 0x30, 0, 0}, {0x3a10, 0x28, 0, 0},
+ 	{0x3a1b, 0x30, 0, 0}, {0x3a1e, 0x26, 0, 0}, {0x3a11, 0x60, 0, 0},
+-	{0x3a1f, 0x14, 0, 0}, {0x3008, 0x02, 0, 0}, {0x3c00, 0x04, 0, 300},
++	{0x3a1f, 0x14, 0, 0}, {0x3008, 0x42, 0, 0}, {0x3c00, 0x04, 0, 300},
++	{0x302c, 0xc2, 0, 0},
+ };
+ 
+ static const struct reg_value ov5640_setting_VGA_640_480[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -379,9 +383,11 @@ static const struct reg_value ov5640_setting_VGA_640_480[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_XGA_1024_768[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -396,11 +402,13 @@ static const struct reg_value ov5640_setting_XGA_1024_768[] = {
+ 	{0x3a0a, 0x00, 0, 0}, {0x3a0b, 0xf6, 0, 0}, {0x3a0e, 0x03, 0, 0},
+ 	{0x3a0d, 0x04, 0, 0}, {0x3a14, 0x03, 0, 0}, {0x3a15, 0xd8, 0, 0},
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+-	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
++	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x20, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10}
+ };
+ 
+ static const struct reg_value ov5640_setting_QVGA_320_240[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -417,6 +425,7 @@ static const struct reg_value ov5640_setting_QVGA_320_240[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_QQVGA_160_120[] = {
+@@ -438,6 +447,7 @@ static const struct reg_value ov5640_setting_QQVGA_160_120[] = {
+ };
+ 
+ static const struct reg_value ov5640_setting_QCIF_176_144[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -454,9 +464,11 @@ static const struct reg_value ov5640_setting_QCIF_176_144[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_NTSC_720_480[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -473,9 +485,11 @@ static const struct reg_value ov5640_setting_NTSC_720_480[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_PAL_720_576[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -492,9 +506,11 @@ static const struct reg_value ov5640_setting_PAL_720_576[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
++	{0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_720P_1280_720[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x07, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x31, 0, 0},
+@@ -511,6 +527,7 @@ static const struct reg_value ov5640_setting_720P_1280_720[] = {
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0},
+ 	{0x4407, 0x04, 0, 0}, {0x460b, 0x37, 0, 0}, {0x460c, 0x20, 0, 0},
+ 	{0x3824, 0x04, 0, 0}, {0x5001, 0x83, 0, 0},
++	{0x3008, 0x02, 0, 15},
+ };
+ 
+ static const struct reg_value ov5640_setting_1080P_1920_1080[] = {
+@@ -541,10 +558,11 @@ static const struct reg_value ov5640_setting_1080P_1920_1080[] = {
+ 	{0x3a0e, 0x03, 0, 0}, {0x3a0d, 0x04, 0, 0}, {0x3a14, 0x04, 0, 0},
+ 	{0x3a15, 0x60, 0, 0}, {0x4407, 0x04, 0, 0},
+ 	{0x460b, 0x37, 0, 0}, {0x460c, 0x20, 0, 0}, {0x3824, 0x04, 0, 0},
+-	{0x4005, 0x1a, 0, 0},
++	{0x4005, 0x1a, 0, 0}, {0x3008, 0x02, 0, 10},
+ };
+ 
+ static const struct reg_value ov5640_setting_QSXGA_2592_1944[] = {
++	{0x3008, 0x42, 0, 0},
+ 	{0x3c07, 0x08, 0, 0},
+ 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+ 	{0x3814, 0x11, 0, 0},
+@@ -559,8 +577,9 @@ static const struct reg_value ov5640_setting_QSXGA_2592_1944[] = {
+ 	{0x3a0a, 0x00, 0, 0}, {0x3a0b, 0xf6, 0, 0}, {0x3a0e, 0x03, 0, 0},
+ 	{0x3a0d, 0x04, 0, 0}, {0x3a14, 0x03, 0, 0}, {0x3a15, 0xd8, 0, 0},
+ 	{0x4001, 0x02, 0, 0}, {0x4004, 0x06, 0, 0},
+-	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
++	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x20, 0, 0},
+ 	{0x3824, 0x02, 0, 0}, {0x5001, 0x83, 0, 70},
++	{0x3008, 0x02, 0, 20},
+ };
+ 
+ /* power-on sensor init reg table */
+@@ -942,6 +961,52 @@ static unsigned long ov5640_calc_sys_clk(struct ov5640_dev *sensor,
+ 	return best;
+ }
+ 
++static int ov5640_check_valid_mode(struct ov5640_dev *sensor,
++				   const struct ov5640_mode_info *mode,
++				   enum ov5640_frame_rate rate)
++{
++	struct i2c_client *client = sensor->i2c_client;
++	int ret = 0;
++
++	switch (mode->id) {
++	case OV5640_MODE_QQVGA_160_120:
++	case OV5640_MODE_QCIF_176_144:
++	case OV5640_MODE_QVGA_320_240:
++	case OV5640_MODE_NTSC_720_480:
++	case OV5640_MODE_PAL_720_576 :
++	case OV5640_MODE_XGA_1024_768:
++	case OV5640_MODE_720P_1280_720:
++		if ((rate != OV5640_15_FPS) &&
++		    (rate != OV5640_30_FPS))
++			ret = -EINVAL;
++		break;
++	case OV5640_MODE_VGA_640_480:
++		if ((rate != OV5640_15_FPS) &&
++		    (rate != OV5640_30_FPS))
++			ret = -EINVAL;
++		break;
++	case OV5640_MODE_1080P_1920_1080:
++		if (sensor->ep.bus_type == V4L2_MBUS_CSI2_DPHY) {
++			if ((rate != OV5640_15_FPS) &&
++			    (rate != OV5640_30_FPS))
++				ret = -EINVAL;
++		 } else {
++			if ((rate != OV5640_15_FPS))
++				ret = -EINVAL;
++		 }
++		break;
++	case OV5640_MODE_QSXGA_2592_1944:
++		if (rate != OV5640_08_FPS)
++			ret = -EINVAL;
++		break;
++	default:
++		dev_err(&client->dev, "Invalid mode (%d)\n", mode->id);
++		ret = -EINVAL;
++	}
++
++	return ret;
++}
++
+ /*
+  * ov5640_set_mipi_pclk() - Calculate the clock tree configuration values
+  *			    for the MIPI CSI-2 output.
+@@ -1051,7 +1116,7 @@ static int ov5640_set_dvp_pclk(struct ov5640_dev *sensor, unsigned long rate)
+ 			 &bit_div, &pclk_div);
+ 
+ 	if (bit_div == 2)
+-		bit_div = 8;
++		bit_div = 0xA;
+ 
+ 	ret = ov5640_mod_reg(sensor, OV5640_REG_SC_PLL_CTRL0,
+ 			     0x0f, bit_div);
+@@ -1251,8 +1316,18 @@ static int ov5640_set_stream_dvp(struct ov5640_dev *sensor, bool on)
+ 
+ static int ov5640_set_stream_mipi(struct ov5640_dev *sensor, bool on)
+ {
++	const struct ov5640_mode_info *mode;
++	u8 line_sync;
+ 	int ret;
+ 
++	mode = sensor->current_mode;
++	line_sync = (mode->id == OV5640_MODE_XGA_1024_768 ||
++		     mode->id == OV5640_MODE_QSXGA_2592_1944) ? 0 : 1;
++	ret = ov5640_write_reg(sensor, OV5640_REG_MIPI_CTRL00,
++			       0x24 | (line_sync << 4));
++	if (ret)
++		return ret;
++
+ 	/*
+ 	 * Enable/disable the MIPI interface
+ 	 *
+@@ -1275,8 +1350,18 @@ static int ov5640_set_stream_mipi(struct ov5640_dev *sensor, bool on)
+ 	if (ret)
+ 		return ret;
+ 
+-	return ov5640_write_reg(sensor, OV5640_REG_FRAME_CTRL01,
++	ret = ov5640_write_reg(sensor, OV5640_REG_FRAME_CTRL01,
+ 				on ? 0x00 : 0x0f);
++	if (ret)
++		return ret;
++
++	ret = ov5640_write_reg(sensor, OV5640_REG_SYS_CTRL0,
++				on ? 0x02 : 0x42);
++	if (ret)
++		return ret;
++
++	msleep(100);
++	return ret;
+ }
+ 
+ static int ov5640_get_sysclk(struct ov5640_dev *sensor)
+@@ -1561,12 +1646,9 @@ ov5640_find_mode(struct ov5640_dev *sensor, enum ov5640_frame_rate fr,
+ 				      width, height);
+ 
+ 	if (!mode ||
+-	    (!nearest && (mode->hact != width || mode->vact != height)))
+-		return NULL;
+-
+-	/* Check to see if the current mode exceeds the max frame rate */
+-	if (ov5640_framerates[fr] > ov5640_framerates[mode->max_fps])
++	    (!nearest && (mode->hact != width || mode->vact != height))) {
+ 		return NULL;
++	}
+ 
+ 	return mode;
+ }
+@@ -1946,6 +2028,7 @@ static void ov5640_set_power_off(struct ov5640_dev *sensor)
+ 	ov5640_power(sensor, false);
+ 	regulator_bulk_disable(OV5640_NUM_SUPPLIES, sensor->supplies);
+ 	clk_disable_unprepare(sensor->xclk);
++	sensor->streaming = false;
+ }
+ 
+ static int ov5640_set_power_mipi(struct ov5640_dev *sensor, bool on)
+@@ -1954,7 +2037,7 @@ static int ov5640_set_power_mipi(struct ov5640_dev *sensor, bool on)
+ 
+ 	if (!on) {
+ 		/* Reset MIPI bus settings to their default values. */
+-		ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x58);
++		ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x40);
+ 		ov5640_write_reg(sensor, OV5640_REG_MIPI_CTRL00, 0x04);
+ 		ov5640_write_reg(sensor, OV5640_REG_PAD_OUTPUT00, 0x00);
+ 		return 0;
+@@ -1970,7 +2053,7 @@ static int ov5640_set_power_mipi(struct ov5640_dev *sensor, bool on)
+ 	 * [3] = 0	: Power up MIPI LS Rx
+ 	 * [2] = 0	: MIPI interface disabled
+ 	 */
+-	ret = ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x40);
++	ret = ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x45);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1979,9 +2062,10 @@ static int ov5640_set_power_mipi(struct ov5640_dev *sensor, bool on)
+ 	 *
+ 	 * 0x4800 = 0x24
+ 	 * [5] = 1	: Gate clock when 'no packets'
++	 * [4] = 1	: Line sync enable
+ 	 * [2] = 1	: MIPI bus in LP11 when 'no packets'
+ 	 */
+-	ret = ov5640_write_reg(sensor, OV5640_REG_MIPI_CTRL00, 0x24);
++	ret = ov5640_write_reg(sensor, OV5640_REG_MIPI_CTRL00, 0x34);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -2013,7 +2097,7 @@ static int ov5640_set_power_dvp(struct ov5640_dev *sensor, bool on)
+ 	if (!on) {
+ 		/* Reset settings to their default values. */
+ 		ov5640_write_reg(sensor, OV5640_REG_CCIR656_CTRL00, 0x00);
+-		ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x58);
++		ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x00);
+ 		ov5640_write_reg(sensor, OV5640_REG_POLARITY_CTRL00, 0x20);
+ 		ov5640_write_reg(sensor, OV5640_REG_PAD_OUTPUT_ENABLE01, 0x00);
+ 		ov5640_write_reg(sensor, OV5640_REG_PAD_OUTPUT_ENABLE02, 0x00);
+@@ -2096,7 +2180,7 @@ static int ov5640_set_power_dvp(struct ov5640_dev *sensor, bool on)
+ 	 * [3] = 1	: Power down MIPI LS Rx
+ 	 * [2] = 0	: DVP enable (MIPI disable)
+ 	 */
+-	ret = ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x18);
++	ret = ov5640_write_reg(sensor, OV5640_REG_IO_MIPI_CTRL00, 0x58);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -2193,17 +2277,17 @@ static int ov5640_try_frame_interval(struct ov5640_dev *sensor,
+ 				     u32 width, u32 height)
+ {
+ 	const struct ov5640_mode_info *mode;
+-	enum ov5640_frame_rate rate = OV5640_15_FPS;
++	enum ov5640_frame_rate rate = OV5640_08_FPS;
+ 	int minfps, maxfps, best_fps, fps;
+ 	int i;
+ 
+-	minfps = ov5640_framerates[OV5640_15_FPS];
+-	maxfps = ov5640_framerates[OV5640_60_FPS];
++	minfps = ov5640_framerates[OV5640_08_FPS];
++	maxfps = ov5640_framerates[OV5640_30_FPS];
+ 
+ 	if (fi->numerator == 0) {
+ 		fi->denominator = maxfps;
+ 		fi->numerator = 1;
+-		rate = OV5640_60_FPS;
++		rate = OV5640_30_FPS;
+ 		goto find_mode;
+ 	}
+ 
+@@ -2246,10 +2330,10 @@ static int ov5640_get_fmt(struct v4l2_subdev *sd,
+ 	else
+ 		fmt = &sensor->fmt;
+ 
++	fmt->reserved[1] = (sensor->current_fr == OV5640_30_FPS) ? 30 : 15;
+ 	format->format = *fmt;
+ 
+ 	mutex_unlock(&sensor->lock);
+-
+ 	return 0;
+ }
+ 
+@@ -2267,6 +2351,7 @@ static int ov5640_try_fmt_internal(struct v4l2_subdev *sd,
+ 		return -EINVAL;
+ 	fmt->width = mode->hact;
+ 	fmt->height = mode->vact;
++	memset(fmt->reserved, 0, sizeof(fmt->reserved));
+ 
+ 	if (new_mode)
+ 		*new_mode = mode;
+@@ -2327,6 +2412,9 @@ static int ov5640_set_fmt(struct v4l2_subdev *sd,
+ 
+ 	__v4l2_ctrl_s_ctrl_int64(sensor->ctrls.pixel_rate,
+ 				 ov5640_calc_pixel_rate(sensor));
++
++	if (sensor->pending_mode_change || sensor->pending_fmt_change)
++		sensor->fmt = *mbus_fmt;
+ out:
+ 	mutex_unlock(&sensor->lock);
+ 	return ret;
+@@ -2776,7 +2864,7 @@ static int ov5640_init_controls(struct ov5640_dev *sensor)
+ 	/* Auto/manual gain */
+ 	ctrls->auto_gain = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_AUTOGAIN,
+ 					     0, 1, 1, 1);
+-	ctrls->gain = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_ANALOGUE_GAIN,
++	ctrls->gain = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_GAIN,
+ 					0, 1023, 1, 0);
+ 
+ 	ctrls->saturation = v4l2_ctrl_new_std(hdl, ops, V4L2_CID_SATURATION,
+@@ -2846,24 +2934,36 @@ static int ov5640_enum_frame_interval(
+ 	struct v4l2_subdev_frame_interval_enum *fie)
+ {
+ 	struct ov5640_dev *sensor = to_ov5640_dev(sd);
+-	struct v4l2_fract tpf;
+-	int ret;
++	int i, j, count;
+ 
+ 	if (fie->pad != 0)
+ 		return -EINVAL;
+ 	if (fie->index >= OV5640_NUM_FRAMERATES)
+ 		return -EINVAL;
+ 
+-	tpf.numerator = 1;
+-	tpf.denominator = ov5640_framerates[fie->index];
+-
+-	ret = ov5640_try_frame_interval(sensor, &tpf,
+-					fie->width, fie->height);
+-	if (ret < 0)
++	if (fie->width == 0 || fie->height == 0 || fie->code == 0) {
++		pr_warn("Please assign pixel format, width and height.\n");
+ 		return -EINVAL;
++	}
+ 
+-	fie->interval = tpf;
+-	return 0;
++	fie->interval.numerator = 1;
++
++	count = 0;
++	for (i = 0; i < OV5640_NUM_FRAMERATES; i++) {
++		for (j = 0; j < OV5640_NUM_MODES; j++) {
++			if (fie->width  == ov5640_mode_data[j].hact &&
++			    fie->height == ov5640_mode_data[j].vact &&
++			    !ov5640_check_valid_mode(sensor, &ov5640_mode_data[j], i))
++				count++;
++
++			if (fie->index == (count - 1)) {
++				fie->interval.denominator = ov5640_framerates[i];
++				return 0;
++			}
++		}
++	}
++
++	return -EINVAL;
+ }
+ 
+ static int ov5640_g_frame_interval(struct v4l2_subdev *sd,
+@@ -2943,11 +3043,23 @@ static int ov5640_enum_mbus_code(struct v4l2_subdev *sd,
+ static int ov5640_s_stream(struct v4l2_subdev *sd, int enable)
+ {
+ 	struct ov5640_dev *sensor = to_ov5640_dev(sd);
++	struct i2c_client *client = sensor->i2c_client;
+ 	int ret = 0;
+ 
+ 	mutex_lock(&sensor->lock);
+ 
+ 	if (sensor->streaming == !enable) {
++		ret = ov5640_check_valid_mode(sensor,
++					      sensor->current_mode,
++					      sensor->current_fr);
++		if (ret) {
++			dev_err(&client->dev, "Not support WxH@fps=%dx%d@%d\n",
++				sensor->current_mode->hact,
++				sensor->current_mode->vact,
++				ov5640_framerates[sensor->current_fr]);
++			goto out;
++		}
++
+ 		if (enable && sensor->pending_mode_change) {
+ 			ret = ov5640_set_mode(sensor);
+ 			if (ret)
+@@ -3001,6 +3113,17 @@ static const struct v4l2_subdev_ops ov5640_subdev_ops = {
+ 	.pad = &ov5640_pad_ops,
+ };
+ 
++static int ov5640_link_setup(struct media_entity *entity,
++			   const struct media_pad *local,
++			   const struct media_pad *remote, u32 flags)
++{
++	return 0;
++}
++
++static const struct media_entity_operations ov5640_sd_media_ops = {
++	.link_setup = ov5640_link_setup,
++};
++
+ static int ov5640_get_regulators(struct ov5640_dev *sensor)
+ {
+ 	int i;
+@@ -3144,9 +3267,9 @@ static int ov5640_probe(struct i2c_client *client)
+ 
+ 	v4l2_i2c_subdev_init(&sensor->sd, client, &ov5640_subdev_ops);
+ 
+-	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
+-			    V4L2_SUBDEV_FL_HAS_EVENTS;
++	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_EVENTS;
+ 	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
++	sensor->sd.entity.ops = &ov5640_sd_media_ops;
+ 	sensor->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
+ 	ret = media_entity_pads_init(&sensor->sd.entity, 1, &sensor->pad);
+ 	if (ret)
+diff --git a/drivers/media/i2c/ov5675.c b/drivers/media/i2c/ov5675.c
+index 2104589dd..da5850b7a 100644
+--- a/drivers/media/i2c/ov5675.c
++++ b/drivers/media/i2c/ov5675.c
+@@ -791,10 +791,8 @@ static int ov5675_init_controls(struct ov5675 *ov5675)
+ 	v4l2_ctrl_new_std(ctrl_hdlr, &ov5675_ctrl_ops,
+ 			  V4L2_CID_VFLIP, 0, 1, 1, 0);
+ 
+-	if (ctrl_hdlr->error) {
+-		v4l2_ctrl_handler_free(ctrl_hdlr);
++	if (ctrl_hdlr->error)
+ 		return ctrl_hdlr->error;
+-	}
+ 
+ 	ov5675->sd.ctrl_handler = ctrl_hdlr;
+ 
+diff --git a/drivers/media/i2c/ov7670.c b/drivers/media/i2c/ov7670.c
+index 23001ede1..1be2c0e5b 100644
+--- a/drivers/media/i2c/ov7670.c
++++ b/drivers/media/i2c/ov7670.c
+@@ -1841,7 +1841,7 @@ static int ov7670_parse_dt(struct device *dev,
+ 
+ 	if (bus_cfg.bus_type != V4L2_MBUS_PARALLEL) {
+ 		dev_err(dev, "Unsupported media bus type\n");
+-		return -EINVAL;
++		return ret;
+ 	}
+ 	info->mbus_config = bus_cfg.bus.parallel.flags;
+ 
+diff --git a/drivers/media/i2c/ov772x.c b/drivers/media/i2c/ov772x.c
+index e05b48c90..78602a2f7 100644
+--- a/drivers/media/i2c/ov772x.c
++++ b/drivers/media/i2c/ov772x.c
+@@ -1462,7 +1462,7 @@ static int ov772x_probe(struct i2c_client *client)
+ 	priv->subdev.ctrl_handler = &priv->hdl;
+ 	if (priv->hdl.error) {
+ 		ret = priv->hdl.error;
+-		goto error_ctrl_free;
++		goto error_mutex_destroy;
+ 	}
+ 
+ 	priv->clk = clk_get(&client->dev, NULL);
+@@ -1515,6 +1515,7 @@ static int ov772x_probe(struct i2c_client *client)
+ 	clk_put(priv->clk);
+ error_ctrl_free:
+ 	v4l2_ctrl_handler_free(&priv->hdl);
++error_mutex_destroy:
+ 	mutex_destroy(&priv->lock);
+ 
+ 	return ret;
+-- 
+2.25.1
+
