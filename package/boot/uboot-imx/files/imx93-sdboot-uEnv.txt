@@ -1,0 +1,13 @@
+fdt_addr=0x83000000
+loadaddr=0x80400000
+fdt_high=0x8fffffff
+initrd_addr=0x83800000
+initrd_high=0xffffffffffffffff
+kernel_img=imx93evk-kernel.bin
+fdt_img=imx93-11x11-evk.dtb
+load_img=ext4load mmc 1:1 $loadaddr $kernel_img
+load_fdt=ext4load mmc 1:1 $fdt_addr $fdt_img
+sd_boot=run load_img && run load_fdt && booti $loadaddr - $fdt_addr
+bootargs=root=/dev/mmcblk1p2 rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttyLP0,115200 earlycon
+bootcmd=echo starting openwrt ...;run sd_boot
+bootdelay=3

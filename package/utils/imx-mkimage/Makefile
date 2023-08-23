@@ -11,7 +11,7 @@ PKG_RELEASE:=$(AUTORELEASE)
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-mkimage.git
 PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
-PKG_MIRROR_HASH:=9713189390c0f1d097f3d0a75b5ab05dd65ead0d0dcb42410ecf563c4ac473c1
+PKG_MIRROR_HASH:=40df71bda4dbcf9a3782cf55b51630d076ec3fcf7bb11e338e97fc808b0df730
 
 PKG_FLAGS:=nonshared
 
@@ -33,7 +33,8 @@ define Build/Compile
 endef
 
 define Build/InstallDev
-	$(CP) -rp $(PKG_BUILD_DIR) $(STAGING_DIR_IMAGE)
+	mkdir -p $(STAGING_DIR_IMAGE)
+	$(CP) $(PKG_BUILD_DIR) $(STAGING_DIR_IMAGE)/imx-mkimage
 endef
 
 $(eval $(call BuildPackage,imx-mkimage))

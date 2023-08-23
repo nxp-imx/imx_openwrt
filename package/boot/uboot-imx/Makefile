@@ -8,20 +8,19 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=uboot-imx
-PKG_VERSION:=lf-5.15.5-1.0.0
+PKG_VERSION:=lf-5.15.71-2.2.1
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
-PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
-PKG_MIRROR_HASH:=fdb2086a1182b2c96e8c8dcfb795f004
+PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
+PKG_MIRROR_HASH:=9c7530f7d286e1c719a9c33100341bd07c50fedd84d7997507784f46bc22fdcd
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
 
 define U-Boot/Default
   BUILD_TARGET:=imx
-  UBOOT_IMAGE:=u-boot.imx
 endef
 
 define U-Boot/apalis_imx6
@@ -56,6 +55,7 @@ define U-Boot/wandboard
   BUILD_SUBTARGET:=cortexa9
   BUILD_DEVICES:=wandboard_dual
   UBOOT_MAKE_FLAGS += u-boot.imx
+  UBOOT_IMAGE:=u-boot.imx
 endef
 
 define U-Boot/imx6ull
@@ -75,7 +75,6 @@ define U-Boot/imx8mp
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mp_evk
   ENV_NAME:=imx8mp-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mp-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -87,7 +86,6 @@ define U-Boot/imx8mm
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mm_evk
   ENV_NAME:=imx8mm-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mm-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -99,7 +97,6 @@ define U-Boot/imx8mn
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mn_evk
   ENV_NAME:=imx8mn-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mn-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
@@ -111,10 +108,20 @@ define U-Boot/imx8mq
   BUILD_SUBTARGET:=imx8
   UBOOT_CONFIG:=imx8mq_evk
   ENV_NAME:=imx8mq-sdboot
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   DTB_NAME:=imx8mq-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
+endef
+
+define U-Boot/imx93
+  BUILD_DEVICES:=imx93
+  NAME:=imx8mmini lpddr4 board
+  UBOOT_CONFIG:=imx93_11x11_evk
+  ENV_NAME:=imx93-sdboot
+  DTB_NAME:=imx93-11x11-evk.dtb
+  ENV_SIZE:=0x4000
+  BUILD_SUBTARGET:=cortexa55
+  DEPENDS:=@TARGET_imx_cortexa55
 endef
 
 UBOOT_TARGETS := \
@@ -126,33 +133,39 @@ UBOOT_TARGETS := \
 	imx8mp \
 	imx8mm \
 	imx8mn \
-	imx8mq
+	imx8mq \
+	imx93
 
-ifeq ($(SUBTARGET),imx8)
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+ifeq ($(SUBTARGET),imx8)
 	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
 		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
 		$(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
-		$$(MKIMG_DIR)
-	$(CP) $(PKG_BUILD_DIR)/tools/mkimage $$(MKIMG_DIR)/mkimage_uboot
-	$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
-		-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
-		files/$(ENV_NAME)-uEnv.txt
-endef
-else
-define Build/InstallDev
-	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX8M
+	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX8M/mkimage_uboot
+else ifeq ($(SUBTARGET),cortexa55)
+	$(CP) $(PKG_BUILD_DIR)/u-boot.bin \
+		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
+		$(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9
+	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9/mkimage_uboot
+endif
+
+ifneq ($(UBOOT_IMAGE),)
 	$(foreach img,$(UBOOT_IMAGE), \
 		$(CP) $(PKG_BUILD_DIR)/$(img) $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-$(img); \
 	)
-    ifneq ($(ENV_NAME),)
-		$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
-			-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
-			files/$(ENV_NAME)-uEnv.txt
-    endif
-endef
 endif
+
+ifneq ($(ENV_NAME),)
+	$(PKG_BUILD_DIR)/tools/mkenvimage -s $(ENV_SIZE) \
+		-o $(STAGING_DIR_IMAGE)/$(ENV_NAME)-uboot-env.bin \
+		files/$(ENV_NAME)-uEnv.txt
+endif
+endef
 
 define Package/u-boot/install/default
 endef

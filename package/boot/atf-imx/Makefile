@@ -6,13 +6,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=atf-imx
-PKG_VERSION:=lf-5.15.5-1.0.0
+PKG_VERSION:=lf-5.15.71-2.2.1
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-atf.git
-PKG_SOURCE_VERSION:=lf-5.15.5-1.0.0
-PKG_MIRROR_HASH:=c5de0a3152f2a0c30d25f23bb0c6cc4eab17c11f8270f5f566e998cc554180d2
+PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
+PKG_MIRROR_HASH:=c3298ae7b9058656954321167177734891383cd26ded1619da7cbbe658b09f6c
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
@@ -30,10 +30,8 @@ define Package/atf-imx8m/Default
   SECTION:=boot
   CATEGORY:=Boot Loaders
   TITLE:=NXP i.MX8M SD Boot Trusted Firmware
-  MKIMG_DIR:=`find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`/iMX8M
   BUILD_TARGET:=imx
-  BUILD_SUBTARGET:=imx8
-  DEPENDS:=@TARGET_imx_imx8 +imx-mkimage
+  DEPENDS:=@TARGET_imx_imx8
 endef
 
 define Package/atf-imx8mp
@@ -56,6 +54,21 @@ define Package/atf-imx8mq
   VARIANT:=imx8mq
 endef
 
+define Package/atf-imx93
+  SECTION:=boot
+  CATEGORY:=Boot Loaders
+  TITLE:=NXP i.MX9 SD Boot Trusted Firmware
+  BUILD_TARGET:=imx
+  VARIANT:=imx93
+  DEPENDS+=@TARGET_imx_cortexa55 +imx-mkimage
+endef
+
+ifeq ($(SUBTARGET),imx8)
+	MKIMG_PLAT:=iMX8M
+else ifeq ($(SUBTARGET),cortexa55)
+	MKIMG_PLAT:=iMX9
+endif
+
 MAKE_VARS = \
 	CROSS_COMPILE="$(TARGET_CROSS)"
 
@@ -66,10 +79,11 @@ MAKE_FLAGS += \
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 	$(CP) $(PKG_BUILD_DIR)/build/$(BUILD_VARIANT)/release/bl31.bin \
-		$$(MKIMG_DIR)
+		$(STAGING_DIR_IMAGE)/imx-mkimage/$(MKIMG_PLAT)
 endef
 
 $(eval $(call BuildPackage,atf-imx8mp))
 $(eval $(call BuildPackage,atf-imx8mm))
 $(eval $(call BuildPackage,atf-imx8mn))
 $(eval $(call BuildPackage,atf-imx8mq))
+$(eval $(call BuildPackage,atf-imx93))

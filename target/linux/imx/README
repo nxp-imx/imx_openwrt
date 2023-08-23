@@ -12,6 +12,7 @@ users can bring up the board without difficulty.
   IMX8MMini_LPDDR4	(SD boot)
   IMX8MNano_LPDDR4	(SD boot)
   IMX8MQuad_LPDDR4	(SD boot)
+  IMX93EVK			(SD boot)
 
 * cortexa7 and cortexa9
   imx6				(not included in this doc)
@@ -36,7 +37,13 @@ $ ./scripts/feeds install -a
   Target Devices:  (Select devices. Available when Target Profile is "Multiple devices")
   Target Images:   (Disable "GZip images" if you don't want to unzip manually to use the images.)
 
-  Note: The first time make menuconfig would create a .config file which
+  Note 1: For ARMv8 platform, please select the compile toolchain as follows:
+	[*] Advanced configuration options (for developers)  --->
+		[*]   Toolchain Options  --->
+			Binutils Version (Binutils 2.37)  --->
+			GCC compiler Version (gcc 11.x)  --->
+
+  Note 2: The first time make menuconfig would create a .config file which
   would include all dependencies for selected target. After that, make
   menuconfig still could be used to modify packages. If want to change
   other target, please remove .config and make menuconfig to select again.

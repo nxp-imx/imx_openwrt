@@ -2,62 +2,6 @@
 #
 # Copyright 2022 NXP
 
-# 16MB bootloader + 40MB kernel
-IMX_SD_KERNELPART_SIZE = 40
-IMX_SD_KERNELPART_OFFSET = 16
-IMX_SD_ROOTFSPART_OFFSET = 64
-IMX_SD_IMAGE_SIZE = $(shell echo $$((($(IMX_SD_ROOTFSPART_OFFSET) + \
-	$(CONFIG_TARGET_ROOTFS_PARTSIZE)))))
-
-define Build/imx-clean
-	# Clean the target
-	rm -f $@
-endef
-
-define Build/imx-compile-dtb
-	# Compile dts file to dtb
-	$(call Image/BuildDTB,$(DTS_DIR)/$(1).dts,$(DTS_DIR)/$(1).dtb)
-endef
-
-define Build/imx-create-flash
-	# Combile firmware + bl31 + uboot to flash.bin
-	cd $(MKIMG_DIR) && $(MAKE) SOC=$(1) $(2)
-endef
-
-define Build/imx-append
-	# append binary
-	dd if=$(STAGING_DIR_IMAGE)/$(1) >> $@
-endef
-
-define Build/imx-append-boot
-	# Append the uboot, firmware etc.
-	dd if=$(MKIMG_DIR)/$(1)/flash.bin >> $@
-endef
-
-define Build/imx-append-dtb
-	# Append the dtb file
-	dd if=$(DTS_DIR)/$(1).dtb >> $@
-endef
-
-define Build/imx-append-kernel
-	# append the kernel
-	mkdir -p $@.tmp && \
-	cp $(IMAGE_KERNEL) $@.tmp && \
-	cp $(DTS_DIR)/$(1).dtb $@.tmp && \
-	make_ext4fs -J -L kernel -l "$(IMX_SD_KERNELPART_SIZE)M" "$@.kernel.part" "$@.tmp" && \
-	dd if=$@.kernel.part >> $@ && \
-	rm -rf $@.tmp && \
-	rm -f $@.kernel.part
-endef
-
-define Build/imx-append-sdhead
-	# Create the sd file table
-	./gen_sdcard_head_img.sh $(STAGING_DIR_IMAGE)/$(1)-sdcard-head.img \
-		$(IMX_SD_KERNELPART_OFFSET) $(IMX_SD_KERNELPART_SIZE) \
-		$(IMX_SD_ROOTFSPART_OFFSET) $(CONFIG_TARGET_ROOTFS_PARTSIZE)
-	dd if=$(STAGING_DIR_IMAGE)/$(1)-sdcard-head.img >> $@
-endef
-
 define Device/Default
   PROFILES := Default
   FILESYSTEMS := squashfs
@@ -78,7 +22,6 @@ define Device/imx8mplus
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mp-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mp \
 	firmware-imx \
@@ -105,7 +48,6 @@ define Device/imx8mmini
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mm-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mm \
 	firmware-imx \
@@ -132,7 +74,6 @@ define Device/imx8mnano
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mn-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mn \
 	firmware-imx \
@@ -159,7 +100,6 @@ define Device/imx8mquad
   SOC_TYPE := iMX8M
   DEVICE_TYPE := flash_evk
   ENV_NAME:=imx8mq-sdboot
-  MKIMG_DIR:= `find $(STAGING_DIR_IMAGE) -name imx-mkimage-*`
   DEVICE_PACKAGES += \
 	atf-imx8mq \
 	firmware-imx \
