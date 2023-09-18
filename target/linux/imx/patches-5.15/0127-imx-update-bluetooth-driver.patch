@@ -1,0 +1,803 @@
+From 8ad53313713e0c723c991aa2b2b68d752e244b04 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Fri, 8 Sep 2023 15:19:52 +0800
+Subject: [PATCH] imx: update bluetooth driver
+
+---
+ drivers/bluetooth/btbcm.c      |  47 +------------
+ drivers/bluetooth/btintel.c    |  27 +++----
+ drivers/bluetooth/btqcomsmd.c  |  17 +----
+ drivers/bluetooth/btusb.c      |  56 +--------------
+ drivers/bluetooth/hci_bcsp.c   |   2 +-
+ drivers/bluetooth/hci_h5.c     |   2 +-
+ drivers/bluetooth/hci_ldisc.c  |   7 +-
+ drivers/bluetooth/hci_ll.c     |   2 +-
+ drivers/bluetooth/hci_qca.c    |  16 ++---
+ drivers/bluetooth/hci_serdev.c |  10 +--
+ drivers/bluetooth/virtio_bt.c  |   2 +-
+ drivers/tty/serial/imx.c       | 124 ++++++++++++++-------------------
+ 12 files changed, 87 insertions(+), 225 deletions(-)
+
+diff --git a/drivers/bluetooth/btbcm.c b/drivers/bluetooth/btbcm.c
+index f228cdbcc..a18f289d7 100644
+--- a/drivers/bluetooth/btbcm.c
++++ b/drivers/bluetooth/btbcm.c
+@@ -6,7 +6,6 @@
+  *  Copyright (C) 2015  Intel Corporation
+  */
+ 
+-#include <linux/efi.h>
+ #include <linux/module.h>
+ #include <linux/firmware.h>
+ #include <linux/dmi.h>
+@@ -34,43 +33,6 @@
+ /* For kmalloc-ing the fw-name array instead of putting it on the stack */
+ typedef char bcm_fw_name[BCM_FW_NAME_LEN];
+ 
+-#ifdef CONFIG_EFI
+-static int btbcm_set_bdaddr_from_efi(struct hci_dev *hdev)
+-{
+-	efi_guid_t guid = EFI_GUID(0x74b00bd9, 0x805a, 0x4d61, 0xb5, 0x1f,
+-				   0x43, 0x26, 0x81, 0x23, 0xd1, 0x13);
+-	bdaddr_t efi_bdaddr, bdaddr;
+-	efi_status_t status;
+-	unsigned long len;
+-	int ret;
+-
+-	if (!efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE))
+-		return -EOPNOTSUPP;
+-
+-	len = sizeof(efi_bdaddr);
+-	status = efi.get_variable(L"BDADDR", &guid, NULL, &len, &efi_bdaddr);
+-	if (status != EFI_SUCCESS)
+-		return -ENXIO;
+-
+-	if (len != sizeof(efi_bdaddr))
+-		return -EIO;
+-
+-	baswap(&bdaddr, &efi_bdaddr);
+-
+-	ret = btbcm_set_bdaddr(hdev, &bdaddr);
+-	if (ret)
+-		return ret;
+-
+-	bt_dev_info(hdev, "BCM: Using EFI device address (%pMR)", &bdaddr);
+-	return 0;
+-}
+-#else
+-static int btbcm_set_bdaddr_from_efi(struct hci_dev *hdev)
+-{
+-	return -EOPNOTSUPP;
+-}
+-#endif
+-
+ int btbcm_check_bdaddr(struct hci_dev *hdev)
+ {
+ 	struct hci_rp_read_bd_addr *bda;
+@@ -124,12 +86,9 @@ int btbcm_check_bdaddr(struct hci_dev *hdev)
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM4345C5) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM43430A0) ||
+ 	    !bacmp(&bda->bdaddr, BDADDR_BCM43341B)) {
+-		/* Try falling back to BDADDR EFI variable */
+-		if (btbcm_set_bdaddr_from_efi(hdev) != 0) {
+-			bt_dev_info(hdev, "BCM: Using default device address (%pMR)",
+-				    &bda->bdaddr);
+-			set_bit(HCI_QUIRK_INVALID_BDADDR, &hdev->quirks);
+-		}
++		bt_dev_info(hdev, "BCM: Using default device address (%pMR)",
++			    &bda->bdaddr);
++		set_bit(HCI_QUIRK_INVALID_BDADDR, &hdev->quirks);
+ 	}
+ 
+ 	kfree_skb(skb);
+diff --git a/drivers/bluetooth/btintel.c b/drivers/bluetooth/btintel.c
+index 2a4cc5d8c..d122cc973 100644
+--- a/drivers/bluetooth/btintel.c
++++ b/drivers/bluetooth/btintel.c
+@@ -2274,20 +2274,15 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 					       INTEL_ROM_LEGACY_NO_WBS_SUPPORT))
+ 				set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED,
+ 					&hdev->quirks);
+-			if (ver.hw_variant == 0x08 && ver.fw_variant == 0x22)
+-				set_bit(HCI_QUIRK_VALID_LE_STATES,
+-					&hdev->quirks);
+ 
+ 			err = btintel_legacy_rom_setup(hdev, &ver);
+ 			break;
+ 		case 0x0b:      /* SfP */
++		case 0x0c:      /* WsP */
+ 		case 0x11:      /* JfP */
+ 		case 0x12:      /* ThP */
+ 		case 0x13:      /* HrP */
+ 		case 0x14:      /* CcP */
+-			set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
+-			fallthrough;
+-		case 0x0c:	/* WsP */
+ 			/* Apply the device specific HCI quirks
+ 			 *
+ 			 * All Legacy bootloader devices support WBS
+@@ -2295,6 +2290,11 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 			set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED,
+ 				&hdev->quirks);
+ 
++			/* Valid LE States quirk for JfP/ThP familiy */
++			if (ver.hw_variant == 0x11 || ver.hw_variant == 0x12)
++				set_bit(HCI_QUIRK_VALID_LE_STATES,
++					&hdev->quirks);
++
+ 			/* Setup MSFT Extension support */
+ 			btintel_set_msft_opcode(hdev, ver.hw_variant);
+ 
+@@ -2353,7 +2353,7 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 		 */
+ 		err = btintel_read_version(hdev, &ver);
+ 		if (err)
+-			break;
++			return err;
+ 
+ 		/* Apply the device specific HCI quirks
+ 		 *
+@@ -2361,8 +2361,9 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 		 */
+ 		set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED, &hdev->quirks);
+ 
+-		/* Set Valid LE States quirk */
+-		set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
++		/* Valid LE States quirk for JfP/ThP familiy */
++		if (ver.hw_variant == 0x11 || ver.hw_variant == 0x12)
++			set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
+ 
+ 		/* Setup MSFT Extension support */
+ 		btintel_set_msft_opcode(hdev, ver.hw_variant);
+@@ -2381,8 +2382,9 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 		 */
+ 		set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED, &hdev->quirks);
+ 
+-		/* Apply LE States quirk from solar onwards */
+-		set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
++		/* Valid LE States quirk for GfP */
++		if (INTEL_HW_VARIANT(ver_tlv.cnvi_bt) == 0x18)
++			set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
+ 
+ 		/* Setup MSFT Extension support */
+ 		btintel_set_msft_opcode(hdev,
+@@ -2393,8 +2395,7 @@ static int btintel_setup_combined(struct hci_dev *hdev)
+ 	default:
+ 		bt_dev_err(hdev, "Unsupported Intel hw variant (%u)",
+ 			   INTEL_HW_VARIANT(ver_tlv.cnvi_bt));
+-		err = -EINVAL;
+-		break;
++		return -EINVAL;
+ 	}
+ 
+ exit_error:
+diff --git a/drivers/bluetooth/btqcomsmd.c b/drivers/bluetooth/btqcomsmd.c
+index 11c7e04bf..2acb719e5 100644
+--- a/drivers/bluetooth/btqcomsmd.c
++++ b/drivers/bluetooth/btqcomsmd.c
+@@ -122,21 +122,6 @@ static int btqcomsmd_setup(struct hci_dev *hdev)
+ 	return 0;
+ }
+ 
+-static int btqcomsmd_set_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
+-{
+-	int ret;
+-
+-	ret = qca_set_bdaddr_rome(hdev, bdaddr);
+-	if (ret)
+-		return ret;
+-
+-	/* The firmware stops responding for a while after setting the bdaddr,
+-	 * causing timeouts for subsequent commands. Sleep a bit to avoid this.
+-	 */
+-	usleep_range(1000, 10000);
+-	return 0;
+-}
+-
+ static int btqcomsmd_probe(struct platform_device *pdev)
+ {
+ 	struct btqcomsmd *btq;
+@@ -177,7 +162,7 @@ static int btqcomsmd_probe(struct platform_device *pdev)
+ 	hdev->close = btqcomsmd_close;
+ 	hdev->send = btqcomsmd_send;
+ 	hdev->setup = btqcomsmd_setup;
+-	hdev->set_bdaddr = btqcomsmd_set_bdaddr;
++	hdev->set_bdaddr = qca_set_bdaddr_rome;
+ 
+ 	ret = hci_register_dev(hdev);
+ 	if (ret < 0)
+diff --git a/drivers/bluetooth/btusb.c b/drivers/bluetooth/btusb.c
+index ab5a5e2b5..627436329 100644
+--- a/drivers/bluetooth/btusb.c
++++ b/drivers/bluetooth/btusb.c
+@@ -400,10 +400,6 @@ static const struct usb_device_id blacklist_table[] = {
+ 	{ USB_VENDOR_AND_INTERFACE_INFO(0x8087, 0xe0, 0x01, 0x01),
+ 	  .driver_info = BTUSB_IGNORE },
+ 
+-	/* Realtek 8821CE Bluetooth devices */
+-	{ USB_DEVICE(0x13d3, 0x3529), .driver_info = BTUSB_REALTEK |
+-						     BTUSB_WIDEBAND_SPEECH },
+-
+ 	/* Realtek 8822CE Bluetooth devices */
+ 	{ USB_DEVICE(0x0bda, 0xb00c), .driver_info = BTUSB_REALTEK |
+ 						     BTUSB_WIDEBAND_SPEECH },
+@@ -455,9 +451,6 @@ static const struct usb_device_id blacklist_table[] = {
+ 						     BTUSB_VALID_LE_STATES },
+ 
+ 	/* Additional MediaTek MT7921 Bluetooth devices */
+-	{ USB_DEVICE(0x0489, 0xe0c8), .driver_info = BTUSB_MEDIATEK |
+-						     BTUSB_WIDEBAND_SPEECH |
+-						     BTUSB_VALID_LE_STATES },
+ 	{ USB_DEVICE(0x04ca, 0x3802), .driver_info = BTUSB_MEDIATEK |
+ 						     BTUSB_WIDEBAND_SPEECH |
+ 						     BTUSB_VALID_LE_STATES },
+@@ -467,15 +460,9 @@ static const struct usb_device_id blacklist_table[] = {
+ 	{ USB_DEVICE(0x13d3, 0x3564), .driver_info = BTUSB_MEDIATEK |
+ 						     BTUSB_WIDEBAND_SPEECH |
+ 						     BTUSB_VALID_LE_STATES },
+-	{ USB_DEVICE(0x13d3, 0x3567), .driver_info = BTUSB_MEDIATEK |
+-						     BTUSB_WIDEBAND_SPEECH |
+-						     BTUSB_VALID_LE_STATES },
+ 	{ USB_DEVICE(0x0489, 0xe0cd), .driver_info = BTUSB_MEDIATEK |
+ 						     BTUSB_WIDEBAND_SPEECH |
+ 						     BTUSB_VALID_LE_STATES },
+-	{ USB_DEVICE(0x0e8d, 0x0608), .driver_info = BTUSB_MEDIATEK |
+-						     BTUSB_WIDEBAND_SPEECH |
+-						     BTUSB_VALID_LE_STATES },
+ 
+ 	/* MediaTek MT7922A Bluetooth devices */
+ 	{ USB_DEVICE(0x0489, 0xe0d8), .driver_info = BTUSB_MEDIATEK |
+@@ -748,13 +735,13 @@ static inline void btusb_free_frags(struct btusb_data *data)
+ 
+ 	spin_lock_irqsave(&data->rxlock, flags);
+ 
+-	dev_kfree_skb_irq(data->evt_skb);
++	kfree_skb(data->evt_skb);
+ 	data->evt_skb = NULL;
+ 
+-	dev_kfree_skb_irq(data->acl_skb);
++	kfree_skb(data->acl_skb);
+ 	data->acl_skb = NULL;
+ 
+-	dev_kfree_skb_irq(data->sco_skb);
++	kfree_skb(data->sco_skb);
+ 	data->sco_skb = NULL;
+ 
+ 	spin_unlock_irqrestore(&data->rxlock, flags);
+@@ -1914,11 +1901,6 @@ static int btusb_setup_csr(struct hci_dev *hdev)
+ 
+ 	rp = (struct hci_rp_read_local_version *)skb->data;
+ 
+-	bt_dev_info(hdev, "CSR: Setting up dongle with HCI ver=%u rev=%04x; LMP ver=%u subver=%04x; manufacturer=%u",
+-		le16_to_cpu(rp->hci_ver), le16_to_cpu(rp->hci_rev),
+-		le16_to_cpu(rp->lmp_ver), le16_to_cpu(rp->lmp_subver),
+-		le16_to_cpu(rp->manufacturer));
+-
+ 	/* Detect a wide host of Chinese controllers that aren't CSR.
+ 	 *
+ 	 * Known fake bcdDevices: 0x0100, 0x0134, 0x1915, 0x2520, 0x7558, 0x8891
+@@ -2281,23 +2263,6 @@ struct btmtk_section_map {
+ 	};
+ } __packed;
+ 
+-static int btusb_set_bdaddr_mtk(struct hci_dev *hdev, const bdaddr_t *bdaddr)
+-{
+-	struct sk_buff *skb;
+-	long ret;
+-
+-	skb = __hci_cmd_sync(hdev, 0xfc1a, 6, bdaddr, HCI_INIT_TIMEOUT);
+-	if (IS_ERR(skb)) {
+-		ret = PTR_ERR(skb);
+-		bt_dev_err(hdev, "changing Mediatek device address failed (%ld)",
+-			   ret);
+-		return ret;
+-	}
+-	kfree_skb(skb);
+-
+-	return 0;
+-}
+-
+ static void btusb_mtk_wmt_recv(struct urb *urb)
+ {
+ 	struct hci_dev *hdev = urb->context;
+@@ -2470,29 +2435,15 @@ static int btusb_mtk_hci_wmt_sync(struct hci_dev *hdev,
+ 
+ 	set_bit(BTUSB_TX_WAIT_VND_EVT, &data->flags);
+ 
+-	/* WMT cmd/event doesn't follow up the generic HCI cmd/event handling,
+-	 * it needs constantly polling control pipe until the host received the
+-	 * WMT event, thus, we should require to specifically acquire PM counter
+-	 * on the USB to prevent the interface from entering auto suspended
+-	 * while WMT cmd/event in progress.
+-	 */
+-	err = usb_autopm_get_interface(data->intf);
+-	if (err < 0)
+-		goto err_free_wc;
+-
+ 	err = __hci_cmd_send(hdev, 0xfc6f, hlen, wc);
+ 
+ 	if (err < 0) {
+ 		clear_bit(BTUSB_TX_WAIT_VND_EVT, &data->flags);
+-		usb_autopm_put_interface(data->intf);
+ 		goto err_free_wc;
+ 	}
+ 
+ 	/* Submit control IN URB on demand to process the WMT event */
+ 	err = btusb_mtk_submit_wmt_recv_urb(hdev);
+-
+-	usb_autopm_put_interface(data->intf);
+-
+ 	if (err < 0)
+ 		goto err_free_wc;
+ 
+@@ -3949,7 +3900,6 @@ static int btusb_probe(struct usb_interface *intf,
+ 		hdev->shutdown = btusb_mtk_shutdown;
+ 		hdev->manufacturer = 70;
+ 		hdev->cmd_timeout = btusb_mtk_cmd_timeout;
+-		hdev->set_bdaddr = btusb_set_bdaddr_mtk;
+ 		set_bit(HCI_QUIRK_NON_PERSISTENT_SETUP, &hdev->quirks);
+ 		data->recv_acl = btusb_recv_acl_mtk;
+ 	}
+diff --git a/drivers/bluetooth/hci_bcsp.c b/drivers/bluetooth/hci_bcsp.c
+index 8055f6360..cf4a56095 100644
+--- a/drivers/bluetooth/hci_bcsp.c
++++ b/drivers/bluetooth/hci_bcsp.c
+@@ -378,7 +378,7 @@ static void bcsp_pkt_cull(struct bcsp_struct *bcsp)
+ 		i++;
+ 
+ 		__skb_unlink(skb, &bcsp->unack);
+-		dev_kfree_skb_irq(skb);
++		kfree_skb(skb);
+ 	}
+ 
+ 	if (skb_queue_empty(&bcsp->unack))
+diff --git a/drivers/bluetooth/hci_h5.c b/drivers/bluetooth/hci_h5.c
+index 1363b21c8..e0ea9d25b 100644
+--- a/drivers/bluetooth/hci_h5.c
++++ b/drivers/bluetooth/hci_h5.c
+@@ -313,7 +313,7 @@ static void h5_pkt_cull(struct h5 *h5)
+ 			break;
+ 
+ 		__skb_unlink(skb, &h5->unack);
+-		dev_kfree_skb_irq(skb);
++		kfree_skb(skb);
+ 	}
+ 
+ 	if (skb_queue_empty(&h5->unack))
+diff --git a/drivers/bluetooth/hci_ldisc.c b/drivers/bluetooth/hci_ldisc.c
+index 2d960a5e3..5ed2cfa7d 100644
+--- a/drivers/bluetooth/hci_ldisc.c
++++ b/drivers/bluetooth/hci_ldisc.c
+@@ -490,11 +490,6 @@ static int hci_uart_tty_open(struct tty_struct *tty)
+ 		BT_ERR("Can't allocate control structure");
+ 		return -ENFILE;
+ 	}
+-	if (percpu_init_rwsem(&hu->proto_lock)) {
+-		BT_ERR("Can't allocate semaphore structure");
+-		kfree(hu);
+-		return -ENOMEM;
+-	}
+ 
+ 	tty->disc_data = hu;
+ 	hu->tty = tty;
+@@ -507,6 +502,8 @@ static int hci_uart_tty_open(struct tty_struct *tty)
+ 	INIT_WORK(&hu->init_ready, hci_uart_init_work);
+ 	INIT_WORK(&hu->write_work, hci_uart_write_work);
+ 
++	percpu_init_rwsem(&hu->proto_lock);
++
+ 	/* Flush any pending characters in the driver */
+ 	tty_driver_flush_buffer(tty);
+ 
+diff --git a/drivers/bluetooth/hci_ll.c b/drivers/bluetooth/hci_ll.c
+index e4e5b26e2..eb1e736ef 100644
+--- a/drivers/bluetooth/hci_ll.c
++++ b/drivers/bluetooth/hci_ll.c
+@@ -345,7 +345,7 @@ static int ll_enqueue(struct hci_uart *hu, struct sk_buff *skb)
+ 	default:
+ 		BT_ERR("illegal hcill state: %ld (losing packet)",
+ 		       ll->hcill_state);
+-		dev_kfree_skb_irq(skb);
++		kfree_skb(skb);
+ 		break;
+ 	}
+ 
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index 8041155f3..ed91af431 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -912,7 +912,7 @@ static int qca_enqueue(struct hci_uart *hu, struct sk_buff *skb)
+ 	default:
+ 		BT_ERR("Illegal tx state: %d (losing packet)",
+ 		       qca->tx_ibs_state);
+-		dev_kfree_skb_irq(skb);
++		kfree_skb(skb);
+ 		break;
+ 	}
+ 
+@@ -1582,11 +1582,10 @@ static bool qca_prevent_wake(struct hci_dev *hdev)
+ 	struct hci_uart *hu = hci_get_drvdata(hdev);
+ 	bool wakeup;
+ 
+-	/* BT SoC attached through the serial bus is handled by the serdev driver.
+-	 * So we need to use the device handle of the serdev driver to get the
+-	 * status of device may wakeup.
++	/* UART driver handles the interrupt from BT SoC.So we need to use
++	 * device handle of UART driver to get the status of device may wakeup.
+ 	 */
+-	wakeup = device_may_wakeup(&hu->serdev->ctrl->dev);
++	wakeup = device_may_wakeup(hu->serdev->ctrl->dev.parent);
+ 	bt_dev_dbg(hu->hdev, "wakeup status : %d", wakeup);
+ 
+ 	return !wakeup;
+@@ -2157,17 +2156,10 @@ static void qca_serdev_shutdown(struct device *dev)
+ 	int timeout = msecs_to_jiffies(CMD_TRANS_TIMEOUT_MS);
+ 	struct serdev_device *serdev = to_serdev_device(dev);
+ 	struct qca_serdev *qcadev = serdev_device_get_drvdata(serdev);
+-	struct hci_uart *hu = &qcadev->serdev_hu;
+-	struct hci_dev *hdev = hu->hdev;
+-	struct qca_data *qca = hu->priv;
+ 	const u8 ibs_wake_cmd[] = { 0xFD };
+ 	const u8 edl_reset_soc_cmd[] = { 0x01, 0x00, 0xFC, 0x01, 0x05 };
+ 
+ 	if (qcadev->btsoc_type == QCA_QCA6390) {
+-		if (test_bit(QCA_BT_OFF, &qca->flags) ||
+-		    !test_bit(HCI_RUNNING, &hdev->flags))
+-			return;
+-
+ 		serdev_device_write_flush(serdev);
+ 		ret = serdev_device_write_buf(serdev, ibs_wake_cmd,
+ 					      sizeof(ibs_wake_cmd));
+diff --git a/drivers/bluetooth/hci_serdev.c b/drivers/bluetooth/hci_serdev.c
+index 649d112ee..4cda890ce 100644
+--- a/drivers/bluetooth/hci_serdev.c
++++ b/drivers/bluetooth/hci_serdev.c
+@@ -301,12 +301,11 @@ int hci_uart_register_device(struct hci_uart *hu,
+ 
+ 	serdev_device_set_client_ops(hu->serdev, &hci_serdev_client_ops);
+ 
+-	if (percpu_init_rwsem(&hu->proto_lock))
+-		return -ENOMEM;
+-
+ 	err = serdev_device_open(hu->serdev);
+ 	if (err)
+-		goto err_rwsem;
++		return err;
++
++	percpu_init_rwsem(&hu->proto_lock);
+ 
+ 	err = p->open(hu);
+ 	if (err)
+@@ -379,8 +378,6 @@ int hci_uart_register_device(struct hci_uart *hu,
+ 	p->close(hu);
+ err_open:
+ 	serdev_device_close(hu->serdev);
+-err_rwsem:
+-	percpu_free_rwsem(&hu->proto_lock);
+ 	return err;
+ }
+ EXPORT_SYMBOL_GPL(hci_uart_register_device);
+@@ -402,6 +399,5 @@ void hci_uart_unregister_device(struct hci_uart *hu)
+ 		clear_bit(HCI_UART_PROTO_READY, &hu->flags);
+ 		serdev_device_close(hu->serdev);
+ 	}
+-	percpu_free_rwsem(&hu->proto_lock);
+ }
+ EXPORT_SYMBOL_GPL(hci_uart_unregister_device);
+diff --git a/drivers/bluetooth/virtio_bt.c b/drivers/bluetooth/virtio_bt.c
+index 612f10456..076e4942a 100644
+--- a/drivers/bluetooth/virtio_bt.c
++++ b/drivers/bluetooth/virtio_bt.c
+@@ -219,7 +219,7 @@ static void virtbt_rx_work(struct work_struct *work)
+ 	if (!skb)
+ 		return;
+ 
+-	skb_put(skb, len);
++	skb->len = len;
+ 	virtbt_rx_handle(vbt, skb);
+ 
+ 	if (virtbt_add_inbuf(vbt) < 0)
+diff --git a/drivers/tty/serial/imx.c b/drivers/tty/serial/imx.c
+index 77a4f4af3..7d24dea7f 100644
+--- a/drivers/tty/serial/imx.c
++++ b/drivers/tty/serial/imx.c
+@@ -23,6 +23,7 @@
+ #include <linux/ktime.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/rational.h>
++#include <linux/reset.h>
+ #include <linux/slab.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
+@@ -30,6 +31,8 @@
+ #include <linux/dma-mapping.h>
+ 
+ #include <asm/irq.h>
++#include <linux/busfreq-imx.h>
++#include <linux/pm_qos.h>
+ #include <linux/platform_data/dma-imx.h>
+ 
+ #include "serial_mctrl_gpio.h"
+@@ -173,6 +176,7 @@
+ #define DRIVER_NAME "IMX-uart"
+ 
+ #define UART_NR 8
++#define IMX_MODULE_MAX_CLK_RATE	80000000
+ 
+ /* i.MX21 type uart runs on all i.mx except i.MX1 and i.MX6q */
+ enum imx_uart_type {
+@@ -237,6 +241,8 @@ struct imx_port {
+ 	enum imx_tx_state	tx_state;
+ 	struct hrtimer		trigger_start_tx;
+ 	struct hrtimer		trigger_stop_tx;
++
++	struct pm_qos_request   pm_qos_req;
+ };
+ 
+ struct imx_port_ucrs {
+@@ -380,7 +386,8 @@ static void imx_uart_rts_active(struct imx_port *sport, u32 *ucr2)
+ {
+ 	*ucr2 &= ~(UCR2_CTSC | UCR2_CTS);
+ 
+-	mctrl_gpio_set(sport->gpios, sport->port.mctrl | TIOCM_RTS);
++	sport->port.mctrl |= TIOCM_RTS;
++	mctrl_gpio_set(sport->gpios, sport->port.mctrl);
+ }
+ 
+ /* called with port.lock taken and irqs caller dependent */
+@@ -389,7 +396,8 @@ static void imx_uart_rts_inactive(struct imx_port *sport, u32 *ucr2)
+ 	*ucr2 &= ~UCR2_CTSC;
+ 	*ucr2 |= UCR2_CTS;
+ 
+-	mctrl_gpio_set(sport->gpios, sport->port.mctrl & ~TIOCM_RTS);
++	sport->port.mctrl &= ~TIOCM_RTS;
++	mctrl_gpio_set(sport->gpios, sport->port.mctrl);
+ }
+ 
+ static void start_hrtimer_ms(struct hrtimer *hrt, unsigned long msec)
+@@ -484,7 +492,7 @@ static void imx_uart_stop_tx(struct uart_port *port)
+ static void imx_uart_stop_rx(struct uart_port *port)
+ {
+ 	struct imx_port *sport = (struct imx_port *)port;
+-	u32 ucr1, ucr2, ucr4, uts;
++	u32 ucr1, ucr2, ucr4;
+ 
+ 	ucr1 = imx_uart_readl(sport, UCR1);
+ 	ucr2 = imx_uart_readl(sport, UCR2);
+@@ -500,18 +508,7 @@ static void imx_uart_stop_rx(struct uart_port *port)
+ 	imx_uart_writel(sport, ucr1, UCR1);
+ 	imx_uart_writel(sport, ucr4, UCR4);
+ 
+-	/* See SER_RS485_ENABLED/UTS_LOOP comment in imx_uart_probe() */
+-	if (port->rs485.flags & SER_RS485_ENABLED &&
+-	    port->rs485.flags & SER_RS485_RTS_ON_SEND &&
+-	    sport->have_rtscts && !sport->have_rtsgpio) {
+-		uts = imx_uart_readl(sport, imx_uart_uts_reg(sport));
+-		uts |= UTS_LOOP;
+-		imx_uart_writel(sport, uts, imx_uart_uts_reg(sport));
+-		ucr2 |= UCR2_RXEN;
+-	} else {
+-		ucr2 &= ~UCR2_RXEN;
+-	}
+-
++	ucr2 &= ~UCR2_RXEN;
+ 	imx_uart_writel(sport, ucr2, UCR2);
+ }
+ 
+@@ -1298,6 +1295,9 @@ static void imx_uart_dma_exit(struct imx_port *sport)
+ 		dma_release_channel(sport->dma_chan_tx);
+ 		sport->dma_chan_tx = NULL;
+ 	}
++
++	cpu_latency_qos_remove_request(&sport->pm_qos_req);
++	release_bus_freq(BUS_FREQ_HIGH);
+ }
+ 
+ static int imx_uart_dma_init(struct imx_port *sport)
+@@ -1306,6 +1306,10 @@ static int imx_uart_dma_init(struct imx_port *sport)
+ 	struct device *dev = sport->port.dev;
+ 	int ret;
+ 
++	/* request high bus for DMA mode */
++	request_bus_freq(BUS_FREQ_HIGH);
++	cpu_latency_qos_add_request(&sport->pm_qos_req, 0);
++
+ 	/* Prepare for RX : */
+ 	sport->dma_chan_rx = dma_request_slave_channel(dev, "rx");
+ 	if (!sport->dma_chan_rx) {
+@@ -1319,6 +1323,8 @@ static int imx_uart_dma_init(struct imx_port *sport)
+ 	slave_config.src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+ 	/* one byte less than the watermark level to enable the aging timer */
+ 	slave_config.src_maxburst = RXTL_DMA - 1;
++	slave_config.peripheral_config = NULL;
++	slave_config.peripheral_size = 0;
+ 	ret = dmaengine_slave_config(sport->dma_chan_rx, &slave_config);
+ 	if (ret) {
+ 		dev_err(dev, "error in RX dma configuration.\n");
+@@ -1345,6 +1351,8 @@ static int imx_uart_dma_init(struct imx_port *sport)
+ 	slave_config.dst_addr = sport->port.mapbase + URTX0;
+ 	slave_config.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+ 	slave_config.dst_maxburst = TXTL_DMA;
++	slave_config.peripheral_config = NULL;
++	slave_config.peripheral_size = 0;
+ 	ret = dmaengine_slave_config(sport->dma_chan_tx, &slave_config);
+ 	if (ret) {
+ 		dev_err(dev, "error in TX dma configuration.");
+@@ -1363,9 +1371,9 @@ static void imx_uart_enable_dma(struct imx_port *sport)
+ 
+ 	imx_uart_setup_ufcr(sport, TXTL_DMA, RXTL_DMA);
+ 
+-	/* set UCR1 */
++	/* set UCR1 except TXDMAEN which would be enabled in imx_uart_dma_tx */
+ 	ucr1 = imx_uart_readl(sport, UCR1);
+-	ucr1 |= UCR1_RXDMAEN | UCR1_TXDMAEN | UCR1_ATDMAEN;
++	ucr1 |= UCR1_RXDMAEN | UCR1_ATDMAEN;
+ 	imx_uart_writel(sport, ucr1, UCR1);
+ 
+ 	sport->dma_is_enabled = 1;
+@@ -1391,10 +1399,18 @@ static void imx_uart_disable_dma(struct imx_port *sport)
+ static int imx_uart_startup(struct uart_port *port)
+ {
+ 	struct imx_port *sport = (struct imx_port *)port;
++	struct tty_port *tty_port = &sport->port.state->port;
+ 	int retval, i;
+ 	unsigned long flags;
+ 	int dma_is_inited = 0;
+-	u32 ucr1, ucr2, ucr3, ucr4, uts;
++	u32 ucr1, ucr2, ucr3, ucr4;
++
++	/* some modem may need reset */
++	if (!tty_port_suspended(tty_port)) {
++		retval = device_reset(sport->port.dev);
++		if (retval && retval != -ENOENT)
++			return retval;
++	}
+ 
+ 	retval = clk_prepare_enable(sport->clk_per);
+ 	if (retval)
+@@ -1487,8 +1503,9 @@ static int imx_uart_startup(struct uart_port *port)
+ 	imx_uart_enable_ms(&sport->port);
+ 
+ 	if (dma_is_inited) {
+-		imx_uart_enable_dma(sport);
++		/* Note: enable dma request after transfer start! */
+ 		imx_uart_start_rx_dma(sport);
++		imx_uart_enable_dma(sport);
+ 	} else {
+ 		ucr1 = imx_uart_readl(sport, UCR1);
+ 		ucr1 |= UCR1_RRDYEN;
+@@ -1499,11 +1516,6 @@ static int imx_uart_startup(struct uart_port *port)
+ 		imx_uart_writel(sport, ucr2, UCR2);
+ 	}
+ 
+-	/* See SER_RS485_ENABLED/UTS_LOOP comment in imx_uart_probe() */
+-	uts = imx_uart_readl(sport, imx_uart_uts_reg(sport));
+-	uts &= ~UTS_LOOP;
+-	imx_uart_writel(sport, uts, imx_uart_uts_reg(sport));
+-
+ 	spin_unlock_irqrestore(&sport->port.lock, flags);
+ 
+ 	return 0;
+@@ -1513,7 +1525,7 @@ static void imx_uart_shutdown(struct uart_port *port)
+ {
+ 	struct imx_port *sport = (struct imx_port *)port;
+ 	unsigned long flags;
+-	u32 ucr1, ucr2, ucr4, uts;
++	u32 ucr1, ucr2, ucr4;
+ 
+ 	if (sport->dma_is_enabled) {
+ 		dmaengine_terminate_sync(sport->dma_chan_tx);
+@@ -1557,18 +1569,7 @@ static void imx_uart_shutdown(struct uart_port *port)
+ 	spin_lock_irqsave(&sport->port.lock, flags);
+ 
+ 	ucr1 = imx_uart_readl(sport, UCR1);
+-	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN | UCR1_RXDMAEN | UCR1_ATDMAEN);
+-	/* See SER_RS485_ENABLED/UTS_LOOP comment in imx_uart_probe() */
+-	if (port->rs485.flags & SER_RS485_ENABLED &&
+-	    port->rs485.flags & SER_RS485_RTS_ON_SEND &&
+-	    sport->have_rtscts && !sport->have_rtsgpio) {
+-		uts = imx_uart_readl(sport, imx_uart_uts_reg(sport));
+-		uts |= UTS_LOOP;
+-		imx_uart_writel(sport, uts, imx_uart_uts_reg(sport));
+-		ucr1 |= UCR1_UARTEN;
+-	} else {
+-		ucr1 &= ~UCR1_UARTEN;
+-	}
++	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN | UCR1_UARTEN | UCR1_RXDMAEN | UCR1_ATDMAEN);
+ 	imx_uart_writel(sport, ucr1, UCR1);
+ 
+ 	ucr4 = imx_uart_readl(sport, UCR4);
+@@ -2216,7 +2217,7 @@ static int imx_uart_probe(struct platform_device *pdev)
+ 	void __iomem *base;
+ 	u32 dma_buf_conf[2];
+ 	int ret = 0;
+-	u32 ucr1, ucr2, uts;
++	u32 ucr1;
+ 	struct resource *res;
+ 	int txirq, rxirq, rtsirq;
+ 
+@@ -2305,6 +2306,14 @@ static int imx_uart_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
++	sport->port.uartclk = clk_get_rate(sport->clk_per);
++	if (sport->port.uartclk > IMX_MODULE_MAX_CLK_RATE) {
++		ret = clk_set_rate(sport->clk_per, IMX_MODULE_MAX_CLK_RATE);
++		if (ret < 0) {
++			dev_err(&pdev->dev, "clk_set_rate() failed\n");
++			return ret;
++		}
++	}
+ 	sport->port.uartclk = clk_get_rate(sport->clk_per);
+ 
+ 	/* For register access, we only need to enable the ipg clock. */
+@@ -2343,41 +2352,13 @@ static int imx_uart_probe(struct platform_device *pdev)
+ 		dev_err(&pdev->dev,
+ 			"low-active RTS not possible when receiver is off, enabling receiver\n");
+ 
++	imx_uart_rs485_config(&sport->port, &sport->port.rs485);
++
+ 	/* Disable interrupts before requesting them */
+ 	ucr1 = imx_uart_readl(sport, UCR1);
+ 	ucr1 &= ~(UCR1_ADEN | UCR1_TRDYEN | UCR1_IDEN | UCR1_RRDYEN | UCR1_RTSDEN);
+ 	imx_uart_writel(sport, ucr1, UCR1);
+ 
+-	/* Disable Ageing Timer interrupt */
+-	ucr2 = imx_uart_readl(sport, UCR2);
+-	ucr2 &= ~UCR2_ATEN;
+-	imx_uart_writel(sport, ucr2, UCR2);
+-
+-	/*
+-	 * In case RS485 is enabled without GPIO RTS control, the UART IP
+-	 * is used to control CTS signal. Keep both the UART and Receiver
+-	 * enabled, otherwise the UART IP pulls CTS signal always HIGH no
+-	 * matter how the UCR2 CTSC and CTS bits are set. To prevent any
+-	 * data from being fed into the RX FIFO, enable loopback mode in
+-	 * UTS register, which disconnects the RX path from external RXD
+-	 * pin and connects it to the Transceiver, which is disabled, so
+-	 * no data can be fed to the RX FIFO that way.
+-	 */
+-	if (sport->port.rs485.flags & SER_RS485_ENABLED &&
+-	    sport->have_rtscts && !sport->have_rtsgpio) {
+-		uts = imx_uart_readl(sport, imx_uart_uts_reg(sport));
+-		uts |= UTS_LOOP;
+-		imx_uart_writel(sport, uts, imx_uart_uts_reg(sport));
+-
+-		ucr1 = imx_uart_readl(sport, UCR1);
+-		ucr1 |= UCR1_UARTEN;
+-		imx_uart_writel(sport, ucr1, UCR1);
+-
+-		ucr2 = imx_uart_readl(sport, UCR2);
+-		ucr2 |= UCR2_RXEN;
+-		imx_uart_writel(sport, ucr2, UCR2);
+-	}
+-
+ 	if (!imx_uart_is_imx1(sport) && sport->dte_mode) {
+ 		/*
+ 		 * The DCEDTE bit changes the direction of DSR, DCD, DTR and RI
+@@ -2526,10 +2507,12 @@ static void imx_uart_enable_wakeup(struct imx_port *sport, bool on)
+ 
+ 	if (sport->have_rtscts) {
+ 		u32 ucr1 = imx_uart_readl(sport, UCR1);
+-		if (on)
++		if (on) {
++			imx_uart_writel(sport, USR1_RTSD, USR1);
+ 			ucr1 |= UCR1_RTSDEN;
+-		else
++		} else {
+ 			ucr1 &= ~UCR1_RTSDEN;
++		}
+ 		imx_uart_writel(sport, ucr1, UCR1);
+ 	}
+ }
+@@ -2620,7 +2603,6 @@ static const struct dev_pm_ops imx_uart_pm_ops = {
+ 	.suspend_noirq = imx_uart_suspend_noirq,
+ 	.resume_noirq = imx_uart_resume_noirq,
+ 	.freeze_noirq = imx_uart_suspend_noirq,
+-	.thaw_noirq = imx_uart_resume_noirq,
+ 	.restore_noirq = imx_uart_resume_noirq,
+ 	.suspend = imx_uart_suspend,
+ 	.resume = imx_uart_resume,
+-- 
+2.25.1
+

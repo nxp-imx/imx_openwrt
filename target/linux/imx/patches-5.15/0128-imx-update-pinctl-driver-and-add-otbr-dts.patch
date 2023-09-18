@@ -1,0 +1,270 @@
+From 7e4d14823c55c5e44f2118e265df1a657361c15f Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Mon, 18 Sep 2023 08:59:56 +0800
+Subject: [PATCH] imx: update pinctl driver and add otbr dts
+
+---
+ arch/arm64/boot/dts/freescale/Makefile        |  3 +-
+ .../freescale/imx93-11x11-evk-iw612-otbr.dts  | 43 ++++++++++++++++
+ drivers/bus/simple-pm-bus.c                   | 42 ++--------------
+ drivers/pinctrl/devicetree.c                  | 49 ++++++++++++++++++-
+ drivers/pinctrl/pinconf-generic.c             |  4 +-
+ drivers/pinctrl/pinctrl-single.c              |  4 +-
+ 6 files changed, 97 insertions(+), 48 deletions(-)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93-11x11-evk-iw612-otbr.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 9a7319c6b..35fd0f4c2 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -228,7 +228,8 @@ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb \
+ 			  imx93-11x11-evk-boe-wxga-lvds-panel.dtb imx93-11x11-evk-lpuart.dtb \
+ 			  imx93-11x11-evk-mqs.dtb imx93-11x11-evk-aud-hat.dtb \
+ 			  imx93-11x11-evk-flexspi-m2.dtb \
+-			  imx93-11x11-evk-mt9m114.dtb
++			  imx93-11x11-evk-mt9m114.dtb \
++			  imx93-11x11-evk-iw612-otbr.dtb
+ dtb-$(CONFIG_ARCH_MXC) += imx93-9x9-qsb.dtb \
+ 			  imx93-9x9-qsb-can1.dtb \
+ 			  imx93-9x9-qsb-flexspi-m2.dtb \
+diff --git a/arch/arm64/boot/dts/freescale/imx93-11x11-evk-iw612-otbr.dts b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-iw612-otbr.dts
+new file mode 100644
+index 000000000..e53c4aa59
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93-11x11-evk-iw612-otbr.dts
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2022 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++&lpi2c1 {
++    pinctrl-assert-gpios = <&pcal6524 13 GPIO_ACTIVE_HIGH>;
++    pcal6408: gpio@20 {
++        compatible = "nxp,pcal9554b";
++        reg = <0x20>;
++        gpio-controller;
++        #gpio-cells = <2>;
++        status = "okay";
++    };
++};
++&lpspi3 {
++    fsl,spi-num-chipselects = <1>;
++    pinctrl-names = "default", "sleep";
++    pinctrl-0 = <&pinctrl_lpspi3>;
++    pinctrl-1 = <&pinctrl_lpspi3>;
++    cs-gpios = <&gpio2 8 GPIO_ACTIVE_LOW>;
++    pinctrl-assert-gpios = <&adp5585gpio 4 GPIO_ACTIVE_LOW>;
++    status = "okay";
++
++    spidev0: spi@0 {
++        reg = <0>;
++        compatible = "lwn,bk4";
++        spi-max-frequency = <1000000>;
++    };
++};
++
++&iomuxc {
++    pinctrl_lpspi3: lpspi3grp {
++        fsl,pins = <
++            MX93_PAD_GPIO_IO08__GPIO2_IO08      0x3fe
++            MX93_PAD_GPIO_IO09__LPSPI3_SIN      0x3fe
++            MX93_PAD_GPIO_IO10__LPSPI3_SOUT     0x3fe
++            MX93_PAD_GPIO_IO11__LPSPI3_SCK      0x3fe
++        >;
++    };
++};
+diff --git a/drivers/bus/simple-pm-bus.c b/drivers/bus/simple-pm-bus.c
+index 6b8d6257e..01a3d0cd0 100644
+--- a/drivers/bus/simple-pm-bus.c
++++ b/drivers/bus/simple-pm-bus.c
+@@ -13,36 +13,11 @@
+ #include <linux/platform_device.h>
+ #include <linux/pm_runtime.h>
+ 
++
+ static int simple_pm_bus_probe(struct platform_device *pdev)
+ {
+-	const struct device *dev = &pdev->dev;
+-	const struct of_dev_auxdata *lookup = dev_get_platdata(dev);
+-	struct device_node *np = dev->of_node;
+-	const struct of_device_id *match;
+-
+-	/*
+-	 * Allow user to use driver_override to bind this driver to a
+-	 * transparent bus device which has a different compatible string
+-	 * that's not listed in simple_pm_bus_of_match. We don't want to do any
+-	 * of the simple-pm-bus tasks for these devices, so return early.
+-	 */
+-	if (pdev->driver_override)
+-		return 0;
+-
+-	match = of_match_device(dev->driver->of_match_table, dev);
+-	/*
+-	 * These are transparent bus devices (not simple-pm-bus matches) that
+-	 * have their child nodes populated automatically.  So, don't need to
+-	 * do anything more. We only match with the device if this driver is
+-	 * the most specific match because we don't want to incorrectly bind to
+-	 * a device that has a more specific driver.
+-	 */
+-	if (match && match->data) {
+-		if (of_property_match_string(np, "compatible", match->compatible) == 0)
+-			return 0;
+-		else
+-			return -ENODEV;
+-	}
++	const struct of_dev_auxdata *lookup = dev_get_platdata(&pdev->dev);
++	struct device_node *np = pdev->dev.of_node;
+ 
+ 	dev_dbg(&pdev->dev, "%s\n", __func__);
+ 
+@@ -56,25 +31,14 @@ static int simple_pm_bus_probe(struct platform_device *pdev)
+ 
+ static int simple_pm_bus_remove(struct platform_device *pdev)
+ {
+-	const void *data = of_device_get_match_data(&pdev->dev);
+-
+-	if (pdev->driver_override || data)
+-		return 0;
+-
+ 	dev_dbg(&pdev->dev, "%s\n", __func__);
+ 
+ 	pm_runtime_disable(&pdev->dev);
+ 	return 0;
+ }
+ 
+-#define ONLY_BUS	((void *) 1) /* Match if the device is only a bus. */
+-
+ static const struct of_device_id simple_pm_bus_of_match[] = {
+ 	{ .compatible = "simple-pm-bus", },
+-	{ .compatible = "simple-bus",	.data = ONLY_BUS },
+-	{ .compatible = "simple-mfd",	.data = ONLY_BUS },
+-	{ .compatible = "isa",		.data = ONLY_BUS },
+-	{ .compatible = "arm,amba-bus",	.data = ONLY_BUS },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, simple_pm_bus_of_match);
+diff --git a/drivers/pinctrl/devicetree.c b/drivers/pinctrl/devicetree.c
+index eac55fee5..4ccc583d6 100644
+--- a/drivers/pinctrl/devicetree.c
++++ b/drivers/pinctrl/devicetree.c
+@@ -7,6 +7,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/of.h>
++#include <linux/of_gpio.h>
+ #include <linux/pinctrl/pinctrl.h>
+ #include <linux/slab.h>
+ 
+@@ -193,6 +194,46 @@ static int dt_remember_dummy_state(struct pinctrl *p, const char *statename)
+ 	return dt_remember_or_free_map(p, statename, NULL, map, 1);
+ }
+ 
++static int dt_gpio_assert_pinctrl(struct pinctrl *p)
++{
++	struct device_node *np = p->dev->of_node;
++	enum of_gpio_flags flags;
++	int gpio;
++	int index = 0;
++	int ret;
++
++	if (!of_find_property(np, "pinctrl-assert-gpios", NULL))
++		return 0; /* Missing the property, so nothing to be done */
++
++	for (;; index++) {
++		gpio = of_get_named_gpio_flags(np, "pinctrl-assert-gpios",
++					       index, &flags);
++		if (gpio < 0) {
++			if (gpio == -EPROBE_DEFER)
++				return gpio;
++			break; /* End of the phandle list */
++		}
++
++		if (!gpio_is_valid(gpio))
++			return -EINVAL;
++
++		ret = devm_gpio_request_one(p->dev, gpio, GPIOF_OUT_INIT_LOW,
++					    NULL);
++		if (ret < 0)
++			return ret;
++
++		if (flags & OF_GPIO_ACTIVE_LOW)
++			continue;
++
++		if (gpio_cansleep(gpio))
++			gpio_set_value_cansleep(gpio, 1);
++		else
++			gpio_set_value(gpio, 1);
++	}
++
++	return 0;
++}
++
+ int pinctrl_dt_to_map(struct pinctrl *p, struct pinctrl_dev *pctldev)
+ {
+ 	struct device_node *np = p->dev->of_node;
+@@ -213,6 +254,12 @@ int pinctrl_dt_to_map(struct pinctrl *p, struct pinctrl_dev *pctldev)
+ 		return 0;
+ 	}
+ 
++	ret = dt_gpio_assert_pinctrl(p);
++	if (ret) {
++		dev_dbg(p->dev, "failed to assert pinctrl setting: %d\n", ret);
++		return ret;
++	}
++
+ 	/* We may store pointers to property names within the node */
+ 	of_node_get(np);
+ 
+@@ -220,8 +267,6 @@ int pinctrl_dt_to_map(struct pinctrl *p, struct pinctrl_dev *pctldev)
+ 	for (state = 0; ; state++) {
+ 		/* Retrieve the pinctrl-* property */
+ 		propname = kasprintf(GFP_KERNEL, "pinctrl-%d", state);
+-		if (!propname)
+-			return -ENOMEM;
+ 		prop = of_find_property(np, propname, &size);
+ 		kfree(propname);
+ 		if (!prop) {
+diff --git a/drivers/pinctrl/pinconf-generic.c b/drivers/pinctrl/pinconf-generic.c
+index e6fe1330e..b1db28007 100644
+--- a/drivers/pinctrl/pinconf-generic.c
++++ b/drivers/pinctrl/pinconf-generic.c
+@@ -393,10 +393,8 @@ int pinconf_generic_dt_node_to_map(struct pinctrl_dev *pctldev,
+ 	for_each_available_child_of_node(np_config, np) {
+ 		ret = pinconf_generic_dt_subnode_to_map(pctldev, np, map,
+ 					&reserved_maps, num_maps, type);
+-		if (ret < 0) {
+-			of_node_put(np);
++		if (ret < 0)
+ 			goto exit;
+-		}
+ 	}
+ 	return 0;
+ 
+diff --git a/drivers/pinctrl/pinctrl-single.c b/drivers/pinctrl/pinctrl-single.c
+index 9ad8f7020..67bec7ea0 100644
+--- a/drivers/pinctrl/pinctrl-single.c
++++ b/drivers/pinctrl/pinctrl-single.c
+@@ -372,8 +372,6 @@ static int pcs_set_mux(struct pinctrl_dev *pctldev, unsigned fselector,
+ 	if (!pcs->fmask)
+ 		return 0;
+ 	function = pinmux_generic_get_function(pctldev, fselector);
+-	if (!function)
+-		return -EINVAL;
+ 	func = function->data;
+ 	if (!func)
+ 		return -EINVAL;
+@@ -729,7 +727,7 @@ static int pcs_allocate_pin_table(struct pcs_device *pcs)
+ 
+ 	mux_bytes = pcs->width / BITS_PER_BYTE;
+ 
+-	if (pcs->bits_per_mux && pcs->fmask) {
++	if (pcs->bits_per_mux) {
+ 		pcs->bits_per_pin = fls(pcs->fmask);
+ 		nr_pins = (pcs->size * BITS_PER_BYTE) / pcs->bits_per_pin;
+ 	} else {
+-- 
+2.25.1
+
