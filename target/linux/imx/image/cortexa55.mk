@@ -28,7 +28,7 @@ define Device/imx93evk
 	firmware-sentinel \
 	imx-mkimage \
 	u-boot-imx93
-  DEVICE_DTS := freescale/imx93-11x11-evk
+  DEVICE_DTS := freescale/imx93-11x11-evk-iw612-otbr
   IMAGE/sdcard.img := \
 	imx-compile-dtb $$(DEVICE_DTS) | \
 	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
