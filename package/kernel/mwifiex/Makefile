@@ -187,13 +187,13 @@ endef
 include $(INCLUDE_DIR)/kernel-defaults.mk
 
 MWIFIEX_FM_NAME:=imx-firmware
-MWIFIEX_FM_VER:=lf-5.15.71-2.2.0
+MWIFIEX_FM_VER:=lf-6.1.1_1.0.0
 MWIFIEX_FM_SOURCE:=$(MWIFIEX_FM_NAME)-$(MWIFIEX_FM_VER).tar.bz2
 define Download/imx-firmware
   FILE:=$(MWIFIEX_FM_SOURCE)
   PROTO:=git
   URL:=https://github.com/nxp-imx/imx-firmware.git
-  VERSION:=lf-5.15.71-2.2.0
+  VERSION:=lf-6.1.1_1.0.0
   SUBDIR:=mwifiex-firmware
   MIRROR_HASH:=4c68d0f63d5e6a86297ec92c90d4e2e3ad7aaa12400fdd99d1ce1339ba025bee
 endef
