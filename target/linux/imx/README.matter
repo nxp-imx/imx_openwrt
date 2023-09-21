@@ -1,0 +1,326 @@
+
+I.MX OpenWRT for Matter Quick Start
+
+This is a quick start guide for how to compile and deploy Matter OTBR on imx8mm and imx93evk platform.
+
+1. hardware
+----------------------------
+* IMX8MMini_LPDDR4	(SD boot)
+  88W8987			(WIFI module)
+  K32W				(RCP) 
+
+* IMX93evk			(SD boot)
+  2EL(IW612) M.2 WIFI Module (WIFI, THREAD, ZIGBEE)
+	
+2. Build Linux Kenrel and OpenWRT
+----------------------------------
+Before configuration and build, update and install package feeds.
+
+$ sudo apt update
+$ sudo apt install build-essential ccache ecj fastjar file g++ gawk \
+  gettext git java-propose-classpath libelf-dev libncurses5-dev \
+  libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
+  python3-distutils python3-setuptools python3-dev rsync subversion \
+  swig time xsltproc zlib1g-dev
+$ ./scripts/feeds update -a
+$ ./scripts/feeds install -a
+
+* use matter config to enable all the config options
+$ cp imx93_matter.defconfig .config (for imx93evk platform)
+  cp imx8mm_matter.defconfig .config (for imx8mm platform)
+
+* adjust other options if needed
+$ make menuconfig
+
+* adjust kernel options if needed
+$ make kernel_menuconfig (optional)
+
+* build image
+$ make (or make -j<n>)
+
+* Final firmware/image
+  bin/targets/imx/imx8-glibc/openwrt-imx-imx8-imx8mmini-squashfs-sdcard.img (for imx8mm)
+  bin/targets/imx/cortexa55-glibc/openwrt-imx-cortexa55-imx93evk-squashfs-sdcard.img (for imx93)
+
+3. Deploy
+---------
+
+The *-sdcard.img is an all-in-one image including all things for Matter.
+
+3.1 Program sdcard.img to SD card
+---------------------------------
+
+*-sdcard.img could be programmed to SD card in either u-boot environment
+or linux environment. After programming, configure the board to boot
+from SD card.
+
+* u-boot environment
+
+  => tftp a0000000 <image_name>-sdcard.img
+  => mmc write a0000000 0 a0000
+
+  Note: The default sdcard.img size is about 200MB. a0000 is the block number
+  for 320MB. blk_num = filesize / 512.
+
+* linux environment
+
+  $ sudo dd if=./<image_name>-sdcard.img of=/dev/sdx bs=1M && sync
+
+  Note: Need to check the SD card device name to replace "sdx".
+
+Until now, OpenWRT part is all ready for use.
+
+4. Copy Matter related tools to OpenWRT
+---------------------------------------
+
+4.1 Build Matter toolchain and install it
+* Follow the steps listed at: https://www.nxp.com.cn/docs/en/user-guide/GSG-IMX8MMINI-MATTER.pdf
+  to get fsl-imx-xwayland-glibc-x86_64-imx-image-multimedia-armv8a-imx8mmevk-toolchain-5.15-kirkstone.sh 
+
+* Install this toolchain by: 
+  $ ./fsl-imx-xwayland-glibc-x86_64-imx-image-multimedia-armv8aimx8mmevk-toolchain-5.15-kirkstone.sh 
+
+* Alternative reference document, please check:
+  https://github.com/nxp-imx/meta-matter/tree/imx_matter_2023_q1
+
+4.2 Copy Matter related tools and library to OpenWRT
+
+  * libjsoncpp used by otbr-web
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/usr/lib/libjsoncpp.so* /usr/lib/
+
+  * libsystemd used by otbr-agent
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/lib/libsystemd.so* /lib/
+
+  * Matter tools
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/usr/sbin/otbr-web /usr/sbin/
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/usr/sbin/ot-ctl /usr/sbin/
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/usr/sbin/otbr-agent /usr/sbin/
+  $ scp xx@xx.xx.xx.xx:/dir/to/toolchain/usr/bin/chip-tool /usr/bin/
+  
+5. Setup the OpenThread OTBR on imx8mm target
+--------------------------------------------
+
+5.1 Sync with current time
+
+  $ date -s "2023-05-10 17:14"
+
+5.2 Connect the OTBR to the Wi-Fi access point
+
+  $ insmod /lib/module/5.15.114/mlan.ko
+  $ insmod /lib/module/5.15.114/moal.ko mod_para=nxp/wifi_mod_para.conf
+  $ wpa_passphrase ${SSID} ${PASSWORD} > imxrouter.conf
+  $ wpa_supplicant -d -B -i mlan0 -c ./imxrouter.conf
+  $ udhcpc -i mlan0
+
+  $ hciattach /dev/ttymxc0 any 115200 flow
+  $ hciconfig hci0 up
+
+  $ /usr/libexec/bluetooth/bluetoothd (optional, normally it was executed already)
+
+  $ echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+  $ echo 1 > /proc/sys/net/ipv4/ip_forward
+  $ echo 2 > /proc/sys/net/ipv6/conf/all/accept_ra
+
+5.3 Setup OTBR
+
+  $ ipset create -exist otbr-ingress-deny-src hash:net family inet6
+  $ ipset create -exist otbr-ingress-deny-src-swap hash:net family inet6
+  $ ipset create -exist otbr-ingress-allow-dst hash:net family inet6
+  $ ipset create -exist otbr-ingress-allow-dst-swap hash:net family inet6
+  $ ./otbr-agent -I wpan0 -B mlan0 'spinel+hdlc+uart:///dev/ttyUSB0?uartbaudrate=1000000' -v -d 5 &
+  $ iptables -A FORWARD -i mlan0 -o wpan0 -j ACCEPT
+  $ iptables -A FORWARD -i wpan0 -o mlan0 -j ACCEPT
+  $ otbr-web & (optional)
+
+5.4 Form and Config OpenThread network
+
+Use one of the following two methods to config the network
+
+5.4.1 Config OpenThread network by UI method
+
+  In PC browser input IP address of the IMX8MMEVK then click “Form” on left side of the
+  web page where any of the parameter for Openthread network can be changed, including
+  PAN ID/ExtPAN ID/Channel/NwkKey,etc.
+
+5.4.2 Config network by CLI
+
+  $ ./ot-ctl dataset init new
+  $ ./ot-ctl dataset networkkey 00112233445566778899aabbccddeeff
+  $ ./ot-ctl dataset channel 11
+  $ ./ot-ctl dataset panid 0x1234
+  $ ./ot-ctl dataset extpanid 1111111122222222
+  $ ./ot-ctl dataset networkname Matter-NXP-1
+  $ ./ot-ctl prefix add fd08:b89:78:f372::/64 paos med
+  $ ./ot-ctl ifconfig up
+  $ ./ot-ctl thread start
+  $ ./ot-ctl state
+
+5.5 Get thread network credential information
+
+  $ ot-ctl dataset active -x
+
+    it will get something like:
+    0e080000000000000000000300000b35060004001fffe00208dead00beef00cafe0708fddead00b
+    eef000005106fb5e8851e6985cc4f77b981eba5b94a030a4f70656e5468726561640102079f0410
+    8fa1fc598d79f6c0d8fd77f3b44404b80c0402a0fff8
+
+	this information will feed from commissioner to the joining matter device to config it
+    pairing to open thread network properly.
+
+5.6 Join Matter Device to Matter Network
+
+  Pairing commissioner (Lighting node) with commissioner
+
+5.6.1 Factory K32W Lighting-app
+
+  Step1. Toggle reset
+  Step2. Toggle Button SW2 on OM15802, After 6 seconds will cause the device to reset its persistent
+         configuration and initiate a reboot.
+  Step3. Press USERINTERFACE button to start BLE Advertising which is mandatory for device
+         commissioning
+
+5.6.2 Pair (on 8MMEVK)
+
+  Parameter after “ble-thread” is node-id (here is 1,can be any positive integer starting
+  from 1) that should be set uniquely for each Matter device that joined the network,
+  the last but one parameter is pin code (here fixed to 20202021), the last parameter is
+  discriminator (here fixed to 3840)
+
+  $ chip-tool pairing ble-thread 1
+    hex:0e080000000000000000000300000b35060004001fffe00208dead00beef00cafe0708fddea
+    d00beef000005106fb5e8851e6985cc4f77b981eba5b94a030a4f70656e5468726561640102079f
+    04108fa1fc598d79f6c0d8fd77f3b44404b80c0402a0fff8 20202021 3840
+
+    Normally the whole commissioning process will cost approximately 20s before
+    completed. If there is "Device commissioning completed with success" message
+    prompt on 8M Mini chip-tool log, which means the Matter device successfully joined
+    the network, otherwise no further operation can be undertaken.
+
+5.6.3 Control end device
+
+  $ chip-tool onoff toggle 1 1
+
+    Then can see the LED3 ON/OFF.
+    The last but one parameter (here is 1) is node id that must be exactly the same as that
+    used in previous step
+
+6. Setup the OpenThread OTBR on imx93 target
+--------------------------------------------
+
+6.1 Sync with current time
+
+  $ date -s "2023-05-10 17:14"
+
+6.2 Connect the OTBR to the Wi-Fi access point
+
+  $ insmod /lib/module/5.15.114/mlan.ko
+  $ insmod /lib/module/5.15.114/moal.ko mod_para=nxp/wifi_mod_para.conf
+  $ wpa_passphrase ${SSID} ${PASSWORD} > imxrouter.conf
+  $ wpa_supplicant -d -B -i mlan0 -c ./imxrouter.conf
+  $ udhcpc -i mlan0
+
+  $ hciattach /dev/ttyLP4 any 115200 flow
+  $ hciconfig hci0 up
+  $ hcitool -i hci0 cmd 0x3f 0x0009 0xc0 0xc6 0x2d 0x00
+  $ killall hciattach
+  $ hciattach /dev/ttyLP4 any -s 3000000 3000000 flow
+  $ hciconfig hci0 up
+  $ ln -sf /usr/sbin/xtables-nft-multi /usr/sbin/ip6tables
+
+  $ /usr/libexec/bluetooth/bluetoothd (optional, normally it was executed already)
+
+  $ echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+  $ echo 1 > /proc/sys/net/ipv4/ip_forward
+  $ echo 2 > /proc/sys/net/ipv6/conf/all/accept_ra
+
+6.3 Setup OTBR
+
+  $ ipset create -exist otbr-ingress-deny-src hash:net family inet6
+  $ ipset create -exist otbr-ingress-deny-src-swap hash:net family inet6
+  $ ipset create -exist otbr-ingress-allow-dst hash:net family inet6
+  $ ipset create -exist otbr-ingress-allow-dst-swap hash:net family inet6
+
+  $ gpioset gpiochip6 0=1
+  $ otbr-agent -I wpan0 -B mlan0 'spinel+spi:///dev/spidev0.0?gpio-reset-device=/dev/gpiochip6&gpio-int-device=/dev/gpiochip4&gpio-int-line=10&gpio-reset-line=1&spi-mode=0&spi-speed=1000000&spi-reset-delay=0' &
+
+  $ iptables -A FORWARD -i mlan0 -o wpan0 -j ACCEPT
+  $ iptables -A FORWARD -i wpan0 -o mlan0 -j ACCEPT
+  $ otbr-web & (optional, used for web-based GUI to form the Matter network)
+
+6.4 Form and Config OpenThread network
+
+Use one of the following two methods to config the network
+
+6.4.1 Config OpenThread network by UI method
+
+  In PC browser input IP address of the imx93 then click “Form” on left side of the
+  web page where any of the parameter for Openthread network can be changed, including
+  PAN ID/ExtPAN ID/Channel/NwkKey,etc.
+
+6.4.2 Config network by CLI
+
+  $ ot-ctl dataset init new
+  $ ot-ctl dataset commit active
+  $ ot-ctl ifconfig up
+  $ ot-ctl thread start
+
+6.5 Get thread network credential information
+
+  $ ot-ctl dataset active -x
+
+    You will get something like:
+    0e080000000000000000000300000b35060004001fffe00208dead00beef00cafe0708fddead00b
+    eef000005106fb5e8851e6985cc4f77b981eba5b94a030a4f70656e5468726561640102079f0410
+    8fa1fc598d79f6c0d8fd77f3b44404b80c0402a0fff8
+
+	This information will feed from commissioner to the joining matter device to config it
+    pairing to open thread network properly.
+
+6.6 Join Matter Device to Matter Network
+
+  Pairing commissioner (Lighting node) with commissioner
+
+6.6.1 Factory K32W Lighting-app
+
+  Step1. Toggle reset
+  Step2. Toggle Button SW2 on OM15802, After 6 seconds will cause the device to reset its persistent
+         configuration and initiate a reboot.
+  Step3. Press USERINTERFACE button to start BLE Advertising which is mandatory for device
+         commissioning
+
+6.6.2 Pair (run it on imx9)
+
+  Parameter after “ble-thread” is node-id (here is 1,can be any positive integer starting
+  from 1) that should be set uniquely for each Matter device that joined the network,
+  the last but one parameter is pin code (here fixed to 20202021), the last parameter is
+  discriminator (here fixed to 3840)
+
+  $ chip-tool pairing ble-thread 8888 
+    hex:0e080000000000000000000300000b35060004001fffe00208dead00beef00cafe0708fddea
+    d00beef000005106fb5e8851e6985cc4f77b981eba5b94a030a4f70656e5468726561640102079f
+    04108fa1fc598d79f6c0d8fd77f3b44404b80c0402a0fff8 20202021 3840
+
+    Normally the whole commissioning process will cost approximately 20s before
+    completed. If there is "Device commissioning completed with success" message
+    prompt on chip-tool log, which means the Matter device successfully joined
+    the network, otherwise no further operation can be undertaken.
+
+6.6.3 Control end device
+
+    Toggle the LED3 ON/OFF.
+    The last but one parameter is node id that must be exactly the same as that
+    used in previous step
+  $ chip-tool onoff toggle 8888 1
+
+  
+	Read the lighting on-off status
+  $ chip-tool onoff read on-off 8888 1
+
+7. Known issues and limitation
+------------------------------
+
+8. Other references
+-------------------
+- NXP imx site: https://www.nxp.com/design/documentation:DOCUMENTATION#/
+- OpenWrt documentation: https://openwrt.org/docs/start
+- NXP Matter site: https://github.com/nxp-imx/meta-matter.git
