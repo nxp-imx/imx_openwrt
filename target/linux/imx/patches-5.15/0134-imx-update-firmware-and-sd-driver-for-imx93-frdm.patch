@@ -1,0 +1,4885 @@
+From a4af92083861a0d8cc6707bc275bf9f32aa57607 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Mon, 8 Jul 2024 13:41:30 +0800
+Subject: [PATCH 1/2] imx: update firmware and sd driver for imx93 frdm
+
+Signed-off-by: Andy Tang <andy.tang@nxp.com>
+---
+ drivers/firmware/imx/Kconfig               |  21 +-
+ drivers/firmware/imx/Makefile              |   9 +-
+ drivers/firmware/imx/ele_base_msg.c        | 539 +++++++++++++--------
+ drivers/firmware/imx/ele_common.c          | 294 +++++++++++
+ drivers/firmware/imx/ele_common.h          |  40 ++
+ drivers/firmware/imx/ele_fw_api.c          | 137 ++++++
+ drivers/firmware/imx/ele_fw_api.h          |  26 +
+ drivers/firmware/imx/ele_trng.c            |  96 +---
+ drivers/firmware/imx/imx-dsp.c             |   2 +-
+ drivers/firmware/imx/imx-scu-irq.c         |  53 +-
+ drivers/firmware/imx/imx-scu-soc.c         |  25 +-
+ drivers/firmware/imx/imx-scu.c             |   6 +-
+ drivers/firmware/imx/rm.c                  |  81 ++--
+ drivers/firmware/imx/se_fw.c               | 282 ++---------
+ drivers/firmware/imx/se_fw.h               | 155 ++++++
+ drivers/firmware/imx/seco_mu.c             |  60 ++-
+ drivers/firmware/imx/sm-bbm.c              | 318 ++++++++++++
+ drivers/firmware/imx/sm-misc.c             |  92 ++++
+ drivers/firmware/imx/v2x_base_msg.c        |  68 +++
+ drivers/i2c/busses/i2c-imx-lpi2c.c         | 311 ++++++++++--
+ drivers/mmc/host/sdhci-esdhc-imx.c         | 458 ++++++++++++-----
+ drivers/pinctrl/freescale/pinctrl-imx93.c  |   5 +-
+ drivers/soc/imx/soc-imx9.c                 |   4 +
+ include/linux/dsa/sja1105.h                |  63 +--
+ include/linux/firmware/imx/dsp.h           |   6 -
+ include/linux/firmware/imx/ele_base_msg.h  |  93 ++--
+ include/linux/firmware/imx/ele_mu_ioctl.h  |  52 +-
+ include/linux/firmware/imx/sci.h           |  15 +-
+ include/linux/firmware/imx/se_fw_inc.h     |  10 +
+ include/linux/firmware/imx/seco_mu_ioctl.h |  14 +-
+ include/linux/firmware/imx/sm.h            |  34 ++
+ include/linux/firmware/imx/v2x_base_msg.h  |  20 +
+ 32 files changed, 2552 insertions(+), 837 deletions(-)
+ create mode 100644 drivers/firmware/imx/ele_common.c
+ create mode 100644 drivers/firmware/imx/ele_common.h
+ create mode 100644 drivers/firmware/imx/ele_fw_api.c
+ create mode 100644 drivers/firmware/imx/ele_fw_api.h
+ create mode 100644 drivers/firmware/imx/se_fw.h
+ create mode 100644 drivers/firmware/imx/sm-bbm.c
+ create mode 100644 drivers/firmware/imx/sm-misc.c
+ create mode 100644 drivers/firmware/imx/v2x_base_msg.c
+ create mode 100644 include/linux/firmware/imx/se_fw_inc.h
+ create mode 100644 include/linux/firmware/imx/sm.h
+ create mode 100644 include/linux/firmware/imx/v2x_base_msg.h
+
+diff --git a/drivers/firmware/imx/Kconfig b/drivers/firmware/imx/Kconfig
+index bf95b08df..d054c9cdb 100644
+--- a/drivers/firmware/imx/Kconfig
++++ b/drivers/firmware/imx/Kconfig
+@@ -40,16 +40,17 @@ config IMX_SECO_MU
+ 	  interfaces via a set of file descriptors allowing to configure shared
+ 	  memory, send and receive messages.
+ 
+-config IMX_EL_ENCLAVE
+-	tristate "i.MX Embedded EdgeLock Enclave support."
+-	depends on IMX_MBOX
+-	default m if ARM64
++config IMX_SEC_ENCLAVE
++	tristate "i.MX Embedded Secure Enclave - EdgeLock Enclave Firmware driver."
++	depends on IMX_MBOX && ARCH_MXC && ARM64
++	default m if ARCH_MXC
+ 
+ 	help
+-	  It is possible to use APIs exposed by the iMX EdgeLock Enclave like base, HSM &
+-	  SHE using the SAB protocol via the shared Messaging Unit. This driver exposes
+-	  these interfaces via a set of file descriptors allowing to configure shared
+-	  memory, send and receive messages.
++	  It is possible to use APIs exposed by the iMX Secure Enclave HW IP called:
++          - EdgeLock Enclave Firmware (for i.MX8ULP, i.MX93),
++            like base, HSM, V2X & SHE using the SAB protocol via the shared Messaging
++            Unit. This driver exposes these interfaces via a set of file descriptors
++            allowing to configure shared memory, send and receive messages.
+ 
+ config IMX_ELE_TRNG
+ 	tristate "i.MX ELE True Random Number Generator"
+@@ -57,5 +58,5 @@ config IMX_ELE_TRNG
+ 	select CRYPTO_RNG
+ 	select HW_RANDOM
+ 	help
+-	  This driver provides kernel-side support for the Random Number
+-	  Generator with ELE TRNG.
++	  This driver provides kernel-side support for the Random Number generation,
++          through NXP hardware IP for secure-enclave called EdgeLock Enclave.
+diff --git a/drivers/firmware/imx/Makefile b/drivers/firmware/imx/Makefile
+index ca294d51a..10e602250 100644
+--- a/drivers/firmware/imx/Makefile
++++ b/drivers/firmware/imx/Makefile
+@@ -1,8 +1,9 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_IMX_DSP)		+= imx-dsp.o
+ obj-$(CONFIG_IMX_SCU)		+= imx-scu.o misc.o imx-scu-irq.o rm.o imx-scu-soc.o seco.o
+-obj-$(CONFIG_IMX_SCU_PD)	+= scu-pd.o
++obj-${CONFIG_IMX_SCMI_MISC_CONTROL}	+= sm-misc.o
+ obj-${CONFIG_IMX_SECO_MU}	+= seco_mu.o
+-el_enclave-objs			= ele_mu.o ele_base_msg.o
+-obj-${CONFIG_IMX_EL_ENCLAVE}	+= el_enclave.o
+-el_enclave-${CONFIG_IMX_ELE_TRNG} += ele_trng.o
++sec_enclave-objs		= se_fw.o ele_common.o ele_base_msg.o ele_fw_api.o v2x_base_msg.o
++obj-${CONFIG_IMX_SEC_ENCLAVE}	+= sec_enclave.o
++sec_enclave-${CONFIG_IMX_ELE_TRNG} += ele_trng.o
++obj-$(CONFIG_IMX_SCMI_BBM_CONTROL) += sm-bbm.o
+diff --git a/drivers/firmware/imx/ele_base_msg.c b/drivers/firmware/imx/ele_base_msg.c
+index d0b27ba9b..e9005b86a 100644
+--- a/drivers/firmware/imx/ele_base_msg.c
++++ b/drivers/firmware/imx/ele_base_msg.c
+@@ -1,8 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Copyright 2021 NXP
+- * Author: Pankaj <pankaj.gupta@nxp.com>
+-	   Alice Guo <alice.guo@nxp.com>
++ * Copyright 2021-2023 NXP
+  */
+ 
+ #include <linux/types.h>
+@@ -11,202 +9,145 @@
+ #include <linux/firmware/imx/ele_base_msg.h>
+ #include <linux/firmware/imx/ele_mu_ioctl.h>
+ 
+-#include "ele_mu.h"
++#include "ele_common.h"
+ 
+-/* Fill a command message header with a given command ID and length in bytes. */
+-static int plat_fill_cmd_msg_hdr(struct mu_hdr *hdr, uint8_t cmd, uint32_t len)
++int ele_get_info(struct device *dev, phys_addr_t addr, u32 data_size)
+ {
+-	struct ele_mu_priv *priv = NULL;
+-	int err = 0;
+-
+-	err = get_ele_mu_priv(&priv);
+-	if (err) {
+-		pr_err("Error: iMX EdgeLock Enclave MU is not probed successfully.\n");
+-		return err;
+-	}
+-	hdr->tag = priv->cmd_tag;
+-	hdr->ver = MESSAGING_VERSION_6;
+-	hdr->command = cmd;
+-	hdr->size = (uint8_t)(len / sizeof(uint32_t));
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	int ret;
++	unsigned int status;
+ 
+-	return err;
+-}
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
+ 
+-int imx_ele_msg_send_rcv(struct ele_mu_priv *priv)
+-{
+-	unsigned int wait;
+-	int err = 0;
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_GET_INFO_REQ,
++				    ELE_GET_INFO_REQ_MSG_SZ,
++				    true);
++	if (ret)
++		goto exit;
+ 
+-	mutex_lock(&priv->mu_cmd_lock);
+-	mutex_lock(&priv->mu_lock);
++	priv->tx_msg->data[0] = upper_32_bits(addr);
++	priv->tx_msg->data[1] = lower_32_bits(addr);
++	priv->tx_msg->data[2] = data_size;
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
+ 
+-	err = mbox_send_message(priv->tx_chan, &priv->tx_msg);
+-	if (err < 0) {
+-		pr_err("Error: mbox_send_message failure.\n");
+-		mutex_unlock(&priv->mu_lock);
+-		return err;
+-	}
+-	mutex_unlock(&priv->mu_lock);
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_GET_INFO_REQ,
++				ELE_GET_INFO_RSP_MSG_SZ,
++				true);
++	if (ret)
++		goto exit;
+ 
+-	wait = msecs_to_jiffies(1000);
+-	if (!wait_for_completion_timeout(&priv->done, wait)) {
+-		mutex_unlock(&priv->mu_cmd_lock);
+-		pr_err("Error: wait_for_completion timed out.\n");
+-		return -ETIMEDOUT;
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_GET_INFO_REQ, status);
++		ret = -1;
+ 	}
+ 
+-	/* As part of func ele_mu_rx_callback() execution,
+-	 * response will copied to ele_msg->rsp_msg.
+-	 *
+-	 * Lock: (mutex_unlock(&ele_mu_priv->mu_cmd_lock),
+-	 * will be unlocked if it is a response.
+-	 */
+-	return err;
+-}
+-
+-static int read_otp_uniq_id(struct ele_mu_priv *priv, u32 *value)
+-{
+-	unsigned int tag, command, size, ver, status;
+-
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-
+-	if (tag == 0xe1 && command == ELE_READ_FUSE_REQ &&
+-	    size == 0x07 && ver == ELE_VERSION && status == ELE_SUCCESS_IND) {
+-		value[0] = priv->rx_msg.data[1];
+-		value[1] = priv->rx_msg.data[2];
+-		value[2] = priv->rx_msg.data[3];
+-		value[3] = priv->rx_msg.data[4];
+-		return 0;
+-	}
++exit:
++	imx_se_free_tx_rx_buf(priv);
+ 
+-	return -EINVAL;
++	return ret;
+ }
+ 
+-static int read_fuse_word(struct ele_mu_priv *priv, u32 *value)
++int ele_get_v2x_fw_state(struct device *dev, uint32_t *state)
+ {
+-	unsigned int tag, command, size, ver, status;
+-
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-
+-	if (tag == 0xe1 && command == ELE_READ_FUSE_REQ &&
+-	    size == 0x03 && ver == 0x06 && status == ELE_SUCCESS_IND) {
+-		value[0] = priv->rx_msg.data[1];
+-		return 0;
+-	}
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	int ret;
++	unsigned int status;
++	struct mu_hdr *hdr;
+ 
+-	return -EINVAL;
+-}
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
+ 
+-int read_common_fuse(uint16_t fuse_id, u32 *value)
+-{
+-	struct ele_mu_priv *priv = NULL;
+-	int err = 0;
++	hdr = (struct mu_hdr *)&priv->tx_msg->header;
+ 
+-	err = get_ele_mu_priv(&priv);
+-	if (err) {
+-		pr_err("Error: iMX EdgeLock Enclave MU is not probed successfully.\n");
+-		return err;
+-	}
+-	err = plat_fill_cmd_msg_hdr((struct mu_hdr *)&priv->tx_msg.header, ELE_READ_FUSE_REQ, 8);
+-	if (err) {
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    hdr,
++				    ELE_GET_STATE, ELE_GET_STATE_REQ_SZ,
++				    true);
++	if (ret) {
+ 		pr_err("Error: plat_fill_cmd_msg_hdr failed.\n");
+-		return err;
++		goto exit;
+ 	}
+ 
+-	priv->tx_msg.data[0] = fuse_id;
+-	err = imx_ele_msg_send_rcv(priv);
+-	if (err < 0)
+-		return err;
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
+ 
+-	switch (fuse_id) {
+-	case OTP_UNIQ_ID:
+-		err = read_otp_uniq_id(priv, value);
+-		break;
+-	default:
+-		err = read_fuse_word(priv, value);
+-		break;
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_GET_STATE,
++				ELE_GET_STATE_RSP_SZ,
++				true);
++	if (ret)
++		goto exit;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_GET_STATE, status);
++		ret = -1;
++	} else {
++		*state = 0xFF & priv->rx_msg->data[1];
+ 	}
+-
+-	return err;
++exit:
++	imx_se_free_tx_rx_buf(priv);
++	return ret;
+ }
+-EXPORT_SYMBOL_GPL(read_common_fuse);
+ 
+-int ele_ping(void)
+-{
+-	struct ele_mu_priv *priv = NULL;
+-	unsigned int tag, command, size, ver, status;
+-	int err;
+-
+-	err = get_ele_mu_priv(&priv);
+-	if (err) {
+-		pr_err("Error: iMX EdgeLock Enclave MU is not probed successfully.\n");
+-		return err;
+-	}
+-	err = plat_fill_cmd_msg_hdr((struct mu_hdr *)&priv->tx_msg.header, ELE_PING_REQ, 4);
+-	if (err) {
+-		pr_err("Error: plat_fill_cmd_msg_hdr failed.\n");
+-		return err;
+-	}
+ 
+-	err = imx_ele_msg_send_rcv(priv);
+-	if (err < 0)
+-		return err;
+-
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-
+-	if (tag == 0xe1 && command == ELE_PING_REQ &&
+-	    size == 0x2 && ver == ELE_VERSION && status == ELE_SUCCESS_IND)
+-		return 0;
+-
+-	return -EAGAIN;
+-}
+-EXPORT_SYMBOL_GPL(ele_ping);
+ 
+-int ele_get_info(phys_addr_t addr, u32 data_size)
++int ele_ping(struct device *dev)
+ {
+-	struct ele_mu_priv *priv;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
+ 	int ret;
+-	unsigned int tag, command, size, ver, status;
++	unsigned int status;
+ 
+-	ret = get_ele_mu_priv(&priv);
++	ret = imx_se_alloc_tx_rx_buf(priv);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = plat_fill_cmd_msg_hdr((struct mu_hdr *)&priv->tx_msg.header, ELE_GET_INFO_REQ, 16);
+-	if (ret)
+-		return ret;
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_PING_REQ, ELE_PING_REQ_SZ,
++				    true);
++	if (ret) {
++		pr_err("Error: plat_fill_cmd_msg_hdr failed.\n");
++		goto exit;
++	}
+ 
+-	priv->tx_msg.data[0] = upper_32_bits(addr);
+-	priv->tx_msg.data[1] = lower_32_bits(addr);
+-	priv->tx_msg.data[2] = data_size;
+ 	ret = imx_ele_msg_send_rcv(priv);
+-	if (ret < 0)
+-		return ret;
++	if (ret)
++		goto exit;
+ 
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-	if (tag == 0xe1 && command == ELE_GET_INFO_REQ && size == 0x02 &&
+-	    ver == 0x06 && status == 0xd6)
+-		return 0;
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_PING_REQ,
++				ELE_PING_RSP_SZ,
++				true);
++	if (ret)
++		goto exit;
+ 
+-	return -EINVAL;
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_PING_REQ, status);
++		ret = -1;
++	}
++exit:
++	imx_se_free_tx_rx_buf(priv);
++
++	return ret;
+ }
+-EXPORT_SYMBOL_GPL(ele_get_info);
+ 
+ /*
+  * ele_get_trng_state() - prepare and send the command to read
+@@ -226,75 +167,273 @@ EXPORT_SYMBOL_GPL(ele_get_info);
+  * returns: csal and trng state.
+  *
+  */
+-int ele_get_trng_state(void)
++int ele_get_trng_state(struct device *dev)
+ {
+-	struct ele_mu_priv *priv;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
+ 	int ret;
+-	unsigned int tag, command, size, ver, status;
++	unsigned int status;
+ 
+-	/* access ele_mu_priv data structure pointer*/
+-	ret = get_ele_mu_priv(&priv);
++	ret = imx_se_alloc_tx_rx_buf(priv);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = plat_fill_cmd_msg_hdr((struct mu_hdr *)&priv->tx_msg.header,
+-				    ELE_GET_TRNG_STATE_REQ, 4);
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_GET_TRNG_STATE_REQ,
++				    ELE_GET_TRNG_STATE_REQ_MSG_SZ,
++				    true);
++	if (ret) {
++		pr_err("Error: plat_fill_cmd_msg_hdr failed.\n");
++		goto exit;
++	}
++
++	ret = imx_ele_msg_send_rcv(priv);
+ 	if (ret)
+-		return ret;
++		goto exit;
+ 
+ 	ret = imx_ele_msg_send_rcv(priv);
+ 	if (ret < 0)
+-		return ret;
++		goto exit;
+ 
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-	if (tag == 0xe1 && command == ELE_GET_TRNG_STATE_REQ && size == 0x03 &&
+-	    ver == 0x06 && status == 0xd6) {
+-		return (priv->rx_msg.data[1] & CSAL_TRNG_STATE_MASK);
+-	}
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_GET_TRNG_STATE_REQ,
++				ELE_GET_TRNG_STATE_RSP_MSG_SZ,
++				true);
++	if (ret)
++		goto exit;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_GET_TRNG_STATE_REQ, status);
++		ret = -1;
++	} else
++		ret = (priv->rx_msg->data[1] & CSAL_TRNG_STATE_MASK);
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
+ 
+-	return -EINVAL;
++	return ret;
+ }
+-EXPORT_SYMBOL_GPL(ele_get_trng_state);
+ 
+ /*
+  * ele_start_rng() - prepare and send the command to start
+- *                   initialization of the Sentinel RNG context
++ *                   initialization of the ELE RNG context
+  *
+  * returns:  0 on success.
+  */
+-int ele_start_rng(void)
++int ele_start_rng(struct device *dev)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	int ret;
++	unsigned int status;
++
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
++
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_START_RNG_REQ,
++				    ELE_START_RNG_REQ_MSG_SZ,
++				    true);
++	if (ret)
++		goto exit;
++
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_START_RNG_REQ,
++				ELE_START_RNG_RSP_MSG_SZ,
++				true);
++	if (ret)
++		goto exit;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_START_RNG_REQ, status);
++		ret = -1;
++	}
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
++
++	return ret;
++}
++
++int ele_service_swap(struct device *dev,
++		     phys_addr_t addr,
++		     u32 addr_size, u16 flag)
+ {
+-	struct ele_mu_priv *priv;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
+ 	int ret;
+-	unsigned int tag, command, size, ver, status;
++	unsigned int status;
+ 
+-	/* access ele_mu_priv data structure pointer*/
+-	ret = get_ele_mu_priv(&priv);
++	ret = imx_se_alloc_tx_rx_buf(priv);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = plat_fill_cmd_msg_hdr((struct mu_hdr *)&priv->tx_msg.header, ELE_START_RNG_REQ, 4);
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_SERVICE_SWAP_REQ,
++				    ELE_SERVICE_SWAP_REQ_MSG_SZ,
++				    true);
+ 	if (ret)
+ 		return ret;
+ 
++	priv->tx_msg->data[0] = flag;
++	priv->tx_msg->data[1] = addr_size;
++	priv->tx_msg->data[2] = ELE_NONE_VAL;
++	priv->tx_msg->data[3] = lower_32_bits(addr);
++	priv->tx_msg->data[4] = plat_add_msg_crc((uint32_t *)&priv->tx_msg[0],
++						 ELE_SERVICE_SWAP_REQ_MSG_SZ);
+ 	ret = imx_ele_msg_send_rcv(priv);
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-	if (tag == 0xe1 && command == ELE_START_RNG_REQ && size == 0x02 &&
+-	    ver == 0x06 && status == 0xd6) {
+-		return 0;
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_SERVICE_SWAP_REQ,
++				ELE_SERVICE_SWAP_RSP_MSG_SZ,
++				true);
++	if (ret)
++		return ret;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_SERVICE_SWAP_REQ, status);
++		ret = -1;
++	} else {
++		if (flag == ELE_IMEM_EXPORT)
++			ret = priv->rx_msg->data[1];
++		else
++			ret = 0;
+ 	}
+ 
+-	return -EINVAL;
++	return ret;
+ }
+-EXPORT_SYMBOL_GPL(ele_start_rng);
++
++static int read_otp_uniq_id(struct ele_mu_priv *priv, u32 *value)
++{
++	int ret;
++	unsigned int status;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_READ_FUSE_REQ,
++				ELE_READ_FUSE_OTP_UNQ_ID_RSP_MSG_SZ,
++				true);
++	if (ret)
++		return ret;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(priv->dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_READ_FUSE_REQ, status);
++		ret = -1;
++	} else {
++		value[0] = priv->rx_msg->data[1];
++		value[1] = priv->rx_msg->data[2];
++		value[2] = priv->rx_msg->data[3];
++		value[3] = priv->rx_msg->data[4];
++
++		ret = 0;
++	}
++
++	return ret;
++}
++
++static int read_fuse_word(struct ele_mu_priv *priv, u32 *value)
++{
++	int ret;
++	unsigned int status;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_READ_FUSE_REQ,
++				ELE_READ_FUSE_RSP_MSG_SZ,
++				true);
++	if (ret)
++		return ret;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(priv->dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_READ_FUSE_REQ, status);
++		ret = -1;
++	} else {
++		value[0] = priv->rx_msg->data[1];
++
++		ret = 0;
++	}
++
++	return ret;
++}
++
++/**
++ * read_common_fuse() - Brief description of function.
++ * @struct device *dev: Device to send the request to read fuses.
++ * @uint16_t fuse_id: Fuse identifier to read.
++ * @u32 *value: unsigned integer array to store the fused-values.
++ *
++ * Secure-enclave like EdgeLock Enclave, manages the fuse. This API
++ * requests FW to read the common fuses. FW sends the read value as
++ * response.
++ *
++ * Context: This function takes two mutex locks: one on the command
++ *          and second on the message unit.
++ *          such that multiple commands cannot be sent.
++ *          for the device Describes whether the function can sleep, what locks it takes,
++ *          releases, or expects to be held. It can extend over multiple
++ *          lines.
++ * Return: Describe the return value of function_name.
++ *
++ * The return value description can also have multiple paragraphs, and should
++ * be placed at the end of the comment block.
++ */
++int read_common_fuse(struct device *dev,
++		     uint16_t fuse_id, u32 *value)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	int ret;
++
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
++
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_READ_FUSE_REQ,
++				    ELE_READ_FUSE_REQ_MSG_SZ,
++				    true);
++	if (ret) {
++		pr_err("Error: plat_fill_cmd_msg_hdr failed.\n");
++		goto exit;
++	}
++
++	priv->tx_msg->data[0] = fuse_id;
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
++
++	switch (fuse_id) {
++	case OTP_UNIQ_ID:
++		ret = read_otp_uniq_id(priv, value);
++		break;
++	default:
++		ret = read_fuse_word(priv, value);
++		break;
++	}
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(read_common_fuse);
+diff --git a/drivers/firmware/imx/ele_common.c b/drivers/firmware/imx/ele_common.c
+new file mode 100644
+index 000000000..348f71947
+--- /dev/null
++++ b/drivers/firmware/imx/ele_common.c
+@@ -0,0 +1,294 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2023 NXP
++ */
++
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/firmware/imx/ele_base_msg.h>
++
++#include "ele_common.h"
++#include "se_fw.h"
++
++int imx_se_alloc_tx_rx_buf(struct ele_mu_priv *priv)
++{
++	int ret = 0;
++
++	priv->tx_msg = devm_kzalloc(priv->dev,
++				    sizeof(*priv->tx_msg),
++				    GFP_KERNEL);
++	if (!priv->tx_msg) {
++		ret = -ENOMEM;
++		dev_err(priv->dev, "Fail allocate mem for tx_msg.\n");
++		return ret;
++	}
++
++	priv->rx_msg = devm_kzalloc(priv->dev,
++				    sizeof(*priv->rx_msg),
++				    GFP_KERNEL);
++
++	if (!priv->rx_msg) {
++		ret = -ENOMEM;
++		dev_err(priv->dev, "Fail allocate mem for rx_msg.\n");
++		return ret;
++	}
++
++	return ret;
++}
++
++void imx_se_free_tx_rx_buf(struct ele_mu_priv *priv)
++{
++	if (priv->tx_msg)
++		devm_kfree(priv->dev, priv->tx_msg);
++
++	if (priv->rx_msg)
++		devm_kfree(priv->dev, priv->rx_msg);
++}
++
++uint32_t plat_add_msg_crc(uint32_t *msg, uint32_t msg_len)
++{
++	uint32_t i;
++	uint32_t crc = 0;
++	uint32_t nb_words = msg_len / (uint32_t)sizeof(uint32_t);
++
++	for (i = 0; i < nb_words - 1; i++)
++		crc ^= *(msg + i);
++
++	return crc;
++}
++
++int imx_ele_msg_send_rcv(struct ele_mu_priv *priv)
++{
++	unsigned int wait;
++	int err;
++
++	mutex_lock(&priv->mu_cmd_lock);
++	mutex_lock(&priv->mu_lock);
++
++	err = mbox_send_message(priv->tx_chan, priv->tx_msg);
++	if (err < 0) {
++		pr_err("Error: mbox_send_message failure.\n");
++		mutex_unlock(&priv->mu_lock);
++		mutex_unlock(&priv->mu_cmd_lock);
++		return err;
++	}
++	err = 0;
++
++	mutex_unlock(&priv->mu_lock);
++
++	wait = msecs_to_jiffies(1000);
++	if (!wait_for_completion_timeout(&priv->done, wait)) {
++		pr_err("Error: wait_for_completion timed out.\n");
++		err = -ETIMEDOUT;
++	}
++
++	mutex_unlock(&priv->mu_cmd_lock);
++
++	return err;
++}
++
++/* Fill a command message header with a given command ID and length in bytes. */
++int plat_fill_cmd_msg_hdr(struct ele_mu_priv *priv,
++			  struct mu_hdr *hdr,
++			  uint8_t cmd,
++			  uint32_t len,
++			  bool is_base_api)
++{
++	hdr->tag = priv->cmd_tag;
++	hdr->ver = (is_base_api) ? priv->base_api_ver : priv->fw_api_ver;
++	hdr->command = cmd;
++	hdr->size = len >> 2;
++
++	return 0;
++}
++
++int validate_rsp_hdr(struct ele_mu_priv *priv, unsigned int header,
++		     uint8_t msg_id, uint8_t sz, bool is_base_api)
++{
++	unsigned int tag, command, size, ver;
++	int ret = -EINVAL;
++
++	tag = MSG_TAG(header);
++	command = MSG_COMMAND(header);
++	size = MSG_SIZE(header);
++	ver = MSG_VER(header);
++
++	do {
++		if (tag != priv->rsp_tag) {
++			dev_err(priv->dev,
++				"MSG[0x%x] Hdr: Resp tag mismatch. (0x%x != 0x%x)",
++				msg_id, tag, priv->rsp_tag);
++			break;
++		}
++
++		if (command != msg_id) {
++			dev_err(priv->dev,
++				"MSG Header: Cmd id mismatch. (0x%x != 0x%x)",
++				command, msg_id);
++			break;
++		}
++
++		if (size != (sz >> 2)) {
++			dev_err(priv->dev,
++				"MSG[0x%x] Hdr: Cmd size mismatch. (0x%x != 0x%x)",
++				msg_id, size, (sz >> 2));
++			break;
++		}
++
++		if (is_base_api && (ver != priv->base_api_ver)) {
++			dev_err(priv->dev,
++				"MSG[0x%x] Hdr: Base API Vers mismatch. (0x%x != 0x%x)",
++				msg_id, ver, priv->base_api_ver);
++			break;
++		} else if (!is_base_api && ver != priv->fw_api_ver) {
++			dev_err(priv->dev,
++				"MSG[0x%x] Hdr: FW API Vers mismatch. (0x%x != 0x%x)",
++				msg_id, ver, priv->fw_api_ver);
++			break;
++		}
++
++		ret = 0;
++
++	} while (false);
++
++	return ret;
++}
++
++int ele_do_start_rng(struct device *dev)
++{
++	int ret;
++	int count = ELE_GET_TRNG_STATE_RETRY_COUNT;
++
++	ret = ele_get_trng_state(dev);
++	if (ret < 0) {
++		dev_err(dev, "Failed to get trng state\n");
++		return ret;
++	} else if (ret != ELE_TRNG_STATE_OK) {
++		/* call start rng */
++		ret = ele_start_rng(dev);
++		if (ret) {
++			dev_err(dev, "Failed to start rng\n");
++			return ret;
++		}
++
++		/* poll get trng state API, ELE_GET_TRNG_STATE_RETRY_COUNT times
++		 * or while trng state != 0x203
++		 */
++		do {
++			msleep(10);
++			ret = ele_get_trng_state(dev);
++			if (ret < 0) {
++				dev_err(dev, "Failed to get trng state\n");
++				return ret;
++			}
++			count--;
++		} while ((ret != ELE_TRNG_STATE_OK) && count);
++		if (ret != ELE_TRNG_STATE_OK)
++			return -EIO;
++	}
++
++	return 0;
++}
++
++#ifdef CONFIG_PM_SLEEP
++int save_imem(struct device *dev)
++{
++	int ret;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++
++	/* EXPORT command will save encrypted IMEM to given address,
++	 * so later in resume, IMEM can be restored from the given
++	 * address.
++	 *
++	 * Size must be at least 64 kB.
++	 */
++	ret = ele_service_swap(dev,
++			       priv->imem.phyaddr,
++			       ELE_IMEM_SIZE,
++			       ELE_IMEM_EXPORT);
++	if (ret < 0)
++		dev_err(dev, "Failed to export IMEM\n");
++	else
++		dev_info(dev,
++				"Exported %d bytes of encrypted IMEM\n",
++				ret);
++
++	return ret;
++}
++
++int restore_imem(struct device *dev,
++		 uint8_t *pool_name)
++{
++	int ret;
++	u32 imem_state;
++	u32 *get_info_buf = NULL;
++	phys_addr_t get_info_phyaddr = 0;
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++
++	get_info_phyaddr
++		= pool_name ? get_phy_buf_mem_pool(dev,
++						   pool_name,
++						   &get_info_buf,
++						   DEVICE_GET_INFO_SZ)
++			    : 0x0;
++
++	if (!get_info_buf) {
++		dev_err(dev, "Unable to alloc sram from sram pool\n");
++		return -ENOMEM;
++	}
++
++	ret = ele_do_start_rng(dev);
++	if (ret)
++		goto exit;
++
++	/* get info from ELE */
++	ret = ele_get_info(dev, get_info_phyaddr, ELE_GET_INFO_READ_SZ);
++	if (ret) {
++		dev_err(dev, "Failed to get info from ELE.\n");
++		goto exit;
++	}
++
++	/* Get IMEM state, if 0xFE then import IMEM */
++	imem_state = (get_info_buf[ELE_IMEM_STATE_WORD]
++			& ELE_IMEM_STATE_MASK) >> 16;
++	if (imem_state == ELE_IMEM_STATE_BAD) {
++		/* IMPORT command will restore IMEM from the given
++		 * address, here size is the actual size returned by ELE
++		 * during the export operation
++		 */
++		ret = ele_service_swap(dev,
++				       priv->imem.phyaddr,
++				       priv->imem.size,
++				       ELE_IMEM_IMPORT);
++		if (ret) {
++			dev_err(dev, "Failed to import IMEM\n");
++			goto exit;
++		}
++	} else
++		goto exit;
++
++	/* After importing IMEM, check if IMEM state is equal to 0xCA
++	 * to ensure IMEM is fully loaded and
++	 * ELE functionality can be used.
++	 */
++	ret = ele_get_info(dev, get_info_phyaddr, ELE_GET_INFO_READ_SZ);
++	if (ret) {
++		dev_err(dev, "Failed to get info from ELE.\n");
++		goto exit;
++	}
++
++	imem_state = (get_info_buf[ELE_IMEM_STATE_WORD]
++			& ELE_IMEM_STATE_MASK) >> 16;
++	if (imem_state == ELE_IMEM_STATE_OK)
++		dev_info(dev, "Successfully restored IMEM\n");
++	else
++		dev_err(dev, "Failed to restore IMEM\n");
++
++exit:
++	if (pool_name && get_info_buf)
++		free_phybuf_mem_pool(dev, pool_name,
++				get_info_buf, DEVICE_GET_INFO_SZ);
++
++	return ret;
++}
++#endif
+diff --git a/drivers/firmware/imx/ele_common.h b/drivers/firmware/imx/ele_common.h
+new file mode 100644
+index 000000000..e1979b555
+--- /dev/null
++++ b/drivers/firmware/imx/ele_common.h
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2023 NXP
++ */
++
++
++#ifndef __ELE_COMMON_H__
++#define __ELE_COMMON_H__
++
++#include "se_fw.h"
++
++uint32_t plat_add_msg_crc(uint32_t *msg, uint32_t msg_len);
++int imx_ele_msg_send_rcv(struct ele_mu_priv *priv);
++void imx_se_free_tx_rx_buf(struct ele_mu_priv *priv);
++int imx_se_alloc_tx_rx_buf(struct ele_mu_priv *priv);
++int validate_rsp_hdr(struct ele_mu_priv *priv, unsigned int header,
++		     uint8_t msg_id, uint8_t sz, bool is_base_api);
++int plat_fill_cmd_msg_hdr(struct ele_mu_priv *priv,
++			  struct mu_hdr *hdr,
++			  uint8_t cmd,
++			  uint32_t len,
++			  bool is_base_api);
++#ifdef CONFIG_IMX_ELE_TRNG
++int ele_trng_init(struct device *dev);
++#else
++static inline int ele_trng_init(struct device *dev)
++{
++	return 0;
++}
++#endif
++
++int ele_do_start_rng(struct device *dev);
++
++#ifdef CONFIG_PM_SLEEP
++int save_imem(struct device *dev);
++int restore_imem(struct device *dev,
++		 uint8_t *pool_name);
++#endif
++
++#endif /*__ELE_COMMON_H__ */
+diff --git a/drivers/firmware/imx/ele_fw_api.c b/drivers/firmware/imx/ele_fw_api.c
+new file mode 100644
+index 000000000..151e591d0
+--- /dev/null
++++ b/drivers/firmware/imx/ele_fw_api.c
+@@ -0,0 +1,137 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Copyright 2023 NXP
++ */
++
++#include <linux/dma-mapping.h>
++
++#include "ele_common.h"
++#include "ele_fw_api.h"
++
++struct ele_rng_msg {
++	u32 header; /* u8 Tag; u8 Command; u8 Size; u8 Ver; */
++	u16 rsv;
++	u16 flags;
++	u32 data[2];
++};
++
++int ele_init_fw(struct device *dev)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	unsigned int status;
++	int ret;
++
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
++
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    ELE_INIT_FW_REQ, ELE_INIT_FW_REQ_SZ,
++				    false);
++	if (ret)
++		goto exit;
++
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_INIT_FW_REQ,
++				ELE_INIT_FW_RSP_SZ,
++				false);
++	if (ret)
++		goto exit;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_INIT_FW_REQ, status);
++		ret = -1;
++	}
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
++
++	return ret;
++}
++
++/*
++ * ele_get_random() - prepare and send the command to proceed
++ *                    with a random number generation operation
++ *
++ * returns:  size of the rondom number generated
++ */
++int ele_get_random(struct device *dev,
++		   void *data, size_t len)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	struct ele_rng_msg *tx_msg;
++	unsigned int status;
++	dma_addr_t dst_dma;
++	u8 *buf;
++	int ret;
++
++	/* As per RBG3(RS) construction mentioned in NIST SP800-90C,
++	 * CTR_DRBG generates 128(full entropy) bits after reseeding
++	 * the CTR_DRBG with 256 bits of entropy. so splitting the
++	 * user rng request in multiple of 128 bits & enforce reseed
++	 * for every iteration.
++	 */
++	len = ELE_RNG_MAX_SIZE;
++	buf = dmam_alloc_coherent(priv->dev, len, &dst_dma, GFP_KERNEL);
++	if (!buf) {
++		dev_err(priv->dev, "Failed to map destination buffer memory\n");
++		return -ENOMEM;
++	}
++
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret) {
++		ret = -ENOMEM;
++		goto exit1;
++	}
++
++	tx_msg = (struct ele_rng_msg *)priv->tx_msg;
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&tx_msg->header,
++				    ELE_GET_RANDOM_REQ, ELE_GET_RANDOM_REQ_SZ,
++				    false);
++	if (ret)
++		goto exit;
++
++	/* bit 1(blocking reseed): wait for trng entropy,
++	 * then reseed rng context.
++	 */
++	tx_msg->flags = BIT(1);
++	tx_msg->data[0] = dst_dma;
++	tx_msg->data[1] = len;
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				ELE_GET_RANDOM_REQ,
++				ELE_GET_RANDOM_RSP_SZ,
++				false);
++	if (ret)
++		return ret;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			ELE_GET_RANDOM_REQ, status);
++		ret = -1;
++	} else {
++		memcpy(data, buf, len);
++		ret = len;
++	}
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
++exit1:
++	dmam_free_coherent(priv->dev, len, buf, dst_dma);
++
++	return ret;
++}
+diff --git a/drivers/firmware/imx/ele_fw_api.h b/drivers/firmware/imx/ele_fw_api.h
+new file mode 100644
+index 000000000..e83604e00
+--- /dev/null
++++ b/drivers/firmware/imx/ele_fw_api.h
+@@ -0,0 +1,26 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2023 NXP
++ */
++
++#ifndef ELE_FW_API_H
++#define ELE_FW_API_H
++
++#include <linux/hw_random.h>
++
++#define MESSAGING_VERSION_7		0x7
++
++#define ELE_INIT_FW_REQ                 0x17
++#define ELE_INIT_FW_REQ_SZ              0x04
++#define ELE_INIT_FW_RSP_SZ              0x08
++
++#define ELE_GET_RANDOM_REQ		0xCD
++#define ELE_GET_RANDOM_REQ_SZ		0x10
++#define ELE_GET_RANDOM_RSP_SZ		0x08
++#define ELE_RNG_MAX_SIZE		16
++
++int ele_init_fw(struct device *dev);
++int ele_get_random(struct device *dev, void *data, size_t len);
++int ele_get_hwrng(struct hwrng *rng, void *data, size_t len, bool wait);
++
++#endif /* ELE_FW_API_H */
+diff --git a/drivers/firmware/imx/ele_trng.c b/drivers/firmware/imx/ele_trng.c
+index ae3d45d31..4a7a119ff 100644
+--- a/drivers/firmware/imx/ele_trng.c
++++ b/drivers/firmware/imx/ele_trng.c
+@@ -2,92 +2,17 @@
+ /*
+  * ELE Random Number Generator Driver NXP's Platforms
+  *
+- * Author: Gaurav Jain: <gaurav.jain@nxp.com>
+- *
+- * Copyright 2022 NXP
++ * Copyright 2023 NXP
+  */
+ 
+-#include <linux/dma-mapping.h>
+-#include <linux/hw_random.h>
+-#include <linux/firmware/imx/ele_base_msg.h>
+-#include "ele_mu.h"
++#include "ele_common.h"
++#include "ele_fw_api.h"
+ 
+ struct ele_trng {
+ 	struct hwrng rng;
++	struct device *dev;
+ };
+ 
+-/* Fill a command message header with a given command ID and length in bytes. */
+-static int plat_fill_rng_msg_hdr(struct mu_hdr *hdr, uint8_t cmd, uint32_t len)
+-{
+-	struct ele_mu_priv *priv = NULL;
+-	int err = 0;
+-
+-	err = get_ele_mu_priv(&priv);
+-	if (err) {
+-		pr_err("Error: iMX EdgeLock Enclave MU is not probed successfully.\n");
+-		return err;
+-	}
+-	hdr->tag = priv->cmd_tag;
+-	hdr->ver = MESSAGING_VERSION_7;
+-	hdr->command = cmd;
+-	hdr->size = (uint8_t)(len / sizeof(uint32_t));
+-
+-	return err;
+-}
+-
+-/*
+- * ele_get_random() - prepare and send the command to proceed
+- *                    with a random number generation operation
+- *
+- * returns:  size of the rondom number generated
+- */
+-int ele_get_random(struct hwrng *rng, void *data, size_t len, bool wait)
+-{
+-	struct ele_mu_priv *priv;
+-	unsigned int tag, command, size, ver, status;
+-	dma_addr_t dst_dma;
+-	u8 *buf;
+-	int ret;
+-
+-	/* access ele_mu_priv data structure pointer*/
+-	ret = get_ele_mu_priv(&priv);
+-	if (ret)
+-		return ret;
+-
+-	buf = dmam_alloc_coherent(priv->dev, len, &dst_dma, GFP_KERNEL);
+-	if (!buf) {
+-		dev_err(priv->dev, "Failed to map destination buffer memory\n");
+-		return -ENOMEM;
+-	}
+-
+-	ret = plat_fill_rng_msg_hdr((struct mu_hdr *)&priv->tx_msg.header, ELE_GET_RANDOM_REQ, 16);
+-	if (ret)
+-		goto exit;
+-
+-	priv->tx_msg.data[0] = 0x0;
+-	priv->tx_msg.data[1] = dst_dma;
+-	priv->tx_msg.data[2] = len;
+-	ret = imx_ele_msg_send_rcv(priv);
+-	if (ret < 0)
+-		goto exit;
+-
+-	tag = MSG_TAG(priv->rx_msg.header);
+-	command = MSG_COMMAND(priv->rx_msg.header);
+-	size = MSG_SIZE(priv->rx_msg.header);
+-	ver = MSG_VER(priv->rx_msg.header);
+-	status = RES_STATUS(priv->rx_msg.data[0]);
+-	if (tag == 0xe1 && command == ELE_GET_RANDOM_REQ && size == 0x02 &&
+-	    ver == 0x07 && status == 0xd6) {
+-		memcpy(data, buf, len);
+-		ret = len;
+-	} else
+-		ret = -EINVAL;
+-
+-exit:
+-	dmam_free_coherent(priv->dev, len, buf, dst_dma);
+-	return ret;
+-}
+-
+ int ele_trng_init(struct device *dev)
+ {
+ 	struct ele_trng *trng;
+@@ -97,12 +22,13 @@ int ele_trng_init(struct device *dev)
+ 	if (!trng)
+ 		return -ENOMEM;
+ 
++	trng->dev         = dev;
+ 	trng->rng.name    = "ele-trng";
+-	trng->rng.read    = ele_get_random;
++	trng->rng.read    = ele_get_hwrng;
+ 	trng->rng.priv    = (unsigned long)trng;
+ 	trng->rng.quality = 1024;
+ 
+-	dev_info(dev, "registering ele-trng\n");
++	dev_dbg(dev, "registering ele-trng\n");
+ 
+ 	ret = devm_hwrng_register(dev, &trng->rng);
+ 	if (ret)
+@@ -111,3 +37,11 @@ int ele_trng_init(struct device *dev)
+ 	dev_info(dev, "Successfully registered ele-trng\n");
+ 	return 0;
+ }
++
++int ele_get_hwrng(struct hwrng *rng,
++		  void *data, size_t len, bool wait)
++{
++	struct ele_trng *trng = (struct ele_trng *)rng->priv;
++
++	return ele_get_random(trng->dev, data, len);
++}
+diff --git a/drivers/firmware/imx/imx-dsp.c b/drivers/firmware/imx/imx-dsp.c
+index a6c06d747..a48a58e0c 100644
+--- a/drivers/firmware/imx/imx-dsp.c
++++ b/drivers/firmware/imx/imx-dsp.c
+@@ -10,7 +10,6 @@
+ #include <linux/kernel.h>
+ #include <linux/mailbox_client.h>
+ #include <linux/module.h>
+-#include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/slab.h>
+ 
+@@ -119,6 +118,7 @@ static int imx_dsp_setup_channels(struct imx_dsp_ipc *dsp_ipc)
+ 			if (ret != -EPROBE_DEFER)
+ 				dev_err(dev, "Failed to request mbox chan %s ret %d\n",
+ 					chan_name, ret);
++			kfree(dsp_chan->name);
+ 			goto out;
+ 		}
+ 
+diff --git a/drivers/firmware/imx/imx-scu-irq.c b/drivers/firmware/imx/imx-scu-irq.c
+index 6ce53c1ff..6125cccc9 100644
+--- a/drivers/firmware/imx/imx-scu-irq.c
++++ b/drivers/firmware/imx/imx-scu-irq.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Copyright 2019-2020 NXP
++ * Copyright 2019,2023 NXP
+  *
+  * Implementation of the SCU IRQ functions using MU.
+  *
+@@ -9,13 +9,15 @@
+ #include <dt-bindings/firmware/imx/rsrc.h>
+ #include <linux/firmware/imx/ipc.h>
+ #include <linux/firmware/imx/sci.h>
++#include <linux/kobject.h>
+ #include <linux/mailbox_client.h>
++#include <linux/of.h>
+ #include <linux/suspend.h>
+ #include <linux/sysfs.h>
+-#include <linux/kobject.h>
+ 
+ #define IMX_SC_IRQ_FUNC_ENABLE	1
+ #define IMX_SC_IRQ_FUNC_STATUS	2
++#define IMX_SC_IRQ_NUM_GROUP	9
+ 
+ static u32 mu_resource_id;
+ 
+@@ -48,13 +50,13 @@ struct scu_wakeup {
+ };
+ 
+ /* Sysfs functions */
+-struct kobject *wakeup_obj;
++static struct kobject *wakeup_obj;
+ static ssize_t wakeup_source_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+-static struct kobj_attribute wakeup_source_attr = __ATTR(wakeup_src, 0660, wakeup_source_show, NULL);
++static struct kobj_attribute wakeup_source_attr =
++		__ATTR(wakeup_src, 0660, wakeup_source_show, NULL);
+ 
+ static struct scu_wakeup scu_irq_wakeup[IMX_SC_IRQ_NUM_GROUP];
+ 
+-
+ static struct imx_sc_ipc *imx_sc_irq_ipc_handle;
+ static struct work_struct imx_sc_irq_work;
+ static BLOCKING_NOTIFIER_HEAD(imx_scu_irq_notifier_chain);
+@@ -90,6 +92,7 @@ static void imx_scu_irq_work_handler(struct work_struct *work)
+ 			scu_irq_wakeup[i].valid = false;
+ 			scu_irq_wakeup[i].wakeup_src = 0;
+ 		}
++
+ 		ret = imx_scu_irq_get_status(i, &irq_status);
+ 		if (ret) {
+ 			pr_err("get irq group %d status failed, ret %d\n",
+@@ -105,6 +108,7 @@ static void imx_scu_irq_work_handler(struct work_struct *work)
+ 		} else {
+ 			scu_irq_wakeup[i].wakeup_src = irq_status;
+ 		}
++
+ 		pm_system_wakeup();
+ 		imx_scu_irq_notifier_call_chain(irq_status, &i);
+ 	}
+@@ -173,21 +177,22 @@ static void imx_scu_irq_callback(struct mbox_client *c, void *msg)
+ 	schedule_work(&imx_sc_irq_work);
+ }
+ 
+-static ssize_t wakeup_source_show(struct kobject *kobj,
+-					struct kobj_attribute *attr, char *buf)
++static ssize_t wakeup_source_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+ {
+-	u8 i = 0, size = 0;
++	int i;
+ 
+ 	for (i = 0; i < IMX_SC_IRQ_NUM_GROUP; i++) {
+-		if (scu_irq_wakeup[i].wakeup_src != 0) {
+-			if (scu_irq_wakeup[i].valid)
+-				size += sprintf(buf + size, "Wakeup source group = %d, irq = 0x%x\n",
+-							i, scu_irq_wakeup[i].wakeup_src);
+-			else
+-				size += sprintf(buf + size, "Spurious SCU wakeup, group = %d, irq = 0x%x\n",
+-							i, scu_irq_wakeup[i].wakeup_src);
+-		}
++		if (!scu_irq_wakeup[i].wakeup_src)
++			continue;
++
++		if (scu_irq_wakeup[i].valid)
++			sprintf(buf, "Wakeup source group = %d, irq = 0x%x\n",
++				i, scu_irq_wakeup[i].wakeup_src);
++		else
++			sprintf(buf, "Spurious SCU wakeup, group = %d, irq = 0x%x\n",
++				i, scu_irq_wakeup[i].wakeup_src);
+ 	}
++
+ 	return strlen(buf);
+ }
+ 
+@@ -232,13 +237,23 @@ int imx_scu_enable_general_irq_channel(struct device *dev)
+ 
+ 	/* Create directory under /sysfs/firmware */
+ 	wakeup_obj = kobject_create_and_add("scu_wakeup_source", firmware_kobj);
++	if (!wakeup_obj) {
++		ret = -ENOMEM;
++		goto free_ch;
++	}
+ 
+-	if (sysfs_create_file(wakeup_obj, &wakeup_source_attr.attr)) {
+-		pr_err("Cannot create sysfs file......\n");
++	ret = sysfs_create_file(wakeup_obj, &wakeup_source_attr.attr);
++	if (ret) {
++		dev_err(dev, "Cannot create wakeup source src file......\n");
+ 		kobject_put(wakeup_obj);
+-		sysfs_remove_file(firmware_kobj, &wakeup_source_attr.attr);
++		goto free_ch;
+ 	}
+ 
++	return 0;
++
++free_ch:
++	mbox_free_channel(ch);
++
+ 	return ret;
+ }
+ EXPORT_SYMBOL(imx_scu_enable_general_irq_channel);
+diff --git a/drivers/firmware/imx/imx-scu-soc.c b/drivers/firmware/imx/imx-scu-soc.c
+index c8d14315d..5546e974c 100644
+--- a/drivers/firmware/imx/imx-scu-soc.c
++++ b/drivers/firmware/imx/imx-scu-soc.c
+@@ -77,6 +77,23 @@ static int imx_scu_soc_id(void)
+ 	return msg.data.resp.id;
+ }
+ 
++static const char *imx_scu_soc_name(u32 id)
++{
++	switch (id) {
++	case 0x1:
++		TKT340553_SW_WORKAROUND = true;
++		return "i.MX8QM";
++	case 0x2:
++		return "i.MX8QXP";
++	case 0xe:
++		return "i.MX8DXL";
++	default:
++		break;
++	}
++
++	return "NULL";
++}
++
+ int imx_scu_soc_init(struct device *dev)
+ {
+ 	struct soc_device_attribute *soc_dev_attr;
+@@ -112,13 +129,7 @@ int imx_scu_soc_init(struct device *dev)
+ 
+ 	/* format soc_id value passed from SCU firmware */
+ 	val = id & 0x1f;
+-	if (of_machine_is_compatible("fsl,imx8qm")) {
+-		soc_dev_attr->soc_id = "i.MX8QM";
+-		TKT340553_SW_WORKAROUND = true;
+-	} else if (of_machine_is_compatible("fsl,imx8qxp"))
+-		soc_dev_attr->soc_id = "i.MX8QXP";
+-	else if (of_machine_is_compatible("fsl,imx8dxl"))
+-		soc_dev_attr->soc_id = "i.MX8DXL";
++	soc_dev_attr->soc_id = imx_scu_soc_name(val);
+ 
+ 	/* format revision value passed from SCU firmware */
+ 	val = (id >> 5) & 0xf;
+diff --git a/drivers/firmware/imx/imx-scu.c b/drivers/firmware/imx/imx-scu.c
+index fd6de5771..755cca005 100644
+--- a/drivers/firmware/imx/imx-scu.c
++++ b/drivers/firmware/imx/imx-scu.c
+@@ -17,6 +17,7 @@
+ #include <linux/mailbox_client.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
++#include <linux/of.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ 
+@@ -327,9 +328,8 @@ static int imx_scu_probe(struct platform_device *pdev)
+ 		sc_chan->ch = mbox_request_channel_byname(cl, chan_name);
+ 		if (IS_ERR(sc_chan->ch)) {
+ 			ret = PTR_ERR(sc_chan->ch);
+-			if (ret != -EPROBE_DEFER)
+-				dev_err(dev, "Failed to request mbox chan %s ret %d\n",
+-					chan_name, ret);
++			dev_err_probe(dev, ret, "Failed to request mbox chan %s\n",
++				      chan_name);
+ 			kfree(chan_name);
+ 			return ret;
+ 		}
+diff --git a/drivers/firmware/imx/rm.c b/drivers/firmware/imx/rm.c
+index 6dd4db386..6839ae544 100644
+--- a/drivers/firmware/imx/rm.c
++++ b/drivers/firmware/imx/rm.c
+@@ -49,6 +49,51 @@ bool imx_sc_rm_is_resource_owned(struct imx_sc_ipc *ipc, u16 resource)
+ }
+ EXPORT_SYMBOL(imx_sc_rm_is_resource_owned);
+ 
++struct imx_sc_msg_rm_get_resource_owner {
++	struct imx_sc_rpc_msg hdr;
++	union {
++		struct {
++			u16 resource;
++		} req;
++		struct {
++			u8 val;
++		} resp;
++	} data;
++} __packed __aligned(4);
++
++/*
++ * This function get @resource partition number
++ *
++ * @param[in]     ipc         IPC handle
++ * @param[in]     resource    resource the control is associated with
++ * @param[out]    pt          pointer to return the partition number
++ *
++ * @return Returns 0 for success and < 0 for errors.
++ */
++int imx_sc_rm_get_resource_owner(struct imx_sc_ipc *ipc, u16 resource, u8 *pt)
++{
++	struct imx_sc_msg_rm_get_resource_owner msg;
++	struct imx_sc_rpc_msg *hdr = &msg.hdr;
++	int ret;
++
++	hdr->ver = IMX_SC_RPC_VERSION;
++	hdr->svc = IMX_SC_RPC_SVC_RM;
++	hdr->func = IMX_SC_RM_FUNC_GET_RESOURCE_OWNER;
++	hdr->size = 2;
++
++	msg.data.req.resource = resource;
++
++	ret = imx_scu_call_rpc(ipc, &msg, true);
++	if (ret)
++		return ret;
++
++	if (pt)
++		*pt = msg.data.resp.val;
++
++	return 0;
++}
++EXPORT_SYMBOL(imx_sc_rm_get_resource_owner);
++
+ /*
+  * This function returns the current partition number
+  *
+@@ -122,42 +167,6 @@ int imx_sc_rm_find_memreg(struct imx_sc_ipc *ipc, u8 *mr, u64 addr_start,
+ }
+ EXPORT_SYMBOL(imx_sc_rm_find_memreg);
+ 
+-struct imx_sc_msg_rm_get_resource_owner {
+-	struct imx_sc_rpc_msg hdr;
+-	union {
+-		struct {
+-			u16 resource;
+-		} req;
+-		struct {
+-			u8 val;
+-		} resp;
+-	} data;
+-} __packed __aligned(4);
+-
+-int imx_sc_rm_get_resource_owner(struct imx_sc_ipc *ipc, u16 resource, u8 *pt)
+-{
+-	struct imx_sc_msg_rm_get_resource_owner msg;
+-	struct imx_sc_rpc_msg *hdr = &msg.hdr;
+-	int ret;
+-
+-	hdr->ver = IMX_SC_RPC_VERSION;
+-	hdr->svc = IMX_SC_RPC_SVC_RM;
+-	hdr->func = IMX_SC_RM_FUNC_GET_RESOURCE_OWNER;
+-	hdr->size = 2;
+-
+-	msg.data.req.resource = resource;
+-
+-	ret = imx_scu_call_rpc(ipc, &msg, true);
+-	if (ret)
+-		return ret;
+-
+-	if (pt)
+-		*pt = msg.data.resp.val;
+-
+-	return 0;
+-}
+-EXPORT_SYMBOL(imx_sc_rm_get_resource_owner);
+-
+ struct imx_sc_msg_set_memreg_permissions {
+ 	struct imx_sc_rpc_msg hdr;
+ 	u8 mr;
+diff --git a/drivers/firmware/imx/se_fw.c b/drivers/firmware/imx/se_fw.c
+index b08826529..9cdd7b3fd 100644
+--- a/drivers/firmware/imx/se_fw.c
++++ b/drivers/firmware/imx/se_fw.c
+@@ -1,23 +1,20 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Copyright 2021-2024 NXP
++ * Copyright 2021-2023 NXP
+  */
+ 
+-#include <linux/clk.h>
++#include <linux/dma-mapping.h>
+ #include <linux/completion.h>
+-#include <linux/delay.h>
+ #include <linux/dev_printk.h>
+-#include <linux/dma-mapping.h>
+ #include <linux/errno.h>
+ #include <linux/export.h>
+-#include <linux/firmware.h>
+ #include <linux/firmware/imx/ele_base_msg.h>
++#include <linux/firmware/imx/v2x_base_msg.h>
+ #include <linux/firmware/imx/ele_mu_ioctl.h>
+ #include <linux/firmware/imx/se_fw_inc.h>
+-#include <linux/firmware/imx/v2x_base_msg.h>
+ #include <linux/genalloc.h>
+-#include <linux/init.h>
+ #include <linux/io.h>
++#include <linux/init.h>
+ #include <linux/miscdevice.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+@@ -28,21 +25,21 @@
+ #include <linux/string.h>
+ #include <linux/sys_soc.h>
+ 
++#include "se_fw.h"
+ #include "ele_common.h"
+ #include "ele_fw_api.h"
+-#include "se_fw.h"
+ 
+ static uint32_t v2x_fw_state;
+ 
+ #define SOC_ID_OF_IMX8ULP		0x084D
+ #define SOC_ID_OF_IMX93			0x9300
++#define SOC_ID_OF_IMX95			0x9500
+ #define SOC_VER_MASK			0xFFFF0000
+ #define SOC_ID_MASK			0x0000FFFF
+ #define RESERVED_DMA_POOL		BIT(1)
+-#define IMX_ELE_FW_DIR                 "/lib/firmware/imx/ele/"
+ 
+ struct imx_info {
+-	const uint8_t pdev_name[10];
++	const uint8_t pdev_name[2][10];
+ 	bool socdev;
+ 	uint8_t mu_id;
+ 	uint8_t mu_did;
+@@ -64,7 +61,6 @@ struct imx_info {
+ 	int (*start_rng)(struct device *dev);
+ 	bool enable_ele_trng;
+ 	bool imem_mgmt;
+-	uint8_t *fw_name_in_rfs;
+ };
+ 
+ struct imx_info_list {
+@@ -81,7 +77,7 @@ static const struct imx_info_list imx8ulp_info = {
+ 	.soc_id = SOC_ID_OF_IMX8ULP,
+ 	.info = {
+ 			{
+-				.pdev_name = {"se-fw2"},
++				.pdev_name = {"se-fw2", "mu2"},
+ 				.socdev = true,
+ 				.mu_id = 2,
+ 				.mu_did = 7,
+@@ -91,7 +87,7 @@ static const struct imx_info_list imx8ulp_info = {
+ 				.success_tag = 0xd6,
+ 				.base_api_ver = MESSAGING_VERSION_6,
+ 				.fw_api_ver = MESSAGING_VERSION_7,
+-				.se_name = "hsm1",
++				.se_name = "ele",
+ 				.mbox_tx_name = "tx",
+ 				.mbox_rx_name = "rx",
+ 				.pool_name = "sram",
+@@ -102,8 +98,6 @@ static const struct imx_info_list imx8ulp_info = {
+ 				.enable_ele_trng = false,
+ 				.imem_mgmt = true,
+ 				.mu_buff_size = 0,
+-				.fw_name_in_rfs = IMX_ELE_FW_DIR\
+-						  "mx8ulpa2ext-ahab-container.img",
+ 			},
+ 	},
+ };
+@@ -113,8 +107,8 @@ static const struct imx_info_list imx93_info = {
+ 	.soc_id = SOC_ID_OF_IMX93,
+ 	.info = {
+ 			{
+-				.pdev_name = {"se-fw2"},
+-				.socdev = false,
++				.pdev_name = {"se-fw2", "mu2"},
++				.socdev = true,
+ 				.mu_id = 2,
+ 				.mu_did = 3,
+ 				.max_dev_ctx = 4,
+@@ -123,7 +117,7 @@ static const struct imx_info_list imx93_info = {
+ 				.success_tag = 0xd6,
+ 				.base_api_ver = MESSAGING_VERSION_6,
+ 				.fw_api_ver = MESSAGING_VERSION_7,
+-				.se_name = "hsm1",
++				.se_name = "ele",
+ 				.mbox_tx_name = "tx",
+ 				.mbox_rx_name = "rx",
+ 				.pool_name = NULL,
+@@ -134,18 +128,17 @@ static const struct imx_info_list imx93_info = {
+ 				.enable_ele_trng = true,
+ 				.imem_mgmt = false,
+ 				.mu_buff_size = 0,
+-				.fw_name_in_rfs = NULL,
+ 			},
+ 	},
+ };
+ 
+ static const struct imx_info_list imx95_info = {
+-	.num_mu = 4,
++	.num_mu = 3,
+ 	.soc_id = SOC_ID_OF_IMX95,
+ 	.info = {
+ 			{
+-				.pdev_name = {"se-fw2"},
+-				.socdev = false,
++				.pdev_name = {"se-fw2", "mu2"},
++				.socdev = true,
+ 				.mu_id = 2,
+ 				.mu_did = 3,
+ 				.max_dev_ctx = 4,
+@@ -154,7 +147,7 @@ static const struct imx_info_list imx95_info = {
+ 				.success_tag = 0xd6,
+ 				.base_api_ver = MESSAGING_VERSION_6,
+ 				.fw_api_ver = MESSAGING_VERSION_7,
+-				.se_name = "hsm1",
++				.se_name = "ele",
+ 				.mbox_tx_name = "tx",
+ 				.mbox_rx_name = "rx",
+ 				.pool_name = NULL,
+@@ -162,13 +155,12 @@ static const struct imx_info_list imx95_info = {
+ 				.init_fw = true,
+ 				.v2x_state_check = true,
+ 				.start_rng = ele_start_rng,
+-				.enable_ele_trng = true,
++				.enable_ele_trng = false,
+ 				.imem_mgmt = false,
+ 				.mu_buff_size = 0,
+-				.fw_name_in_rfs = NULL,
+ 			},
+ 			{
+-				.pdev_name = {"v2x-fw0"},
++				.pdev_name = {"v2x-fw0", "mu0"},
+ 				.socdev = false,
+ 				.mu_id = 0,
+ 				.mu_did = 0,
+@@ -178,7 +170,7 @@ static const struct imx_info_list imx95_info = {
+ 				.success_tag = 0xd6,
+ 				.base_api_ver = 0x2,
+ 				.fw_api_ver = 0x2,
+-				.se_name = "v2x_dbg",
++				.se_name = "seco",
+ 				.pool_name = NULL,
+ 				.mbox_tx_name = "tx",
+ 				.mbox_rx_name = "rx",
+@@ -189,34 +181,9 @@ static const struct imx_info_list imx95_info = {
+ 				.enable_ele_trng = false,
+ 				.imem_mgmt = false,
+ 				.mu_buff_size = 0,
+-				.fw_name_in_rfs = NULL,
+ 			},
+ 			{
+-				.pdev_name = {"v2x-fw4"},
+-				.socdev = false,
+-				.mu_id = 4,
+-				.mu_did = 0,
+-				.max_dev_ctx = 4,
+-				.cmd_tag = 0x18,
+-				.rsp_tag = 0xe2,
+-				.success_tag = 0xd6,
+-				.base_api_ver = 0x2,
+-				.fw_api_ver = 0x2,
+-				.se_name = "v2x_sv0",
+-				.pool_name = NULL,
+-				.mbox_tx_name = "tx",
+-				.mbox_rx_name = "rx",
+-				.reserved_dma_ranges = false,
+-				.init_fw = false,
+-				.v2x_state_check = true,
+-				.start_rng = NULL,
+-				.enable_ele_trng = false,
+-				.imem_mgmt = false,
+-				.mu_buff_size = 16,
+-				.fw_name_in_rfs = NULL,
+-			},
+-			{
+-				.pdev_name = {"v2x-fw6"},
++				.pdev_name = {"v2x-fw6", "mu6"},
+ 				.socdev = false,
+ 				.mu_id = 6,
+ 				.mu_did = 0,
+@@ -226,7 +193,7 @@ static const struct imx_info_list imx95_info = {
+ 				.success_tag = 0xd6,
+ 				.base_api_ver = 0x2,
+ 				.fw_api_ver = 0x2,
+-				.se_name = "v2x_she",
++				.se_name = "seco",
+ 				.pool_name = NULL,
+ 				.mbox_tx_name = "tx",
+ 				.mbox_rx_name = "rx",
+@@ -237,7 +204,6 @@ static const struct imx_info_list imx95_info = {
+ 				.enable_ele_trng = false,
+ 				.imem_mgmt = false,
+ 				.mu_buff_size = 256,
+-				.fw_name_in_rfs = NULL,
+ 			},
+ 	}
+ };
+@@ -249,25 +215,6 @@ static const struct of_device_id se_fw_match[] = {
+ 	{},
+ };
+ 
+-/*
+- * get_se_soc_id() - to fetch the soc_id of the platform
+- *
+- * @dev  : reference to the device for se interface.
+- *
+- * This function returns the SoC ID.
+- *
+- * Context: Other module, requiring to access the secure services based on SoC Id.
+- *
+- * Return: SoC Id of the device.
+- */
+-uint32_t get_se_soc_id(struct device *dev)
+-{
+-	struct imx_info_list *info_list
+-		= (struct imx_info_list *) device_get_match_data(dev);
+-
+-	return info_list->soc_id;
+-}
+-
+ static struct imx_info *get_imx_info(struct imx_info_list *info_list,
+ 				     const uint8_t *pdev_name,
+ 				     uint8_t len)
+@@ -275,7 +222,7 @@ static struct imx_info *get_imx_info(struct imx_info_list *info_list,
+ 	int i = 0;
+ 
+ 	for (i = 0; i < info_list->num_mu; i++)
+-		if (!memcmp(info_list->info[i].pdev_name, pdev_name, len))
++		if (!memcmp(info_list->info[i].pdev_name[0], pdev_name, len))
+ 			return &info_list->info[i];
+ 
+ 	return NULL;
+@@ -310,8 +257,6 @@ static void ele_mu_rx_callback(struct mbox_client *c, void *msg)
+ 		dev_ctx = priv->cmd_receiver_dev;
+ 	} else if (header.tag == priv->rsp_tag) {
+ 		if (priv->waiting_rsp_dev) {
+-			/* Capture response timer for user space interaction */
+-			ktime_get_ts64(&priv->time_frame.t_end);
+ 			dev_dbg(dev, "Selecting rsp waiter\n");
+ 			dev_ctx = priv->waiting_rsp_dev;
+ 			is_response = true;
+@@ -401,8 +346,8 @@ void free_phybuf_mem_pool(struct device *dev,
+ 	gen_pool_free(mem_pool, (unsigned long)buf, size);
+ }
+ 
+-static int imx_fetch_soc_info(struct device *dev,
+-			      struct imx_info *info)
++static int imx_soc_device_register(struct device *dev,
++				   struct imx_info *info)
+ {
+ 	struct soc_device_attribute *attr;
+ 	struct soc_device *sdev = NULL;
+@@ -411,13 +356,10 @@ static int imx_fetch_soc_info(struct device *dev,
+ 	phys_addr_t get_info_addr = 0;
+ 	u32 *get_info_data = NULL;
+ 	u8 major_ver, minor_ver;
+-	int err = 0;
++	int err;
+ 
+ 	info_list = (struct imx_info_list *)of_id->data;
+ 
+-	if (info_list->soc_rev)
+-		return err;
+-
+ 	if (info->pool_name) {
+ 		get_info_addr = get_phy_buf_mem_pool(dev,
+ 						     info->pool_name,
+@@ -500,9 +442,6 @@ static int imx_fetch_soc_info(struct device *dev,
+ 				   get_info_addr);
+ 	}
+ 
+-	if (!info->socdev)
+-		return 0;
+-
+ 	sdev = soc_device_register(attr);
+ 	if (IS_ERR(sdev)) {
+ 		kfree(attr->soc_id);
+@@ -630,11 +569,6 @@ static ssize_t ele_mu_fops_write(struct file *fp, const char __user *buf,
+ 	dev_dbg(ele_mu_priv->dev,
+ 		"%s: sending message\n",
+ 			dev_ctx->miscdev.name);
+-
+-	/* Capture request timer here to not include time for mutex lock */
+-	if (header.tag == ele_mu_priv->cmd_tag)
+-		ktime_get_ts64(&ele_mu_priv->time_frame.t_start);
+-
+ 	err = mbox_send_message(ele_mu_priv->tx_chan, dev_ctx->temp_cmd);
+ 	if (err < 0) {
+ 		dev_err(ele_mu_priv->dev,
+@@ -741,16 +675,8 @@ static ssize_t ele_mu_fops_read(struct file *fp, char __user *buf,
+ 			}
+ 		}
+ 
+-		/*
+-		 * Variable "mu_buff_offset" is set while dealing with MU's device memory.
+-		 * For device type memory, it is recommended to use memset_io.
+-		 */
+-		if (b_desc->shared_buf_ptr) {
+-			if (dev_ctx->mu_buff_offset)
+-				memset_io(b_desc->shared_buf_ptr, 0, b_desc->size);
+-			else
+-				memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+-		}
++		if (b_desc->shared_buf_ptr)
++			memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+ 
+ 		__list_del_entry(&b_desc->link);
+ 		devm_kfree(dev_ctx->dev, b_desc);
+@@ -776,6 +702,7 @@ static ssize_t ele_mu_fops_read(struct file *fp, char __user *buf,
+ 	dev_ctx->non_secure_mem.pos = 0;
+ 
+ 	dev_ctx->pending_hdr = 0;
++	dev_ctx->mu_buff_offset = 0;
+ 
+ exit:
+ 	/*
+@@ -797,16 +724,8 @@ static ssize_t ele_mu_fops_read(struct file *fp, char __user *buf,
+ 		if (!b_desc)
+ 			continue;
+ 
+-		/*
+-		 * Variable "mu_buff_offset" is set while dealing with MU's device memory.
+-		 * For device type memory, it is recommended to use memset_io.
+-		 */
+-		if (b_desc->shared_buf_ptr) {
+-			if (dev_ctx->mu_buff_offset)
+-				memset_io(b_desc->shared_buf_ptr, 0, b_desc->size);
+-			else
+-				memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+-		}
++		if (b_desc->shared_buf_ptr)
++			memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+ 
+ 		__list_del_entry(&b_desc->link);
+ 		devm_kfree(dev_ctx->dev, b_desc);
+@@ -814,8 +733,6 @@ static ssize_t ele_mu_fops_read(struct file *fp, char __user *buf,
+ 	if (header.tag == ele_mu_priv->rsp_tag)
+ 		mutex_unlock(&ele_mu_priv->mu_cmd_lock);
+ 
+-	dev_ctx->mu_buff_offset = 0;
+-
+ 	up(&dev_ctx->fops_lock);
+ 	return err;
+ }
+@@ -909,7 +826,7 @@ static int ele_mu_ioctl_setup_iobuf_handler(struct ele_mu_device_ctx *dev_ctx,
+ 		addr = get_mu_buf(priv->tx_chan);
+ 		addr = addr + dev_ctx->mu_buff_offset;
+ 		dev_ctx->mu_buff_offset = dev_ctx->mu_buff_offset + io.length;
+-		if (dev_ctx->mu_buff_offset > imx_info->mu_buff_size) {
++		if (dev_ctx->mu_buff_offset >= imx_info->mu_buff_size) {
+ 			err = -ENOMEM;
+ 			goto exit;
+ 		}
+@@ -1079,34 +996,6 @@ static int ele_mu_ioctl_get_soc_info_handler(struct ele_mu_device_ctx *dev_ctx,
+ 	return err;
+ }
+ 
+-/* IOCTL to provide request and response timestamps from FW for a crypto
+- * operation
+- */
+-static int ele_mu_ioctl_get_time(struct ele_mu_device_ctx *dev_ctx, unsigned long arg)
+-{
+-	struct ele_mu_priv *priv = dev_get_drvdata(dev_ctx->dev);
+-	int err = -EINVAL;
+-	struct ele_time_frame time_frame;
+-
+-	if (!priv) {
+-		err = -EINVAL;
+-		goto exit;
+-	}
+-
+-	time_frame.t_start = priv->time_frame.t_start;
+-	time_frame.t_end = priv->time_frame.t_end;
+-	err = (int)copy_to_user((u8 *)arg, (u8 *)(&time_frame), sizeof(time_frame));
+-	if (err) {
+-		dev_err(dev_ctx->priv->dev,
+-			"%s: Failed to copy timer to user\n",
+-			dev_ctx->miscdev.name);
+-		err  = -EFAULT;
+-		goto exit;
+-	}
+-exit:
+-	return err;
+-}
+-
+ /* Open a char device. */
+ static int ele_mu_fops_open(struct inode *nd, struct file *fp)
+ {
+@@ -1230,16 +1119,8 @@ static int ele_mu_fops_close(struct inode *nd, struct file *fp)
+ 		if (!b_desc)
+ 			continue;
+ 
+-		/*
+-		 * Variable "mu_buff_offset" is set while dealing with MU's device memory.
+-		 * For device type memory, it is recommended to use memset_io.
+-		 */
+-		if (b_desc->shared_buf_ptr) {
+-			if (dev_ctx->mu_buff_offset)
+-				memset_io(b_desc->shared_buf_ptr, 0, b_desc->size);
+-			else
+-				memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+-		}
++		if (b_desc->shared_buf_ptr)
++			memset(b_desc->shared_buf_ptr, 0, b_desc->size);
+ 
+ 		__list_del_entry(&b_desc->link);
+ 		devm_kfree(dev_ctx->dev, b_desc);
+@@ -1283,9 +1164,6 @@ static long ele_mu_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+ 	case ELE_MU_IOCTL_GET_SOC_INFO:
+ 		err = ele_mu_ioctl_get_soc_info_handler(dev_ctx, arg);
+ 		break;
+-	case ELE_MU_IOCTL_GET_TIMER:
+-		err = ele_mu_ioctl_get_time(dev_ctx, arg);
+-		break;
+ 
+ 	default:
+ 		err = -EINVAL;
+@@ -1455,9 +1333,9 @@ static int init_device_context(struct device *dev)
+ 		INIT_LIST_HEAD(&dev_ctx->pending_in);
+ 		sema_init(&dev_ctx->fops_lock, 1);
+ 
+-		devname = devm_kasprintf(dev, GFP_KERNEL, "%s_ch%d",
++		devname = devm_kasprintf(dev, GFP_KERNEL, "%s_%s_ch%d",
+ 					 info->se_name,
+-					 i);
++					 info->pdev_name[1], i);
+ 		if (!devname) {
+ 			ret = -ENOMEM;
+ 			dev_err(dev,
+@@ -1489,60 +1367,6 @@ static int init_device_context(struct device *dev)
+ 	return ret;
+ }
+ 
+-static void se_load_firmware(const struct firmware *fw, void *context)
+-{
+-	struct ele_mu_priv *priv = context;
+-	const struct imx_info *info = priv->info;
+-	const char *ele_fw_name = info->fw_name_in_rfs;
+-	uint8_t *ele_fw_buf;
+-	phys_addr_t ele_fw_phyaddr;
+-
+-	if (!fw) {
+-		if (priv->fw_fail)
+-			dev_dbg(priv->dev,
+-				 "External FW not found, using ROM FW.\n");
+-		else {
+-			/*add a bit delay to wait for firmware priv released */
+-			msleep(20);
+-
+-			/* Load firmware one more time if timeout */
+-			request_firmware_nowait(THIS_MODULE,
+-					FW_ACTION_UEVENT, info->fw_name_in_rfs,
+-					priv->dev, GFP_KERNEL, priv,
+-					se_load_firmware);
+-			priv->fw_fail++;
+-			dev_dbg(priv->dev, "Value of retries = 0x%x\n",
+-				priv->fw_fail);
+-		}
+-
+-		return;
+-	}
+-
+-	/* allocate buffer to store the ELE FW */
+-	ele_fw_buf = dmam_alloc_coherent(priv->dev, fw->size,
+-					 &ele_fw_phyaddr,
+-					 GFP_KERNEL);
+-	if (!ele_fw_buf) {
+-		dev_err(priv->dev, "Failed to alloc ELE fw buffer memory\n");
+-		goto exit;
+-	}
+-
+-	memcpy(ele_fw_buf, fw->data, fw->size);
+-
+-	if (ele_fw_authenticate(priv->dev, ele_fw_phyaddr))
+-		dev_err(priv->dev,
+-			"Failed to authenticate & load ELE firmware %s.\n",
+-			ele_fw_name);
+-
+-exit:
+-	dmam_free_coherent(priv->dev,
+-			   fw->size,
+-			   ele_fw_buf,
+-			   ele_fw_phyaddr);
+-
+-	release_firmware(fw);
+-}
+-
+ static int se_fw_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1567,7 +1391,7 @@ static int se_fw_probe(struct platform_device *pdev)
+ 		 * loaded, then exit.
+ 		 */
+ 		if (v2x_fw_state != V2X_FW_STATE_RUNNING &&
+-			!memcmp(info->se_name, "v2x_dbg", 8)) {
++			!memcmp(info->se_name, "seco", 5)) {
+ 			ret = -1;
+ 			dev_err(dev, "Failure: V2X FW is not loaded.");
+ 			return ret;
+@@ -1660,17 +1484,19 @@ static int se_fw_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	ret = imx_fetch_soc_info(dev, info);
+-	if (ret) {
+-		dev_err(dev,
+-			"failed[%d] to register SoC device\n", ret);
+-		goto exit;
++	if (info->socdev) {
++		ret = imx_soc_device_register(dev, info);
++		if (ret) {
++			dev_err(dev,
++				"failed[%d] to register SoC device\n", ret);
++			goto exit;
++		}
+ 	}
+ 
+ 	/* Assumed v2x_state_check is enabled for i.MX95 only. */
+ 	if (info->v2x_state_check) {
+ 		if (v2x_fw_state == V2X_FW_STATE_UNKNOWN &&
+-				!memcmp(info->se_name, "hsm1", 5)) {
++				!memcmp(info->se_name, "ele", 4)) {
+ 			ret = ele_get_v2x_fw_state(dev, &v2x_fw_state);
+ 			if (ret)
+ 				dev_err(dev, "Failed to start ele rng\n");
+@@ -1680,24 +1506,13 @@ static int se_fw_probe(struct platform_device *pdev)
+ 		 * loaded, then exit.
+ 		 */
+ 		if (v2x_fw_state != V2X_FW_STATE_RUNNING &&
+-			!memcmp(info->se_name, "v2x_she", 8)) {
++			!memcmp(info->se_name, "seco", 5)) {
+ 			ret = -1;
+ 			dev_err(dev, "Failure: V2X FW is not loaded.");
+ 			goto exit;
+ 		}
+ 	}
+ 
+-	if (info->fw_name_in_rfs) {
+-		ret = request_firmware_nowait(THIS_MODULE,
+-					      FW_ACTION_UEVENT,
+-					      info->fw_name_in_rfs,
+-					      dev, GFP_KERNEL, priv,
+-					      se_load_firmware);
+-		if (ret)
+-			dev_warn(dev, "Failed to get firmware [%s].\n",
+-				 info->fw_name_in_rfs);
+-	}
+-
+ 	/* start ele rng */
+ 	if (info->start_rng) {
+ 		ret = info->start_rng(dev);
+@@ -1735,7 +1550,7 @@ static int se_fw_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	dev_info(dev, "i.MX secure-enclave: %s interface to firmware, configured.\n",
+-		 info->se_name);
++		info->pdev_name[1]);
+ 
+ 	return devm_of_platform_populate(dev);
+ 
+@@ -1743,10 +1558,7 @@ static int se_fw_probe(struct platform_device *pdev)
+ 	/* if execution control reaches here, ele-mu probe fail.
+ 	 * hence doing the cleanup
+ 	 */
+-	if (se_probe_cleanup(pdev))
+-		dev_err(dev, "Failed clean-up.\n");
+-
+-	return ret;
++	return se_probe_cleanup(pdev);
+ }
+ 
+ /**
+diff --git a/drivers/firmware/imx/se_fw.h b/drivers/firmware/imx/se_fw.h
+new file mode 100644
+index 000000000..1eb2131dd
+--- /dev/null
++++ b/drivers/firmware/imx/se_fw.h
+@@ -0,0 +1,155 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2021-2023 NXP
++ */
++
++#ifndef SE_MU_H
++#define SE_MU_H
++
++#include <linux/miscdevice.h>
++#include <linux/semaphore.h>
++#include <linux/mailbox_client.h>
++
++#define MAX_MESSAGE_SIZE		31
++#define MAX_RECV_SIZE			MAX_MESSAGE_SIZE
++#define MAX_RECV_SIZE_BYTES		(MAX_RECV_SIZE << 2)
++#define MAX_MESSAGE_SIZE_BYTES		(MAX_MESSAGE_SIZE << 2)
++
++#define ELE_MSG_DATA_NUM		10
++
++#define MSG_TAG(x)			(((x) & 0xff000000) >> 24)
++#define MSG_COMMAND(x)			(((x) & 0x00ff0000) >> 16)
++#define MSG_SIZE(x)			(((x) & 0x0000ff00) >> 8)
++#define MSG_VER(x)			((x) & 0x000000ff)
++#define RES_STATUS(x)			((x) & 0x000000ff)
++#define MAX_DATA_SIZE_PER_USER		(65 * 1024)
++#define S4_DEFAULT_MUAP_INDEX		(2)
++#define S4_MUAP_DEFAULT_MAX_USERS	(4)
++#define MESSAGING_VERSION_6		0x6
++#define MESSAGING_VERSION_7		0x7
++
++#define DEFAULT_MESSAGING_TAG_COMMAND           (0x17u)
++#define DEFAULT_MESSAGING_TAG_RESPONSE          (0xe1u)
++
++#define ELE_MU_IO_FLAGS_USE_SEC_MEM	(0x02u)
++#define ELE_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
++
++struct ele_imem_buf {
++	u8 *buf;
++	phys_addr_t phyaddr;
++	u32 size;
++};
++
++struct ele_buf_desc {
++	u8 *shared_buf_ptr;
++	u8 *usr_buf_ptr;
++	u32 size;
++	struct list_head link;
++};
++
++/* Status of a char device */
++enum mu_device_status_t {
++	MU_FREE,
++	MU_OPENED
++};
++
++struct ele_shared_mem {
++	dma_addr_t dma_addr;
++	u32 size;
++	u32 pos;
++	u8 *ptr;
++};
++
++/* Private struct for each char device instance. */
++struct ele_mu_device_ctx {
++	struct device *dev;
++	struct ele_mu_priv *priv;
++	struct miscdevice miscdev;
++
++	enum mu_device_status_t status;
++	wait_queue_head_t wq;
++	struct semaphore fops_lock;
++
++	u32 pending_hdr;
++	struct list_head pending_in;
++	struct list_head pending_out;
++
++	struct ele_shared_mem secure_mem;
++	struct ele_shared_mem non_secure_mem;
++	u32 mu_buff_offset;
++
++	u32 temp_cmd[MAX_MESSAGE_SIZE];
++	u32 temp_resp[MAX_RECV_SIZE];
++	u32 temp_resp_size;
++	struct notifier_block ele_notify;
++};
++
++/* Header of the messages exchange with the EdgeLock Enclave */
++struct mu_hdr {
++	u8 ver;
++	u8 size;
++	u8 command;
++	u8 tag;
++}  __packed;
++
++#define ELE_MU_HDR_SZ	4
++#define TAG_OFFSET	(ELE_MU_HDR_SZ - 1)
++#define CMD_OFFSET	(ELE_MU_HDR_SZ - 2)
++#define SZ_OFFSET	(ELE_MU_HDR_SZ - 3)
++#define VER_OFFSET	(ELE_MU_HDR_SZ - 4)
++
++struct ele_api_msg {
++	u32 header; /* u8 Tag; u8 Command; u8 Size; u8 Ver; */
++	u32 data[ELE_MSG_DATA_NUM];
++};
++
++struct ele_mu_priv {
++	struct list_head priv_data;
++	struct ele_mu_device_ctx *cmd_receiver_dev;
++	struct ele_mu_device_ctx *waiting_rsp_dev;
++	/*
++	 * prevent parallel access to the MU registers
++	 * e.g. a user trying to send a command while the other one is
++	 * sending a response.
++	 */
++	struct mutex mu_lock;
++	/*
++	 * prevent a command to be sent on the MU while another one is still
++	 * processing. (response to a command is allowed)
++	 */
++	struct mutex mu_cmd_lock;
++	struct device *dev;
++	u8 ele_mu_did;
++	u8 pdev_name[20];
++	u32 ele_mu_id;
++	u8 cmd_tag;
++	u8 rsp_tag;
++	u8 success_tag;
++	u8 base_api_ver;
++	u8 fw_api_ver;
++	const void *info;
++
++	struct mbox_client ele_mb_cl;
++	struct mbox_chan *tx_chan, *rx_chan;
++	struct ele_api_msg *tx_msg, *rx_msg;
++	struct completion done;
++	spinlock_t lock;
++	/*
++	 * Flag to retain the state of initialization done at
++	 * the time of ele-mu probe.
++	 */
++	uint32_t flags;
++	u8 max_dev_ctx;
++	struct ele_mu_device_ctx **ctxs;
++	struct ele_imem_buf imem;
++};
++
++phys_addr_t get_phy_buf_mem_pool(struct device *dev,
++				 char *mem_pool_name,
++				 u32 **buf,
++				 uint32_t size);
++void free_phybuf_mem_pool(struct device *dev,
++			  char *mem_pool_name,
++			  u32 *buf,
++			  uint32_t size);
++#endif
+diff --git a/drivers/firmware/imx/seco_mu.c b/drivers/firmware/imx/seco_mu.c
+index 75c721100..9d747aad4 100644
+--- a/drivers/firmware/imx/seco_mu.c
++++ b/drivers/firmware/imx/seco_mu.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+ /*
+- * Copyright 2019-2020 NXP
++ * Copyright 2019-2020, 2023 NXP
+  */
+ 
+ /*
+@@ -67,6 +67,7 @@
+ #include <dt-bindings/firmware/imx/rsrc.h>
+ #include <linux/firmware/imx/seco_mu_ioctl.h>
+ #include <linux/mailbox_client.h>
++#include <linux/sys_soc.h>
+ 
+ #define MAX_RECV_SIZE 31
+ #define MAX_RECV_SIZE_BYTES (MAX_RECV_SIZE * sizeof(u32))
+@@ -173,6 +174,21 @@ struct seco_mu_priv {
+ 	struct seco_mu_device_ctx **ctxs;
+ };
+ 
++static const struct seco_mu_ioctl_get_soc_info imx8dxl_a1_soc_info = {
++	.soc_id = 0xE,
++	.soc_rev = 0xa100,
++};
++
++static const struct seco_mu_ioctl_get_soc_info imx8dxl_b0_soc_info = {
++	.soc_id = 0xE,
++	.soc_rev = 0xb000,
++};
++
++static const struct soc_device_attribute soc_info_matches[] = {
++	{ .soc_id = "i.MX8DXL", .revision = "1.1", .data = &imx8dxl_a1_soc_info},
++	{ .soc_id = "i.MX8DXL", .revision = "1.2", .data = &imx8dxl_b0_soc_info},
++};
++
+ /* macro to log operation of a misc device */
+ #define miscdev_dbg(p_miscdev, fmt, va_args...)                                \
+ 	({                                                                     \
+@@ -680,6 +696,12 @@ static int seco_mu_ioctl_setup_iobuf_handler(struct seco_mu_device_ctx *dev_ctx,
+ 		shared_mem->pos += round_up(io.length, 8u);
+ 		io.seco_addr = (u64)shared_mem->dma_addr + pos;
+ 	} else {
++		if (io.length > MAX_DATA_SIZE_PER_USER) {
++			devctx_err(dev_ctx, "Buffer length exceeded the max limit\n");
++			err = -ENOMEM;
++			goto exit;
++		}
++
+ 		io.seco_addr = (u64)addr;
+ 	}
+ 
+@@ -757,6 +779,12 @@ static int seco_mu_ioctl_get_mu_info_handler(struct seco_mu_device_ctx *dev_ctx,
+ 	info.seco_mu_idx = (u8)priv->seco_mu_id;
+ 	info.interrupt_idx = SECO_MU_INTERRUPT_INDEX;
+ 	info.tz = SECO_DEFAULT_TZ;
++	info.did = 0;
++	info.cmd_tag = (u8)priv->cmd_tag;
++	info.rsp_tag = (u8)priv->rsp_tag;
++	info.success_tag = 0;
++	info.base_api_ver = 0;
++	info.fw_api_ver = 0;
+ 
+ 	err = imx_sc_rm_get_did(priv->ipc_scu, &info.did);
+ 	if (err) {
+@@ -838,6 +866,33 @@ static int seco_mu_ioctl_signed_msg_handler(struct seco_mu_device_ctx *dev_ctx,
+ 	return err;
+ }
+ 
++/* IOCTL to provide SoC information */
++static int seco_mu_ioctl_get_soc_info_handler(struct seco_mu_device_ctx *dev_ctx,
++					      unsigned long arg)
++{
++	const struct soc_device_attribute *imx_soc_match;
++	struct seco_mu_ioctl_get_soc_info *soc_info;
++	int err = -EINVAL;
++
++	imx_soc_match = soc_device_match(soc_info_matches);
++	if (!imx_soc_match || !imx_soc_match->data)
++		goto exit;
++
++	soc_info = (struct seco_mu_ioctl_get_soc_info *)(imx_soc_match->data);
++
++	err = (int)copy_to_user((u8 *)arg,
++				(u8 *)soc_info,
++				sizeof(struct seco_mu_ioctl_get_soc_info));
++	if (err) {
++		devctx_err(dev_ctx, "Failed to copy to user: %d\n", err);
++		err = -EFAULT;
++		goto exit;
++	}
++
++exit:
++	return err;
++}
++
+ /* IOCTL entry point of a char device */
+ static long seco_mu_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+ {
+@@ -870,6 +925,9 @@ static long seco_mu_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+ 	case SECO_MU_IOCTL_SIGNED_MESSAGE:
+ 		err = seco_mu_ioctl_signed_msg_handler(dev_ctx, arg);
+ 		break;
++	case SECO_MU_IOCTL_GET_SOC_INFO:
++		err = seco_mu_ioctl_get_soc_info_handler(dev_ctx, arg);
++		break;
+ 	default:
+ 		err = -EINVAL;
+ 		devctx_dbg(dev_ctx, "IOCTL %.8x not supported\n", cmd);
+diff --git a/drivers/firmware/imx/sm-bbm.c b/drivers/firmware/imx/sm-bbm.c
+new file mode 100644
+index 000000000..c064d57bb
+--- /dev/null
++++ b/drivers/firmware/imx/sm-bbm.c
+@@ -0,0 +1,318 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2023 NXP.
++ */
++
++#include <linux/input.h>
++#include <linux/jiffies.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/rtc.h>
++#include <linux/scmi_protocol.h>
++#include <linux/scmi_nxp_protocol.h>
++#include <linux/suspend.h>
++
++#define DEBOUNCE_TIME		30
++#define REPEAT_INTERVAL		60
++
++struct scmi_imx_bbm {
++	struct rtc_device *rtc_dev;
++	struct scmi_protocol_handle *ph;
++	const struct scmi_imx_bbm_proto_ops *ops;
++	struct notifier_block nb;
++	int keycode;
++	int keystate;  /* 1:pressed */
++	bool suspended;
++	struct delayed_work check_work;
++	struct input_dev *input;
++};
++
++static int scmi_imx_bbm_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++	struct scmi_protocol_handle *ph = bbnsm->ph;
++	u64 val;
++	int ret;
++
++	ret = bbnsm->ops->rtc_time_get(ph, 0, &val);
++	if (ret)
++		dev_err(dev, "%s: %d\n", __func__, ret);
++
++	rtc_time64_to_tm(val, tm);
++
++	return 0;
++}
++
++static int scmi_imx_bbm_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++	struct scmi_protocol_handle *ph = bbnsm->ph;
++	u64 val;
++	int ret;
++
++	val = rtc_tm_to_time64(tm);
++
++	ret = bbnsm->ops->rtc_time_set(ph, 0, val);
++	if (ret)
++		dev_err(dev, "%s: %d\n", __func__, ret);
++
++	return 0;
++}
++
++static int scmi_imx_bbm_alarm_irq_enable(struct device *dev, unsigned int enable)
++{
++	return 0;
++}
++
++static int scmi_imx_bbm_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
++{
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++	struct scmi_protocol_handle *ph = bbnsm->ph;
++	struct rtc_time *alrm_tm = &alrm->time;
++	u64 val;
++	int ret;
++
++	val = rtc_tm_to_time64(alrm_tm);
++
++	ret = bbnsm->ops->rtc_alarm_set(ph, 0, val);
++	if (ret)
++		dev_err(dev, "%s: %d\n", __func__, ret);
++
++	return 0;
++}
++
++static const struct rtc_class_ops smci_imx_bbm_rtc_ops = {
++	.read_time = scmi_imx_bbm_read_time,
++	.set_time = scmi_imx_bbm_set_time,
++	.set_alarm = scmi_imx_bbm_set_alarm,
++	.alarm_irq_enable = scmi_imx_bbm_alarm_irq_enable,
++};
++
++static void scmi_imx_bbm_pwrkey_check_for_events(struct work_struct *work)
++{
++	struct scmi_imx_bbm *bbnsm = container_of(work, struct scmi_imx_bbm, check_work.work);
++	struct scmi_protocol_handle *ph = bbnsm->ph;
++	struct input_dev *input = bbnsm->input;
++	u32 state = 0;
++	int ret;
++
++	ret = bbnsm->ops->button_get(ph, &state);
++	if (ret) {
++		pr_err("%s: %d\n", __func__, ret);
++		return;
++	}
++
++	pr_debug("%s: state: %d, keystate %d\n", __func__, state, bbnsm->keystate);
++
++	/* only report new event if status changed */
++	if (state ^ bbnsm->keystate) {
++		bbnsm->keystate = state;
++		input_event(input, EV_KEY, bbnsm->keycode, state);
++		input_sync(input);
++		pm_relax(bbnsm->input->dev.parent);
++		pr_debug("EV_KEY: %x\n", bbnsm->keycode);
++	}
++
++	/* repeat check if pressed long */
++	if (state)
++		schedule_delayed_work(&bbnsm->check_work, msecs_to_jiffies(REPEAT_INTERVAL));
++}
++
++int scmi_imx_bbm_pwrkey_event(struct scmi_imx_bbm *bbnsm)
++{
++	struct input_dev *input = bbnsm->input;
++
++	schedule_delayed_work(&bbnsm->check_work, msecs_to_jiffies(DEBOUNCE_TIME));
++
++	/*
++	 * Directly report key event after resume to make no key press
++	 * event is missed.
++	 */
++	if (bbnsm->suspended) {
++		bbnsm->keystate = 1;
++		input_event(input, EV_KEY, bbnsm->keycode, 1);
++		input_sync(input);
++	}
++
++	return 0;
++}
++static void scmi_imx_bbm_pwrkey_act(void *pdata)
++{
++	struct scmi_imx_bbm *bbnsm = pdata;
++
++	cancel_delayed_work_sync(&bbnsm->check_work);
++}
++
++static int scmi_imx_bbm_notifier(struct notifier_block *nb, unsigned long event, void *data)
++{
++	struct scmi_imx_bbm *bbnsm = container_of(nb, struct scmi_imx_bbm, nb);
++	struct scmi_imx_bbm_notif_report *r = data;
++
++	if (r->is_rtc)
++		rtc_update_irq(bbnsm->rtc_dev, 1, RTC_AF | RTC_IRQF);
++	if (r->is_button) {
++		pr_debug("BBM Button Power key pressed\n");
++		scmi_imx_bbm_pwrkey_event(bbnsm);
++	}
++
++	return 0;
++}
++
++static int scmi_imx_bbm_pwrkey_init(struct scmi_device *sdev)
++{
++	const struct scmi_handle *handle = sdev->handle;
++	struct device *dev = &sdev->dev;
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++	struct input_dev *input;
++	int ret;
++
++	if (device_property_read_u32(dev, "linux,code", &bbnsm->keycode)) {
++		bbnsm->keycode = KEY_POWER;
++		dev_warn(dev, "key code is not specified, using default KEY_POWER\n");
++	}
++
++	INIT_DELAYED_WORK(&bbnsm->check_work, scmi_imx_bbm_pwrkey_check_for_events);
++
++	input = devm_input_allocate_device(dev);
++	if (!input) {
++		dev_err(dev, "failed to allocate the input device for SCMI IMX BBM\n");
++		return -ENOMEM;
++	}
++
++	input->name = dev_name(dev);
++	input->phys = "bbnsm-pwrkey/input0";
++	input->id.bustype = BUS_HOST;
++
++	input_set_capability(input, EV_KEY, bbnsm->keycode);
++
++	ret = devm_add_action_or_reset(dev, scmi_imx_bbm_pwrkey_act, bbnsm);
++	if (ret) {
++		dev_err(dev, "failed to register remove action\n");
++		return ret;
++	}
++
++	bbnsm->input = input;
++
++	ret = handle->notify_ops->devm_event_notifier_register(sdev, SCMI_PROTOCOL_IMX_BBM,
++							       SCMI_EVENT_IMX_BBM_BUTTON,
++							       NULL, &bbnsm->nb);
++
++	if (ret)
++		dev_err(dev, "Failed to register BBM Button Events %d:", ret);
++
++	ret = input_register_device(input);
++	if (ret) {
++		dev_err(dev, "failed to register input device\n");
++		return ret;
++	}
++
++	return 0;
++}
++
++static int scmi_imx_bbm_rtc_init(struct scmi_device *sdev)
++{
++	const struct scmi_handle *handle = sdev->handle;
++	struct device *dev = &sdev->dev;
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++	int ret;
++
++	bbnsm->rtc_dev = devm_rtc_allocate_device(dev);
++	if (IS_ERR(bbnsm->rtc_dev))
++		return PTR_ERR(bbnsm->rtc_dev);
++
++	bbnsm->rtc_dev->ops = &smci_imx_bbm_rtc_ops;
++	bbnsm->rtc_dev->range_min = 0;
++	bbnsm->rtc_dev->range_max = U32_MAX;
++
++	ret = devm_rtc_register_device(bbnsm->rtc_dev);
++	if (ret)
++		return ret;
++
++	/* TODO pm notifier */
++
++	bbnsm->nb.notifier_call = &scmi_imx_bbm_notifier;
++	return handle->notify_ops->devm_event_notifier_register(sdev, SCMI_PROTOCOL_IMX_BBM,
++								SCMI_EVENT_IMX_BBM_RTC,
++								NULL, &bbnsm->nb);
++}
++
++static int scmi_imx_bbm_probe(struct scmi_device *sdev)
++{
++	const struct scmi_handle *handle = sdev->handle;
++	struct device *dev = &sdev->dev;
++	struct scmi_protocol_handle *ph;
++	struct scmi_imx_bbm *bbnsm;
++	int ret;
++
++	if (!handle)
++		return -ENODEV;
++
++	bbnsm = devm_kzalloc(dev, sizeof(struct scmi_imx_bbm), GFP_KERNEL);
++	if (!bbnsm)
++		return -ENOMEM;
++
++	bbnsm->ops = handle->devm_protocol_get(sdev, SCMI_PROTOCOL_IMX_BBM, &ph);
++	if (IS_ERR(bbnsm->ops))
++		return PTR_ERR(bbnsm->ops);
++
++	bbnsm->ph = ph;
++
++	device_init_wakeup(dev, true);
++
++	dev_set_drvdata(dev, bbnsm);
++
++	ret = scmi_imx_bbm_rtc_init(sdev);
++	if (ret) {
++		dev_err(dev, "rtc init failed: %d\n", ret);
++		return ret;
++	}
++
++	ret = scmi_imx_bbm_pwrkey_init(sdev);
++	if (ret) {
++		dev_err(dev, "pwr init failed: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int __maybe_unused scmi_imx_bbm_suspend(struct device *dev)
++{
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++
++	bbnsm->suspended = true;
++
++	return 0;
++}
++
++static int __maybe_unused scmi_imx_bbm_resume(struct device *dev)
++{
++	struct scmi_imx_bbm *bbnsm = dev_get_drvdata(dev);
++
++	bbnsm->suspended = false;
++
++	return 0;
++}
++
++static SIMPLE_DEV_PM_OPS(scmi_imx_bbm_pm_ops, scmi_imx_bbm_suspend, scmi_imx_bbm_resume);
++
++static const struct scmi_device_id scmi_id_table[] = {
++	{ SCMI_PROTOCOL_IMX_BBM, "imx-bbm" },
++	{ },
++};
++MODULE_DEVICE_TABLE(scmi, scmi_id_table);
++
++static struct scmi_driver scmi_imx_bbm_driver = {
++	.driver = {
++		.pm = &scmi_imx_bbm_pm_ops,
++	},
++	.name = "scmi-imx-bbm",
++	.probe = scmi_imx_bbm_probe,
++	.id_table = scmi_id_table,
++};
++module_scmi_driver(scmi_imx_bbm_driver);
++
++MODULE_AUTHOR("Peng Fan <peng.fan@nxp.com>");
++MODULE_DESCRIPTION("IMX SM BBM driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/firmware/imx/sm-misc.c b/drivers/firmware/imx/sm-misc.c
+new file mode 100644
+index 000000000..5646c9661
+--- /dev/null
++++ b/drivers/firmware/imx/sm-misc.c
+@@ -0,0 +1,92 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2023 NXP.
++ */
++
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/scmi_protocol.h>
++#include <linux/scmi_nxp_protocol.h>
++#include <linux/suspend.h>
++
++static const struct scmi_imx_misc_proto_ops *imx_misc_ctrl_ops;
++static struct scmi_protocol_handle *ph;
++struct notifier_block scmi_imx_misc_ctrl_nb;
++
++int scmi_imx_misc_ctrl_set(u32 id, u32 val)
++{
++	if (!ph)
++		return -EPROBE_DEFER;
++
++	return imx_misc_ctrl_ops->misc_ctrl_set(ph, id, 1, &val);
++};
++EXPORT_SYMBOL(scmi_imx_misc_ctrl_set);
++
++int scmi_imx_misc_ctrl_get(u32 id, u32 *num, u32 *val)
++{
++	if (!ph)
++		return -EPROBE_DEFER;
++
++	return imx_misc_ctrl_ops->misc_ctrl_get(ph, id, num, val);
++}
++EXPORT_SYMBOL(scmi_imx_misc_ctrl_get);
++
++static int scmi_imx_misc_ctrl_notifier(struct notifier_block *nb, unsigned long event, void *data)
++{
++	/* Placeholder */
++	return 0;
++}
++
++static int scmi_imx_misc_ctrl_probe(struct scmi_device *sdev)
++{
++	const struct scmi_handle *handle = sdev->handle;
++	struct device_node *np = sdev->dev.of_node;
++	u32 src_id, evt_id, wu_num;
++	int ret, i;
++
++	if (!handle)
++		return -ENODEV;
++
++	imx_misc_ctrl_ops = handle->devm_protocol_get(sdev, SCMI_PROTOCOL_IMX_MISC, &ph);
++	if (IS_ERR(imx_misc_ctrl_ops))
++		return PTR_ERR(imx_misc_ctrl_ops);
++
++	scmi_imx_misc_ctrl_nb.notifier_call = &scmi_imx_misc_ctrl_notifier;
++	wu_num = of_property_count_u32_elems(np, "wakeup-sources");
++	if (wu_num % 2) {
++		dev_err(&sdev->dev, "Invalid wakeup-sources\n");
++		return -EINVAL;
++	}
++
++	for (i = 0; i < wu_num; i += 2) {
++		WARN_ON(of_property_read_u32_index(np, "wakeup-sources", i, &src_id));
++		WARN_ON(of_property_read_u32_index(np, "wakeup-sources", i + 1, &evt_id));
++		ret = handle->notify_ops->devm_event_notifier_register(sdev, SCMI_PROTOCOL_IMX_MISC,
++								       evt_id,
++								       &src_id,
++								       &scmi_imx_misc_ctrl_nb);
++		if (ret)
++			dev_err(&sdev->dev, "Failed to register scmi misc event: %d\n", src_id);
++	}
++
++	return 0;
++
++}
++
++static const struct scmi_device_id scmi_id_table[] = {
++	{ SCMI_PROTOCOL_IMX_MISC, "imx-misc-ctrl" },
++	{ },
++};
++MODULE_DEVICE_TABLE(scmi, scmi_id_table);
++
++static struct scmi_driver scmi_imx_misc_ctrl_driver = {
++	.name = "scmi-imx-misc-ctrl",
++	.probe = scmi_imx_misc_ctrl_probe,
++	.id_table = scmi_id_table,
++};
++module_scmi_driver(scmi_imx_misc_ctrl_driver);
++
++MODULE_AUTHOR("Peng Fan <peng.fan@nxp.com>");
++MODULE_DESCRIPTION("IMX SM MISC driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/firmware/imx/v2x_base_msg.c b/drivers/firmware/imx/v2x_base_msg.c
+new file mode 100644
+index 000000000..f0e48d2f7
+--- /dev/null
++++ b/drivers/firmware/imx/v2x_base_msg.c
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2021-2023 NXP
++ */
++
++#include <linux/types.h>
++#include <linux/completion.h>
++
++#include <linux/firmware/imx/v2x_base_msg.h>
++
++#include "ele_common.h"
++
++/*
++ * v2x_start_rng() - prepare and send the command to start
++ *                   initialization of the ELE RNG context
++ *
++ * returns:  0 on success.
++ */
++int v2x_start_rng(struct device *dev)
++{
++	struct ele_mu_priv *priv = dev_get_drvdata(dev);
++	int ret;
++	unsigned int status;
++
++	ret = imx_se_alloc_tx_rx_buf(priv);
++	if (ret)
++		return ret;
++
++	ret = plat_fill_cmd_msg_hdr(priv,
++				    (struct mu_hdr *)&priv->tx_msg->header,
++				    V2X_START_RNG_REQ,
++				    V2X_START_RNG_REQ_MSG_SZ,
++				    true);
++	if (ret)
++		goto exit;
++
++	ret = imx_ele_msg_send_rcv(priv);
++	if (ret < 0)
++		goto exit;
++
++	ret  = validate_rsp_hdr(priv,
++				priv->rx_msg->header,
++				V2X_START_RNG_REQ,
++				V2X_START_RNG_RSP_MSG_SZ,
++				true);
++	if (ret)
++		goto exit;
++
++	status = RES_STATUS(priv->rx_msg->data[0]);
++	if (status != priv->success_tag) {
++		/* Initialization in progress for:
++		 * P-TRNG at bit 0
++		 * S-TRNG at bit 1
++		 * Any of the bit is set, it in progress.
++		 */
++		if (priv->rx_msg->data[0] & 0x3)
++			goto exit;
++
++		dev_err(dev, "Command Id[%d], Response Failure = 0x%x",
++			V2X_START_RNG_REQ, status);
++		ret = -1;
++	}
++
++exit:
++	imx_se_free_tx_rx_buf(priv);
++
++	return ret;
++}
+diff --git a/drivers/i2c/busses/i2c-imx-lpi2c.c b/drivers/i2c/busses/i2c-imx-lpi2c.c
+index 7820c36b0..527510b64 100644
+--- a/drivers/i2c/busses/i2c-imx-lpi2c.c
++++ b/drivers/i2c/busses/i2c-imx-lpi2c.c
+@@ -16,10 +16,10 @@
+ #include <linux/init.h>
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
++#include <linux/iopoll.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+-#include <linux/of_device.h>
+ #include <linux/of_gpio.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/platform_device.h>
+@@ -45,6 +45,20 @@
+ #define LPI2C_MTDR	0x60	/* i2c master TX data register */
+ #define LPI2C_MRDR	0x70	/* i2c master RX data register */
+ 
++#define LPI2C_SCR	0x110	/* i2c slave contrl register */
++#define LPI2C_SSR	0x114	/* i2c slave status register */
++#define LPI2C_SIER	0x118	/* i2c slave interrupt enable */
++#define LPI2C_SDER	0x11C	/* i2c slave DMA enable */
++#define LPI2C_SCFGR0	0x120	/* i2c slave configuration */
++#define LPI2C_SCFGR1	0x124	/* i2c slave configuration */
++#define LPI2C_SCFGR2	0x128	/* i2c slave configuration */
++#define LPI2C_SAMR	0x140	/* i2c slave address match */
++#define LPI2C_SASR	0x150	/* i2c slave address status */
++#define LPI2C_STAR	0x154	/* i2c slave transmit ACK */
++#define LPI2C_STDR	0x160	/* i2c slave transmit data */
++#define LPI2C_SRDR	0x170	/* i2c slave receive data */
++#define LPI2C_SRDROR	0x178	/* i2c slave receive data read only */
++
+ /* i2c command */
+ #define TRAN_DATA	0X00
+ #define RECV_DATA	0X01
+@@ -78,6 +92,41 @@
+ #define MDER_TDDE	BIT(0)
+ #define MDER_RDDE	BIT(1)
+ 
++#define SCR_SEN		BIT(0)
++#define SCR_RST		BIT(1)
++#define SCR_FILTEN	BIT(4)
++#define SCR_RTF		BIT(8)
++#define SCR_RRF		BIT(9)
++#define SCFGR1_RXSTALL	BIT(1)
++#define SCFGR1_TXDSTALL	BIT(2)
++#define SCFGR2_FILTSDA_SHIFT	24
++#define SCFGR2_FILTSCL_SHIFT	16
++#define SCFGR2_CLKHOLD(x)	(x)
++#define SCFGR2_FILTSDA(x)	((x) << SCFGR2_FILTSDA_SHIFT)
++#define SCFGR2_FILTSCL(x)	((x) << SCFGR2_FILTSCL_SHIFT)
++#define SSR_TDF		BIT(0)
++#define SSR_RDF		BIT(1)
++#define SSR_AVF		BIT(2)
++#define SSR_TAF		BIT(3)
++#define SSR_RSF		BIT(8)
++#define SSR_SDF		BIT(9)
++#define SSR_BEF		BIT(10)
++#define SSR_FEF		BIT(11)
++#define SSR_SBF		BIT(24)
++#define SSR_BBF		BIT(25)
++#define SSR_CLEAR_BITS	(SSR_RSF | SSR_SDF | SSR_BEF | SSR_FEF)
++#define SIER_TDIE	BIT(0)
++#define SIER_RDIE	BIT(1)
++#define SIER_AVIE	BIT(2)
++#define SIER_TAIE	BIT(3)
++#define SIER_RSIE	BIT(8)
++#define SIER_SDIE	BIT(9)
++#define SIER_BEIE	BIT(10)
++#define SIER_FEIE	BIT(11)
++#define SIER_AM0F	BIT(12)
++#define SLAVE_INT_FLAG	(SIER_TDIE | SIER_RDIE | SIER_AVIE | \
++						SIER_SDIE | SIER_BEIE)
++
+ #define I2C_CLK_RATIO	24 / 59
+ #define CHUNK_DATA	256
+ 
+@@ -103,10 +152,10 @@ enum lpi2c_imx_pincfg {
+ 
+ struct lpi2c_imx_struct {
+ 	struct i2c_adapter	adapter;
++	int			num_clks;
++	struct clk_bulk_data	*clks;
+ 	resource_size_t		phy_addr;
+ 	int			irq;
+-	struct clk		*clk_per;
+-	struct clk		*clk_ipg;
+ 	void __iomem		*base;
+ 	__u8			*rx_buf;
+ 	__u8			*tx_buf;
+@@ -135,6 +184,8 @@ struct lpi2c_imx_struct {
+ 	enum dma_data_direction dma_direction;
+ 	u8			*dma_buf;
+ 	unsigned int		dma_len;
++
++	struct i2c_client	*slave;
+ };
+ 
+ static void lpi2c_imx_intctrl(struct lpi2c_imx_struct *lpi2c_imx,
+@@ -241,11 +292,9 @@ static int lpi2c_imx_config(struct lpi2c_imx_struct *lpi2c_imx)
+ 
+ 	lpi2c_imx_set_mode(lpi2c_imx);
+ 
+-	clk_rate = clk_get_rate(lpi2c_imx->clk_per);
+-	if (!clk_rate) {
+-		dev_dbg(&lpi2c_imx->adapter.dev, "clk_per rate is 0\n");
++	clk_rate = clk_get_rate(lpi2c_imx->clks[0].clk);
++	if (!clk_rate)
+ 		return -EINVAL;
+-	}
+ 
+ 	if (lpi2c_imx->mode == HS || lpi2c_imx->mode == ULTRA_FAST)
+ 		filt = 0;
+@@ -600,15 +649,25 @@ static int lpi2c_imx_push_rx_cmd(struct lpi2c_imx_struct *lpi2c_imx,
+ {
+ 	unsigned int temp, rx_remain;
+ 	unsigned long orig_jiffies = jiffies;
++	int fifo_watermark;
+ 
++	/*
++	 * The master of LPI2C needs to read data from the slave by writing
++	 * the number of received data to txfifo. However, the TXFIFO register
++	 * only has one byte length, and if the length of the data that needs
++	 * to be read exceeds 256 bytes, it needs to be written to TXFIFO
++	 * multiple times. TXFIFO has a depth limit, so the "while wait loop"
++	 * here is needed to prevent TXFIFO from overflowing.
++	 */
+ 	rx_remain = msg->len;
++	fifo_watermark = lpi2c_imx->txfifosize >> 1;
+ 	do {
+ 		temp = rx_remain > CHUNK_DATA ?
+ 			CHUNK_DATA - 1 : rx_remain - 1;
+ 		temp |= (RECV_DATA << 8);
+-		while ((readl(lpi2c_imx->base + LPI2C_MFSR) & 0xff) > 2) {
++		while ((readl(lpi2c_imx->base + LPI2C_MFSR) & 0xff) > fifo_watermark) {
+ 			if (time_after(jiffies, orig_jiffies + msecs_to_jiffies(1000))) {
+-				dev_dbg(&lpi2c_imx->adapter.dev, "txfifo empty timeout\n");
++				dev_dbg(&lpi2c_imx->adapter.dev, "push receive data command timeout\n");
+ 				if (lpi2c_imx->adapter.bus_recovery_info)
+ 					i2c_recover_bus(&lpi2c_imx->adapter);
+ 				return -ETIMEDOUT;
+@@ -617,6 +676,7 @@ static int lpi2c_imx_push_rx_cmd(struct lpi2c_imx_struct *lpi2c_imx,
+ 		}
+ 		writel(temp, lpi2c_imx->base + LPI2C_MTDR);
+ 		rx_remain = rx_remain - (temp & 0xff) - 1;
++		orig_jiffies = jiffies;
+ 	} while (rx_remain > 0);
+ 
+ 	return 0;
+@@ -717,6 +777,8 @@ static int lpi2c_imx_xfer(struct i2c_adapter *adapter,
+ 		}
+ 
+ 		lpi2c_imx->using_dma = false;
++		lpi2c_imx->rx_buf = NULL;
++		lpi2c_imx->tx_buf = NULL;
+ 		lpi2c_imx->delivered = 0;
+ 		lpi2c_imx->msglen = msgs[i].len;
+ 		reinit_completion(&lpi2c_imx->complete);
+@@ -755,30 +817,187 @@ static int lpi2c_imx_xfer(struct i2c_adapter *adapter,
+ 
+ 	return (result < 0) ? result : num;
+ }
++static irqreturn_t lpi2c_imx_slave_isr(struct lpi2c_imx_struct *lpi2c_imx, u32 ssr, u32 sier_filter)
++{
++	u8 value;
++	u32 sasr;
+ 
+-static irqreturn_t lpi2c_imx_isr(int irq, void *dev_id)
++	if (sier_filter & SSR_BEF) { /* Arbitration lost */
++		writel(0, lpi2c_imx->base + LPI2C_SIER);
++		return IRQ_HANDLED;
++	}
++
++	/* address detected */
++	if (sier_filter & SSR_AVF) {
++		sasr = readl(lpi2c_imx->base + LPI2C_SASR);
++		if (1 & sasr) {
++			/*controller give a read request and send first value with start*/
++			i2c_slave_event(lpi2c_imx->slave, I2C_SLAVE_READ_REQUESTED, &value);
++			writel(value, lpi2c_imx->base + LPI2C_STDR);
++			goto ret;
++		} else {
++			/*controller request to write to us*/
++			i2c_slave_event(lpi2c_imx->slave, I2C_SLAVE_WRITE_REQUESTED, &value);
++		}
++	}
++
++	if (sier_filter & SSR_SDF) {
++		/* STOP */
++		i2c_slave_event(lpi2c_imx->slave, I2C_SLAVE_STOP, &value);
++	}
++
++	if (sier_filter & SSR_TDF) {
++		/* controller wants to read from us */
++		i2c_slave_event(lpi2c_imx->slave, I2C_SLAVE_READ_PROCESSED, &value);
++		writel(value, lpi2c_imx->base + LPI2C_STDR);
++	}
++
++	if (sier_filter & SSR_RDF) {
++		/* controller wants to send data to us */
++		value = readl(lpi2c_imx->base + LPI2C_SRDR);
++		i2c_slave_event(lpi2c_imx->slave, I2C_SLAVE_WRITE_RECEIVED, &value);
++	}
++
++ret:
++	/* Clear SSR, too, because of old STOPs to other clients than us */
++	writel(ssr & SSR_CLEAR_BITS, lpi2c_imx->base + LPI2C_SSR);
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t lpi2c_imx_master_isr(struct lpi2c_imx_struct *lpi2c_imx)
+ {
+-	struct lpi2c_imx_struct *lpi2c_imx = dev_id;
++	unsigned int enabled;
+ 	unsigned int temp;
+ 
++	enabled = readl(lpi2c_imx->base + LPI2C_MIER);
++
+ 	lpi2c_imx_intctrl(lpi2c_imx, 0);
+ 	temp = readl(lpi2c_imx->base + LPI2C_MSR);
++	temp &= enabled;
+ 
+ 	if (temp & MSR_NDF) {
+ 		lpi2c_imx->is_ndf = true;
+ 		complete(&lpi2c_imx->complete);
+-		goto ret;
+ 	}
+-
+-	if (temp & MSR_RDF)
++	else if (temp & MSR_RDF)
+ 		lpi2c_imx_read_rxfifo(lpi2c_imx);
+ 	else if (temp & MSR_TDF)
+ 		lpi2c_imx_write_txfifo(lpi2c_imx);
+ 
+-ret:
+ 	return IRQ_HANDLED;
+ }
+ 
++static irqreturn_t lpi2c_imx_isr(int irq, void *dev_id)
++{
++	struct lpi2c_imx_struct *lpi2c_imx = dev_id;
++	unsigned int scr;
++	u32 ssr, sier_filter;
++
++	if (lpi2c_imx->slave) {
++		scr = readl(lpi2c_imx->base + LPI2C_SCR);
++		ssr = readl(lpi2c_imx->base + LPI2C_SSR);
++		sier_filter = ssr & readl(lpi2c_imx->base + LPI2C_SIER);
++		if ((scr & SCR_SEN) && sier_filter)
++			return lpi2c_imx_slave_isr(lpi2c_imx, ssr, sier_filter);
++		else
++			return lpi2c_imx_master_isr(lpi2c_imx);
++	} else
++		return lpi2c_imx_master_isr(lpi2c_imx);
++}
++
++static void lpi2c_imx_slave_init(struct lpi2c_imx_struct *lpi2c_imx)
++{
++	int temp;
++
++	/* reset slave module */
++	temp = SCR_RST;
++	writel(temp, lpi2c_imx->base + LPI2C_SCR);
++	writel(0, lpi2c_imx->base + LPI2C_SCR);
++
++	/* Set slave addr */
++	writel((lpi2c_imx->slave->addr << 1), lpi2c_imx->base + LPI2C_SAMR);
++
++	temp = SCFGR1_RXSTALL | SCFGR1_TXDSTALL;
++	writel(temp, lpi2c_imx->base + LPI2C_SCFGR1);
++
++	/*
++	 * set SCFGR2: FILTSDA, FILTSCL and CLKHOLD
++	 * FILTSCL/FILTSDA can eliminate signal skew. It should generally be set to
++	 * the same value and should be set >= 50ns.
++	 * CLKHOLD is only used when clock stretching is enabled, but it will extend
++	 * the clock stretching to ensure there is an additional delay between the
++	 * slave driving SDA and the slave releasing the SCL pin.
++	 * CLKHOLD setting is crucial for lpi2c slave. When master read data from
++	 * slave, if there is a delay caused by cpu idle, excessive load, or other
++	 * delays between two bytes in one message transmission, it will cause very
++	 * short interval time between the driving SDA signal and releasing SCL signal.
++	 * Lpi2c master will mistakenly think that this is a stop signal resulting
++	 * in an arbitration failure. This lpi2c issue can be avoided by setting
++	 * CLKHOLD. In order to ensure lpi2c function normally when the lpi2c clock
++	 * frequency is as low as 100kHz, CLKHOLD should be set 3 and it is also
++	 * compatible with higher clock frequency like 400kHz and 1MHz.
++	 */
++	temp = SCFGR2_FILTSDA(2) | SCFGR2_FILTSCL(2) | SCFGR2_CLKHOLD(3);
++	writel(temp, lpi2c_imx->base + LPI2C_SCFGR2);
++
++	/*
++	 * Enable module
++	 * SCR_FILTEN can enable digital filter and output delay counter for slave mode.
++	 * So SCR_FILTEN need be asserted when enable SDA/SCL FILTER and CLKHOLD.
++	 */
++	writel(SCR_SEN | SCR_FILTEN, lpi2c_imx->base + LPI2C_SCR);
++
++	/* Enable interrupt from i2c module */
++	writel(SLAVE_INT_FLAG, lpi2c_imx->base + LPI2C_SIER);
++}
++
++static int lpi2c_imx_reg_slave(struct i2c_client *client)
++{
++	struct lpi2c_imx_struct *lpi2c_imx = i2c_get_adapdata(client->adapter);
++	int ret;
++
++	if (lpi2c_imx->slave)
++		return -EBUSY;
++
++	lpi2c_imx->slave = client;
++
++	/* Resume */
++	ret = pm_runtime_resume_and_get(lpi2c_imx->adapter.dev.parent);
++	if (ret < 0) {
++		dev_err(&lpi2c_imx->adapter.dev, "failed to resume i2c controller");
++		return ret;
++	}
++
++	lpi2c_imx_slave_init(lpi2c_imx);
++
++	return 0;
++}
++
++static int lpi2c_imx_unreg_slave(struct i2c_client *client)
++{
++	struct lpi2c_imx_struct *lpi2c_imx = i2c_get_adapdata(client->adapter);
++	int ret, temp;
++
++	if (!lpi2c_imx->slave)
++		return -EINVAL;
++
++	/* Reset slave address. */
++	writel(0, lpi2c_imx->base + LPI2C_SAMR);
++
++	temp = SCR_RST;
++	writel(temp, lpi2c_imx->base + LPI2C_SCR);
++	writel(0, lpi2c_imx->base + LPI2C_SCR);
++
++	lpi2c_imx->slave = NULL;
++
++	/* Suspend */
++	ret = pm_runtime_put_sync(lpi2c_imx->adapter.dev.parent);
++	if (ret < 0)
++		dev_err(&lpi2c_imx->adapter.dev, "failed to suspend i2c controller");
++
++	return ret;
++}
++
+ static void lpi2c_imx_prepare_recovery(struct i2c_adapter *adap)
+ {
+ 	struct lpi2c_imx_struct *lpi2c_imx;
+@@ -853,6 +1072,8 @@ static u32 lpi2c_imx_func(struct i2c_adapter *adapter)
+ static const struct i2c_algorithm lpi2c_imx_algo = {
+ 	.master_xfer	= lpi2c_imx_xfer,
+ 	.functionality	= lpi2c_imx_func,
++	.reg_slave		= lpi2c_imx_reg_slave,
++	.unreg_slave	= lpi2c_imx_unreg_slave,
+ };
+ 
+ static const struct of_device_id lpi2c_imx_of_match[] = {
+@@ -958,20 +1179,13 @@ static int lpi2c_imx_probe(struct platform_device *pdev)
+ 	lpi2c_imx->adapter.algo		= &lpi2c_imx_algo;
+ 	lpi2c_imx->adapter.dev.parent	= &pdev->dev;
+ 	lpi2c_imx->adapter.dev.of_node	= pdev->dev.of_node;
+-	strlcpy(lpi2c_imx->adapter.name, pdev->name,
++	strscpy(lpi2c_imx->adapter.name, pdev->name,
+ 		sizeof(lpi2c_imx->adapter.name));
+ 
+-	lpi2c_imx->clk_per = devm_clk_get(&pdev->dev, "per");
+-	if (IS_ERR(lpi2c_imx->clk_per)) {
+-		dev_err(&pdev->dev, "can't get I2C peripheral clock\n");
+-		return PTR_ERR(lpi2c_imx->clk_per);
+-	}
+-
+-	lpi2c_imx->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
+-	if (IS_ERR(lpi2c_imx->clk_ipg)) {
+-		dev_err(&pdev->dev, "can't get I2C ipg clock\n");
+-		return PTR_ERR(lpi2c_imx->clk_ipg);
+-	}
++	ret = devm_clk_bulk_get_all(&pdev->dev, &lpi2c_imx->clks);
++	if (ret < 0)
++		return dev_err_probe(&pdev->dev, ret, "can't get I2C peripheral clock\n");
++	lpi2c_imx->num_clks = ret;
+ 
+ 	ret = of_property_read_u32(pdev->dev.of_node,
+ 				   "clock-frequency", &lpi2c_imx->bitrate);
+@@ -1027,7 +1241,7 @@ static int lpi2c_imx_probe(struct platform_device *pdev)
+ 	return ret;
+ }
+ 
+-static int lpi2c_imx_remove(struct platform_device *pdev)
++static void lpi2c_imx_remove(struct platform_device *pdev)
+ {
+ 	struct lpi2c_imx_struct *lpi2c_imx = platform_get_drvdata(pdev);
+ 
+@@ -1035,8 +1249,6 @@ static int lpi2c_imx_remove(struct platform_device *pdev)
+ 
+ 	pm_runtime_disable(&pdev->dev);
+ 	pm_runtime_dont_use_autosuspend(&pdev->dev);
+-
+-	return 0;
+ }
+ 
+ static int __maybe_unused lpi2c_runtime_suspend(struct device *dev)
+@@ -1044,8 +1256,7 @@ static int __maybe_unused lpi2c_runtime_suspend(struct device *dev)
+ 	struct lpi2c_imx_struct *lpi2c_imx = dev_get_drvdata(dev);
+ 
+ 	devm_free_irq(dev, lpi2c_imx->irq, lpi2c_imx);
+-	clk_disable_unprepare(lpi2c_imx->clk_ipg);
+-	clk_disable_unprepare(lpi2c_imx->clk_per);
++	clk_bulk_disable_unprepare(lpi2c_imx->num_clks, lpi2c_imx->clks);
+ 	pinctrl_pm_select_idle_state(dev);
+ 
+ 	return 0;
+@@ -1057,18 +1268,12 @@ static int __maybe_unused lpi2c_runtime_resume(struct device *dev)
+ 	int ret;
+ 
+ 	pinctrl_pm_select_default_state(dev);
+-	ret = clk_prepare_enable(lpi2c_imx->clk_per);
++	ret = clk_bulk_prepare_enable(lpi2c_imx->num_clks, lpi2c_imx->clks);
+ 	if (ret) {
+-		dev_err(dev, "can't enable I2C per clock, ret=%d\n", ret);
++		dev_err(dev, "failed to enable I2C clock, ret=%d\n", ret);
+ 		return ret;
+ 	}
+ 
+-	ret = clk_prepare_enable(lpi2c_imx->clk_ipg);
+-	if (ret) {
+-		clk_disable_unprepare(lpi2c_imx->clk_per);
+-		dev_err(dev, "can't enable I2C ipg clock, ret=%d\n", ret);
+-	}
+-
+ 	ret = devm_request_irq(dev, lpi2c_imx->irq, lpi2c_imx_isr,
+ 			       IRQF_NO_SUSPEND,
+ 			       dev_name(dev), lpi2c_imx);
+@@ -1083,6 +1288,18 @@ static int __maybe_unused lpi2c_runtime_resume(struct device *dev)
+ static int lpi2c_suspend_noirq(struct device *dev)
+ {
+ 	int ret;
++	u32 scr, ssr;
++	struct lpi2c_imx_struct *lpi2c_imx = dev_get_drvdata(dev);
++
++	if (lpi2c_imx->slave) {
++		scr = readl(lpi2c_imx->base + LPI2C_SCR);
++		if (scr & SCR_SEN) {
++			ret = readl_poll_timeout(lpi2c_imx->base + LPI2C_SSR, ssr,
++				!(ssr & (SSR_BBF | SSR_SBF)), 10, 4000000);
++			if (ret)
++				return ret;
++		}
++	}
+ 
+ 	ret = pm_runtime_force_suspend(dev);
+ 	if (ret)
+@@ -1095,7 +1312,17 @@ static int lpi2c_suspend_noirq(struct device *dev)
+ 
+ static int lpi2c_resume_noirq(struct device *dev)
+ {
+-	return pm_runtime_force_resume(dev);
++	int ret;
++	struct lpi2c_imx_struct *lpi2c_imx = dev_get_drvdata(dev);
++
++	ret = pm_runtime_force_resume(dev);
++	if (ret)
++		return ret;
++
++	if (lpi2c_imx->slave)
++		lpi2c_imx_slave_init(lpi2c_imx);
++
++	return 0;
+ }
+ 
+ static const struct dev_pm_ops lpi2c_pm_ops = {
+@@ -1107,7 +1334,7 @@ static const struct dev_pm_ops lpi2c_pm_ops = {
+ 
+ static struct platform_driver lpi2c_imx_driver = {
+ 	.probe = lpi2c_imx_probe,
+-	.remove = lpi2c_imx_remove,
++	.remove_new = lpi2c_imx_remove,
+ 	.driver = {
+ 		.name = DRIVER_NAME,
+ 		.of_match_table = lpi2c_imx_of_match,
+diff --git a/drivers/mmc/host/sdhci-esdhc-imx.c b/drivers/mmc/host/sdhci-esdhc-imx.c
+index 2314a7595..f468a3851 100644
+--- a/drivers/mmc/host/sdhci-esdhc-imx.c
++++ b/drivers/mmc/host/sdhci-esdhc-imx.c
+@@ -23,13 +23,16 @@
+ #include <linux/mmc/sdio.h>
+ #include <linux/mmc/slot-gpio.h>
+ #include <linux/of.h>
+-#include <linux/of_device.h>
++#include <linux/platform_device.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/pm_runtime.h>
++#include "sdhci-cqhci.h"
+ #include "sdhci-pltfm.h"
+ #include "sdhci-esdhc.h"
+ #include "cqhci.h"
+ 
++#define ESDHC_SYS_CTRL_RESET_TUNING	(1 << 28)
++#define ESDHC_SYS_CTRL_RST_FIFO		(1 << 22)
+ #define ESDHC_SYS_CTRL_DTOCV_MASK	0x0f
+ #define	ESDHC_CTRL_D3CD			0x08
+ #define ESDHC_BURST_LEN_EN_INCR		(1 << 27)
+@@ -80,6 +83,11 @@
+ #define  ESDHC_TUNE_CTRL_STEP		1
+ #define  ESDHC_TUNE_CTRL_MIN		0
+ #define  ESDHC_TUNE_CTRL_MAX		((1 << 7) - 1)
++#define ESDHC_TUNE_CTRL_STATUS_TAP_SEL_PRE_MASK		0x7f000000
++#define ESDHC_TUNE_CTRL_STATUS_TAP_SEL_PRE_SHIFT	24
++#define ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_PRE_SHIFT	8
++#define ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_OUT_SHIFT	4
++#define ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_POST_SHIFT	0
+ 
+ /* strobe dll register */
+ #define ESDHC_STROBE_DLL_CTRL		0x70
+@@ -103,10 +111,13 @@
+ 
+ #define ESDHC_TUNING_CTRL		0xcc
+ #define ESDHC_STD_TUNING_EN		(1 << 24)
++#define ESDHC_TUNNING_WINDOW_MASK	0X00700000
++#define ESDHC_TUNNING_WINDOW_SHIFT	20
+ /* NOTE: the minimum valid tuning start tap for mx6sl is 1 */
+ #define ESDHC_TUNING_START_TAP_DEFAULT	0x1
+ #define ESDHC_TUNING_START_TAP_MASK	0x7f
+ #define ESDHC_TUNING_CMD_CRC_CHECK_DISABLE	(1 << 7)
++#define ESDHC_TUNING_STEP_DEFAULT	0x1
+ #define ESDHC_TUNING_STEP_MASK		0x00070000
+ #define ESDHC_TUNING_STEP_SHIFT		16
+ 
+@@ -170,8 +181,8 @@
+ #define ESDHC_FLAG_HS400		BIT(9)
+ /*
+  * The IP has errata ERR010450
+- * uSDHC: Due to the I/O timing limit, for SDR mode, SD card clock can't
+- * exceed 150MHz, for DDR mode, SD card clock can't exceed 45MHz.
++ * uSDHC: At 1.8V due to the I/O timing limit, for SDR mode, SD card
++ * clock can't exceed 150MHz, for DDR mode, SD card clock can't exceed 45MHz.
+  */
+ #define ESDHC_FLAG_ERR010450		BIT(10)
+ /* The IP supports HS400ES mode */
+@@ -196,9 +207,12 @@
+  * disable the ACMD23 feature.
+  */
+ #define ESDHC_FLAG_BROKEN_AUTO_CMD23	BIT(16)
++/* ERR004536 is not applicable for the IP  */
++#define ESDHC_FLAG_SKIP_ERR004536	BIT(17)
+ /* need request bus freq during low power */
+-#define ESDHC_FLAG_BUSFREQ		BIT(17)
++#define ESDHC_FLAG_BUSFREQ		BIT(18)
+ 
++#define ESDHC_AUTO_TUNING_WINDOW	3
+ enum wp_types {
+ 	ESDHC_WP_NONE,		/* no WP, neither controller nor gpio */
+ 	ESDHC_WP_CONTROLLER,	/* mmc controller internal WP */
+@@ -224,12 +238,14 @@ enum cd_types {
+ struct esdhc_platform_data {
+ 	enum wp_types wp_type;
+ 	enum cd_types cd_type;
++	bool cd_gpio_wakeup;
+ 	int max_bus_width;
+ 	unsigned int delay_line;
+ 	unsigned int tuning_step;       /* The delay cell steps in tuning procedure */
+ 	unsigned int tuning_start_tap;	/* The start delay cell point in tuning procedure */
+ 	unsigned int strobe_dll_delay_target;	/* The delay cell for strobe pad (read clock) */
+-	bool sdio_async_interrupt_enabled;
++	unsigned int saved_tuning_delay_cell;	/* save the value of tuning delay cell */
++	unsigned int saved_auto_tuning_window;  /* save the auto tuning window width */
+ };
+ 
+ struct esdhc_soc_data {
+@@ -298,12 +314,23 @@ static const struct esdhc_soc_data usdhc_imx7d_data = {
+ 			| ESDHC_FLAG_BUSFREQ,
+ };
+ 
++static struct esdhc_soc_data usdhc_s32g2_data = {
++	.flags = ESDHC_FLAG_USDHC | ESDHC_FLAG_MAN_TUNING
++			| ESDHC_FLAG_HAVE_CAP1 | ESDHC_FLAG_HS200
++			| ESDHC_FLAG_HS400 | ESDHC_FLAG_HS400_ES
++			| ESDHC_FLAG_SKIP_ERR004536,
++};
++
+ static struct esdhc_soc_data usdhc_imx7ulp_data = {
+ 	.flags = ESDHC_FLAG_USDHC | ESDHC_FLAG_STD_TUNING
+ 			| ESDHC_FLAG_HAVE_CAP1 | ESDHC_FLAG_HS200
+ 			| ESDHC_FLAG_PMQOS | ESDHC_FLAG_HS400
+ 			| ESDHC_FLAG_STATE_LOST_IN_LPMODE,
+ };
++static struct esdhc_soc_data usdhc_imxrt1050_data = {
++	.flags = ESDHC_FLAG_USDHC | ESDHC_FLAG_STD_TUNING
++			| ESDHC_FLAG_HAVE_CAP1 | ESDHC_FLAG_HS200,
++};
+ 
+ static struct esdhc_soc_data usdhc_imx8qxp_data = {
+ 	.flags = ESDHC_FLAG_USDHC | ESDHC_FLAG_STD_TUNING
+@@ -336,6 +363,16 @@ struct pltfm_imx_data {
+ 	struct clk *clk_ahb;
+ 	struct clk *clk_per;
+ 	unsigned int actual_clock;
++
++	/*
++	 * USDHC has one limition, require the SDIO device a different
++	 * register setting. Driver has to recognize card type during
++	 * the card init, but at this stage, mmc_host->card is not
++	 * available. So involve this field to save the card type
++	 * during card init through usdhc_init_card().
++	 */
++	unsigned int init_card_type;
++
+ 	enum {
+ 		NO_CMD_PENDING,      /* no multiblock command pending */
+ 		MULTIBLK_IN_PROCESS, /* exact multiblock cmd in process */
+@@ -359,6 +396,8 @@ static const struct of_device_id imx_esdhc_dt_ids[] = {
+ 	{ .compatible = "fsl,imx7ulp-usdhc", .data = &usdhc_imx7ulp_data, },
+ 	{ .compatible = "fsl,imx8qxp-usdhc", .data = &usdhc_imx8qxp_data, },
+ 	{ .compatible = "fsl,imx8mm-usdhc", .data = &usdhc_imx8mm_data, },
++	{ .compatible = "fsl,imxrt1050-usdhc", .data = &usdhc_imxrt1050_data, },
++	{ .compatible = "nxp,s32g2-usdhc", .data = &usdhc_s32g2_data, },
+ 	{ .compatible = "fsl,s32v234-usdhc", .data = &usdhc_s32v234_data, },
+ 	{ /* sentinel */ }
+ };
+@@ -432,11 +471,12 @@ static inline void esdhc_wait_for_card_clock_gate_off(struct sdhci_host *host)
+ }
+ 
+ /* Enable the auto tuning circuit to check the CMD line and BUS line */
+-static inline void usdhc_auto_tuning_mode_sel(struct sdhci_host *host)
++static inline void usdhc_auto_tuning_mode_sel_and_en(struct sdhci_host *host)
+ {
+ 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+ 	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+ 	u32 buswidth, auto_tune_buswidth;
++	u32 reg;
+ 
+ 	buswidth = USDHC_GET_BUSWIDTH(readl(host->ioaddr + SDHCI_HOST_CONTROL));
+ 
+@@ -453,20 +493,26 @@ static inline void usdhc_auto_tuning_mode_sel(struct sdhci_host *host)
+ 	}
+ 
+ 	/*
+-	 * If sdio device use async interrupt, it will use DAT[1] to signal
+-	 * the device's interrupt asynchronous when use 4 data lines.
+-	 * Then hardware auto tuning circuit MUST NOT check the DAT[1] line,
+-	 * otherwise auto tuning will be impacted by this async interrupt,
+-	 * and change the delay cell incorrectly, which then cause data/cmd
+-	 * errors.
+-	 * This is the hardware auto tuning circuit limitation.
++	 * For USDHC, auto tuning circuit can not handle the async sdio
++	 * device interrupt correctly. When sdio device use 4 data lines,
++	 * async sdio interrupt will use the shared DAT[1], if enable auto
++	 * tuning circuit check these 4 data lines, include the DAT[1],
++	 * this circuit will detect this interrupt, take this as a data on
++	 * DAT[1], and adjust the delay cell wrongly.
++	 * This is the hardware design limitation, to avoid this, for sdio
++	 * device, config the auto tuning circuit only check DAT[0] and CMD
++	 * line.
+ 	 */
+-	if (imx_data->boarddata.sdio_async_interrupt_enabled)
++	if (imx_data->init_card_type == MMC_TYPE_SDIO)
+ 		auto_tune_buswidth = ESDHC_VEND_SPEC2_AUTO_TUNE_1BIT_EN;
+ 
+ 	esdhc_clrset_le(host, ESDHC_VEND_SPEC2_AUTO_TUNE_MODE_MASK,
+ 			auto_tune_buswidth | ESDHC_VEND_SPEC2_AUTO_TUNE_CMD_EN,
+ 			ESDHC_VEND_SPEC2);
++
++	reg = readl(host->ioaddr + ESDHC_MIX_CTRL);
++	reg |= ESDHC_MIX_CTRL_AUTO_TUNE_EN;
++	writel(reg, host->ioaddr + ESDHC_MIX_CTRL);
+ }
+ 
+ static u32 esdhc_readl_le(struct sdhci_host *host, int reg)
+@@ -704,14 +750,11 @@ static void esdhc_writew_le(struct sdhci_host *host, u16 val, int reg)
+ 			} else {
+ 				v &= ~ESDHC_MIX_CTRL_SMPCLK_SEL;
+ 				m &= ~ESDHC_MIX_CTRL_FBCLK_SEL;
+-				m &= ~ESDHC_MIX_CTRL_AUTO_TUNE_EN;
+ 			}
+ 
+ 			if (val & SDHCI_CTRL_EXEC_TUNING) {
+ 				v |= ESDHC_MIX_CTRL_EXE_TUNE;
+ 				m |= ESDHC_MIX_CTRL_FBCLK_SEL;
+-				m |= ESDHC_MIX_CTRL_AUTO_TUNE_EN;
+-				usdhc_auto_tuning_mode_sel(host);
+ 			} else {
+ 				v &= ~ESDHC_MIX_CTRL_EXE_TUNE;
+ 			}
+@@ -955,7 +998,8 @@ static inline void esdhc_pltfm_set_clock(struct sdhci_host *host,
+ 		| ESDHC_CLOCK_MASK);
+ 	sdhci_writel(host, temp, ESDHC_SYSTEM_CONTROL);
+ 
+-	if (imx_data->socdata->flags & ESDHC_FLAG_ERR010450) {
++	if ((imx_data->socdata->flags & ESDHC_FLAG_ERR010450) &&
++	    (!(host->quirks2 & SDHCI_QUIRK2_NO_1_8_V))) {
+ 		unsigned int max_clock;
+ 
+ 		max_clock = imx_data->is_ddr ? 45000000 : 150000000;
+@@ -1036,9 +1080,74 @@ static void esdhc_pltfm_set_bus_width(struct sdhci_host *host, int width)
+ 			SDHCI_HOST_CONTROL);
+ }
+ 
++static void esdhc_reset_tuning(struct sdhci_host *host)
++{
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
++	u32 ctrl, tuning_ctrl, sys_ctrl;
++	int ret;
++
++	/* Reset the tuning circuit */
++	if (esdhc_is_usdhc(imx_data)) {
++		ctrl = readl(host->ioaddr + ESDHC_MIX_CTRL);
++		ctrl &= ~ESDHC_MIX_CTRL_AUTO_TUNE_EN;
++		if (imx_data->socdata->flags & ESDHC_FLAG_MAN_TUNING) {
++			ctrl &= ~ESDHC_MIX_CTRL_SMPCLK_SEL;
++			ctrl &= ~ESDHC_MIX_CTRL_FBCLK_SEL;
++			writel(ctrl, host->ioaddr + ESDHC_MIX_CTRL);
++			writel(0, host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
++		} else if (imx_data->socdata->flags & ESDHC_FLAG_STD_TUNING) {
++			writel(ctrl, host->ioaddr + ESDHC_MIX_CTRL);
++			/*
++			 * enable the std tuning just in case it cleared in
++			 * sdhc_esdhc_tuning_restore.
++			 */
++			tuning_ctrl = readl(host->ioaddr + ESDHC_TUNING_CTRL);
++			if (!(tuning_ctrl & ESDHC_STD_TUNING_EN)) {
++				tuning_ctrl |= ESDHC_STD_TUNING_EN;
++				writel(tuning_ctrl, host->ioaddr + ESDHC_TUNING_CTRL);
++			}
++
++			/* set the reset tuning bit */
++			sys_ctrl = readl(host->ioaddr + ESDHC_SYSTEM_CONTROL);
++			sys_ctrl |= ESDHC_SYS_CTRL_RESET_TUNING;
++			writel(sys_ctrl, host->ioaddr + ESDHC_SYSTEM_CONTROL);
++
++			ctrl = readl(host->ioaddr + SDHCI_AUTO_CMD_STATUS);
++			ctrl &= ~ESDHC_MIX_CTRL_SMPCLK_SEL;
++			ctrl &= ~ESDHC_MIX_CTRL_EXE_TUNE;
++			writel(ctrl, host->ioaddr + SDHCI_AUTO_CMD_STATUS);
++			/* Make sure ESDHC_MIX_CTRL_EXE_TUNE cleared */
++			ret = readl_poll_timeout(host->ioaddr + SDHCI_AUTO_CMD_STATUS,
++				ctrl, !(ctrl & ESDHC_MIX_CTRL_EXE_TUNE), 1, 50);
++			if (ret == -ETIMEDOUT)
++				dev_warn(mmc_dev(host->mmc),
++				 "Warning! clear execute tuning bit failed\n");
++			/*
++			 * SDHCI_INT_DATA_AVAIL is W1C bit, set this bit will clear the
++			 * usdhc IP internal logic flag execute_tuning_with_clr_buf, which
++			 * will finally make sure the normal data transfer logic correct.
++			 */
++			ctrl = readl(host->ioaddr + SDHCI_INT_STATUS);
++			ctrl |= SDHCI_INT_DATA_AVAIL;
++			writel(ctrl, host->ioaddr + SDHCI_INT_STATUS);
++		}
++	}
++}
++
++static void usdhc_init_card(struct mmc_host *mmc, struct mmc_card *card)
++{
++	struct sdhci_host *host = mmc_priv(mmc);
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
++
++	imx_data->init_card_type = card->type;
++}
++
+ static int usdhc_execute_tuning(struct mmc_host *mmc, u32 opcode)
+ {
+ 	struct sdhci_host *host = mmc_priv(mmc);
++	int err;
+ 
+ 	/*
+ 	 * i.MX uSDHC internally already uses a fixed optimized timing for
+@@ -1047,12 +1156,23 @@ static int usdhc_execute_tuning(struct mmc_host *mmc, u32 opcode)
+ 	if (host->timing == MMC_TIMING_UHS_DDR50)
+ 		return 0;
+ 
+-	return sdhci_execute_tuning(mmc, opcode);
++	/*
++	 * Reset tuning circuit logic. If not, the previous tuning result
++	 * will impact current tuning, make current tuning can't set the
++	 * correct delay cell.
++	 */
++	esdhc_reset_tuning(host);
++	err = sdhci_execute_tuning(mmc, opcode);
++	/* If tuning done, enable auto tuning */
++	if (!err && !host->tuning_err)
++		usdhc_auto_tuning_mode_sel_and_en(host);
++
++	return err;
+ }
+ 
+ static void esdhc_prepare_tuning(struct sdhci_host *host, u32 val)
+ {
+-	u32 reg;
++	u32 reg, sys_ctrl;
+ 	u8 sw_rst;
+ 	int ret;
+ 
+@@ -1071,51 +1191,94 @@ static void esdhc_prepare_tuning(struct sdhci_host *host, u32 val)
+ 	reg |= ESDHC_MIX_CTRL_EXE_TUNE | ESDHC_MIX_CTRL_SMPCLK_SEL |
+ 			ESDHC_MIX_CTRL_FBCLK_SEL;
+ 	writel(reg, host->ioaddr + ESDHC_MIX_CTRL);
+-	writel(val << 8, host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
++	writel(val << ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_PRE_SHIFT,
++				host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
+ 	dev_dbg(mmc_dev(host->mmc),
+ 		"tuning with delay 0x%x ESDHC_TUNE_CTRL_STATUS 0x%x\n",
+ 			val, readl(host->ioaddr + ESDHC_TUNE_CTRL_STATUS));
++
++	/* set RST_FIFO to reset the async FIFO, and wat it to self-clear */
++	sys_ctrl = readl(host->ioaddr + ESDHC_SYSTEM_CONTROL);
++	sys_ctrl |= ESDHC_SYS_CTRL_RST_FIFO;
++	writel(sys_ctrl, host->ioaddr + ESDHC_SYSTEM_CONTROL);
++	ret = readl_poll_timeout(host->ioaddr + ESDHC_SYSTEM_CONTROL, sys_ctrl,
++				 !(sys_ctrl & ESDHC_SYS_CTRL_RST_FIFO), 10, 100);
++
+ }
+ 
+ static void esdhc_post_tuning(struct sdhci_host *host)
+ {
+ 	u32 reg;
+ 
+-	usdhc_auto_tuning_mode_sel(host);
+-
+ 	reg = readl(host->ioaddr + ESDHC_MIX_CTRL);
+ 	reg &= ~ESDHC_MIX_CTRL_EXE_TUNE;
+-	reg |= ESDHC_MIX_CTRL_AUTO_TUNE_EN;
+ 	writel(reg, host->ioaddr + ESDHC_MIX_CTRL);
+ }
+ 
++/*
++ * find the largest pass window, and use the average delay of this
++ * largest window to get the best timing.
++ */
+ static int esdhc_executing_tuning(struct sdhci_host *host, u32 opcode)
+ {
+ 	int min, max, avg, ret;
++	int win_length, target_min, target_max, target_win_length;
++	u32 clk_tune_ctrl_status;
+ 
+-	/* find the mininum delay first which can pass tuning */
+ 	min = ESDHC_TUNE_CTRL_MIN;
+-	while (min < ESDHC_TUNE_CTRL_MAX) {
+-		esdhc_prepare_tuning(host, min);
+-		if (!mmc_send_tuning(host->mmc, opcode, NULL))
+-			break;
+-		min += ESDHC_TUNE_CTRL_STEP;
+-	}
+-
+-	/* find the maxinum delay which can not pass tuning */
+-	max = min + ESDHC_TUNE_CTRL_STEP;
++	max = ESDHC_TUNE_CTRL_MIN;
++	target_win_length = 0;
+ 	while (max < ESDHC_TUNE_CTRL_MAX) {
+-		esdhc_prepare_tuning(host, max);
+-		if (mmc_send_tuning(host->mmc, opcode, NULL)) {
+-			max -= ESDHC_TUNE_CTRL_STEP;
+-			break;
++		/* find the mininum delay first which can pass tuning */
++		while (min < ESDHC_TUNE_CTRL_MAX) {
++			esdhc_prepare_tuning(host, min);
++			if (!mmc_send_tuning(host->mmc, opcode, NULL))
++				break;
++			min += ESDHC_TUNE_CTRL_STEP;
++		}
++
++		/* find the maxinum delay which can not pass tuning */
++		max = min + ESDHC_TUNE_CTRL_STEP;
++		while (max < ESDHC_TUNE_CTRL_MAX) {
++			esdhc_prepare_tuning(host, max);
++			if (mmc_send_tuning(host->mmc, opcode, NULL)) {
++				max -= ESDHC_TUNE_CTRL_STEP;
++				break;
++			}
++			max += ESDHC_TUNE_CTRL_STEP;
+ 		}
+-		max += ESDHC_TUNE_CTRL_STEP;
++
++		win_length = max - min + 1;
++		/* get the largest pass window */
++		if (win_length > target_win_length) {
++			target_win_length = win_length;
++			target_min = min;
++			target_max = max;
++		}
++
++		/* continue to find the next pass window */
++		min = max + ESDHC_TUNE_CTRL_STEP;
+ 	}
+ 
+ 	/* use average delay to get the best timing */
+-	avg = (min + max) / 2;
++	avg = (target_min + target_max) / 2;
+ 	esdhc_prepare_tuning(host, avg);
++
++	/*
++	 * adjust the delay accroding to tuning window, make preparation
++	 * for the auto-tuning logic. According to hardware suggest, need
++	 * to config the auto tuning window width to 3, to make the auto
++	 * tuning logic have enough space to handle the sample point shift
++	 * caused by temperature change.
++	 */
++	clk_tune_ctrl_status = (avg - ESDHC_AUTO_TUNING_WINDOW) <<
++					ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_PRE_SHIFT |
++				ESDHC_AUTO_TUNING_WINDOW <<
++					ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_OUT_SHIFT |
++				ESDHC_AUTO_TUNING_WINDOW <<
++					ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_POST_SHIFT;
++	writel(clk_tune_ctrl_status, host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
++
+ 	ret = mmc_send_tuning(host->mmc, opcode, NULL);
+ 	esdhc_post_tuning(host);
+ 
+@@ -1220,44 +1383,6 @@ static void esdhc_set_strobe_dll(struct sdhci_host *host)
+ 		"warning! HS400 strobe DLL status REF/SLV not lock in 50us, STROBE DLL status is %x!\n", v);
+ }
+ 
+-static void esdhc_reset_tuning(struct sdhci_host *host)
+-{
+-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+-	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+-	u32 ctrl;
+-	int ret;
+-
+-	/* Reset the tuning circuit */
+-	if (esdhc_is_usdhc(imx_data)) {
+-		if (imx_data->socdata->flags & ESDHC_FLAG_MAN_TUNING) {
+-			ctrl = readl(host->ioaddr + ESDHC_MIX_CTRL);
+-			ctrl &= ~ESDHC_MIX_CTRL_SMPCLK_SEL;
+-			ctrl &= ~ESDHC_MIX_CTRL_FBCLK_SEL;
+-			writel(ctrl, host->ioaddr + ESDHC_MIX_CTRL);
+-			writel(0, host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
+-		} else if (imx_data->socdata->flags & ESDHC_FLAG_STD_TUNING) {
+-			ctrl = readl(host->ioaddr + SDHCI_AUTO_CMD_STATUS);
+-			ctrl &= ~ESDHC_MIX_CTRL_SMPCLK_SEL;
+-			ctrl &= ~ESDHC_MIX_CTRL_EXE_TUNE;
+-			writel(ctrl, host->ioaddr + SDHCI_AUTO_CMD_STATUS);
+-			/* Make sure ESDHC_MIX_CTRL_EXE_TUNE cleared */
+-			ret = readl_poll_timeout(host->ioaddr + SDHCI_AUTO_CMD_STATUS,
+-				ctrl, !(ctrl & ESDHC_MIX_CTRL_EXE_TUNE), 1, 50);
+-			if (ret == -ETIMEDOUT)
+-				dev_warn(mmc_dev(host->mmc),
+-				 "Warning! clear execute tuning bit failed\n");
+-			/*
+-			 * SDHCI_INT_DATA_AVAIL is W1C bit, set this bit will clear the
+-			 * usdhc IP internal logic flag execute_tuning_with_clr_buf, which
+-			 * will finally make sure the normal data transfer logic correct.
+-			 */
+-			ctrl = readl(host->ioaddr + SDHCI_INT_STATUS);
+-			ctrl |= SDHCI_INT_DATA_AVAIL;
+-			writel(ctrl, host->ioaddr + SDHCI_INT_STATUS);
+-		}
+-	}
+-}
+-
+ static void esdhc_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
+ {
+ 	u32 m;
+@@ -1313,7 +1438,7 @@ static void esdhc_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
+ 
+ static void esdhc_reset(struct sdhci_host *host, u8 mask)
+ {
+-	sdhci_reset(host, mask);
++	sdhci_and_cqhci_reset(host, mask);
+ 
+ 	sdhci_writel(host, host->ier, SDHCI_INT_ENABLE);
+ 	sdhci_writel(host, host->ier, SDHCI_SIGNAL_ENABLE);
+@@ -1385,7 +1510,7 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+ 	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+ 	struct cqhci_host *cq_host = host->mmc->cqe_private;
+-	int tmp;
++	u32 tmp;
+ 
+ 	if (esdhc_is_usdhc(imx_data)) {
+ 		/*
+@@ -1413,9 +1538,11 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 		 * erratum ESDHC_FLAG_ERR004536 fix for MX6Q TO1.2 and MX6DL
+ 		 * TO1.1, it's harmless for MX6SL
+ 		 */
+-		if (!is_s32v234_usdhc(imx_data))
++		if (!(imx_data->socdata->flags & ESDHC_FLAG_SKIP_ERR004536) ||
++				!is_s32v234_usdhc(imx_data)) {
+ 			writel(readl(host->ioaddr + 0x6c) & ~BIT(7),
+ 				host->ioaddr + 0x6c);
++		}
+ 
+ 		/* disable DLL_CTRL delay line settings */
+ 		writel(0x0, host->ioaddr + ESDHC_DLL_CTRL);
+@@ -1439,19 +1566,36 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 
+ 		if (imx_data->socdata->flags & ESDHC_FLAG_STD_TUNING) {
+ 			tmp = readl(host->ioaddr + ESDHC_TUNING_CTRL);
+-			tmp |= ESDHC_STD_TUNING_EN |
+-				ESDHC_TUNING_START_TAP_DEFAULT;
+-			if (imx_data->boarddata.tuning_start_tap) {
+-				tmp &= ~ESDHC_TUNING_START_TAP_MASK;
++			tmp |= ESDHC_STD_TUNING_EN;
++
++			/*
++			 * ROM code or bootloader may config the start tap
++			 * and step, unmask them first.
++			 */
++			tmp &= ~(ESDHC_TUNING_START_TAP_MASK | ESDHC_TUNING_STEP_MASK);
++			if (imx_data->boarddata.tuning_start_tap)
+ 				tmp |= imx_data->boarddata.tuning_start_tap;
+-			}
++			else
++				tmp |= ESDHC_TUNING_START_TAP_DEFAULT;
+ 
+ 			if (imx_data->boarddata.tuning_step) {
+-				tmp &= ~ESDHC_TUNING_STEP_MASK;
+ 				tmp |= imx_data->boarddata.tuning_step
+ 					<< ESDHC_TUNING_STEP_SHIFT;
++			} else {
++				tmp |= ESDHC_TUNING_STEP_DEFAULT
++					<< ESDHC_TUNING_STEP_SHIFT;
+ 			}
+ 
++			/*
++			 * Config the tuning window to the hardware suggested value 3.
++			 * This tuning window is used for auto tuning logic. The default
++			 * tuning window is 2, here change to 3 make the window a bit
++			 * widder, give auto tuning enough space to handle the sample
++			 * point shift cause by temperature change.
++			 */
++			 tmp &= ~ESDHC_TUNNING_WINDOW_MASK;
++			 tmp |= ESDHC_AUTO_TUNING_WINDOW << ESDHC_TUNNING_WINDOW_SHIFT;
++
+ 			/* Disable the CMD CRC check for tuning, if not, need to
+ 			 * add some delay after every tuning command, because
+ 			 * hardware standard tuning logic will directly go to next
+@@ -1477,7 +1621,7 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 
+ 		/*
+ 		 * On i.MX8MM, we are running Dual Linux OS, with 1st Linux using SD Card
+-		 * as rootfs storage, 2nd Linux using eMMC as rootfs storage. We let the
++		 * as rootfs storage, 2nd Linux using eMMC as rootfs storage. We let
+ 		 * the 1st linux configure power/clock for the 2nd Linux.
+ 		 *
+ 		 * When the 2nd Linux is booting into rootfs stage, we let the 1st Linux
+@@ -1492,6 +1636,62 @@ static void sdhci_esdhc_imx_hwinit(struct sdhci_host *host)
+ 	}
+ }
+ 
++static void sdhc_esdhc_tuning_save(struct sdhci_host *host)
++{
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
++	u32 reg;
++
++	/*
++	 * SD/eMMC do not need this tuning save because it will re-init
++	 * after system resume back.
++	 * Here save the tuning delay value for SDIO device since it may
++	 * keep power during system PM. And for usdhc, only SDR50 and
++	 * SDR104 mode for SDIO devide need to do tuning, and need to
++	 * save/restore.
++	 */
++	if ((host->timing == MMC_TIMING_UHS_SDR50) |
++			(host->timing == MMC_TIMING_UHS_SDR104)) {
++		reg = readl(host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
++		reg = (reg & ESDHC_TUNE_CTRL_STATUS_TAP_SEL_PRE_MASK) >>
++				ESDHC_TUNE_CTRL_STATUS_TAP_SEL_PRE_SHIFT;
++		imx_data->boarddata.saved_tuning_delay_cell = reg;
++	}
++}
++
++static void sdhc_esdhc_tuning_restore(struct sdhci_host *host)
++{
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
++	u32 reg;
++
++	if ((host->timing == MMC_TIMING_UHS_SDR50) |
++			(host->timing == MMC_TIMING_UHS_SDR104)) {
++		/*
++		 * restore the tuning delay value actually is a
++		 * manual tuning method, so clear the standard
++		 * tuning enable bit here. Will set back this
++		 * ESDHC_STD_TUNING_EN in esdhc_reset_tuning()
++		 * when trigger re-tuning.
++		 */
++		reg = readl(host->ioaddr + ESDHC_TUNING_CTRL);
++		reg &= ~ESDHC_STD_TUNING_EN;
++		writel(reg, host->ioaddr + ESDHC_TUNING_CTRL);
++
++		reg = readl(host->ioaddr + ESDHC_MIX_CTRL);
++		reg |= ESDHC_MIX_CTRL_SMPCLK_SEL | ESDHC_MIX_CTRL_FBCLK_SEL;
++		writel(reg, host->ioaddr + ESDHC_MIX_CTRL);
++
++		writel(imx_data->boarddata.saved_tuning_delay_cell <<
++				ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_PRE_SHIFT |
++				ESDHC_AUTO_TUNING_WINDOW <<
++				ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_OUT_SHIFT |
++				ESDHC_AUTO_TUNING_WINDOW <<
++				ESDHC_TUNE_CTRL_STATUS_DLY_CELL_SET_POST_SHIFT,
++				host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
++	}
++}
++
+ static void esdhc_cqe_enable(struct mmc_host *mmc)
+ {
+ 	struct sdhci_host *host = mmc_priv(mmc);
+@@ -1535,7 +1735,7 @@ static void esdhc_cqe_enable(struct mmc_host *mmc)
+ 	 * system resume back.
+ 	 */
+ 	cqhci_writel(cq_host, 0, CQHCI_CTL);
+-	if (cqhci_readl(cq_host, CQHCI_CTL) && CQHCI_HALT)
++	if (cqhci_readl(cq_host, CQHCI_CTL) & CQHCI_HALT)
+ 		dev_err(mmc_dev(host->mmc),
+ 			"failed to exit halt state when enable CQE\n");
+ 
+@@ -1563,9 +1763,13 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
+ 	struct esdhc_platform_data *boarddata = &imx_data->boarddata;
+ 	int ret;
+ 
+-	if (of_get_property(np, "fsl,wp-controller", NULL))
++	if (of_property_read_bool(np, "fsl,wp-controller"))
+ 		boarddata->wp_type = ESDHC_WP_CONTROLLER;
+ 
++	if (of_property_read_bool(np, "fsl,cd-gpio-wakeup-disable"))
++		boarddata->cd_gpio_wakeup = false;
++	else
++		boarddata->cd_gpio_wakeup = true;
+ 	/*
+ 	 * If we have this property, then activate WP check.
+ 	 * Retrieveing and requesting the actual WP GPIO will happen
+@@ -1580,18 +1784,15 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
+ 
+ 	of_property_read_u32(np, "fsl,strobe-dll-delay-target",
+ 				&boarddata->strobe_dll_delay_target);
+-	if (of_find_property(np, "no-1-8-v", NULL))
++	if (of_property_read_bool(np, "no-1-8-v"))
+ 		host->quirks2 |= SDHCI_QUIRK2_NO_1_8_V;
+ 
+ 	if (of_property_read_u32(np, "fsl,delay-line", &boarddata->delay_line))
+ 		boarddata->delay_line = 0;
+ 
+-	if (of_property_read_bool(np, "fsl,sdio-async-interrupt-enabled"))
+-		boarddata->sdio_async_interrupt_enabled = true;
+-
+ 	mmc_of_parse_voltage(host->mmc, &host->ocr_mask);
+ 
+-	if (!is_s32v234_usdhc(imx_data) && esdhc_is_usdhc(imx_data) 
++	if (!is_s32v234_usdhc(imx_data) && esdhc_is_usdhc(imx_data)
+ 					&& !IS_ERR(imx_data->pinctrl)) {
+ 		imx_data->pins_100mhz = pinctrl_lookup_state(imx_data->pinctrl,
+ 						ESDHC_PINCTRL_STATE_100MHZ);
+@@ -1604,6 +1805,10 @@ sdhci_esdhc_imx_probe_dt(struct platform_device *pdev,
+ 	if (ret)
+ 		return ret;
+ 
++	/* HS400/HS400ES require 8 bit bus */
++	if (!(host->mmc->caps & MMC_CAP_8_BIT_DATA))
++		host->mmc->caps2 &= ~(MMC_CAP2_HS400 | MMC_CAP2_HS400_ES);
++
+ 	if (mmc_gpio_get_cd(host->mmc) >= 0)
+ 		host->quirks &= ~SDHCI_QUIRK_BROKEN_CARD_DETECTION;
+ 
+@@ -1689,6 +1894,12 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
+ 		 * to replace the standard one in sdhci_ops.
+ 		 */
+ 		host->mmc_host_ops.execute_tuning = usdhc_execute_tuning;
++
++		/*
++		 * Link usdhc specific mmc_host_ops init card function,
++		 * to distinguish the card type.
++		 */
++		host->mmc_host_ops.init_card = usdhc_init_card;
+ 	}
+ 
+ 	if (imx_data->socdata->flags & ESDHC_FLAG_MAN_TUNING)
+@@ -1769,7 +1980,7 @@ static int sdhci_esdhc_imx_probe(struct platform_device *pdev)
+ 	return err;
+ }
+ 
+-static int sdhci_esdhc_imx_remove(struct platform_device *pdev)
++static void sdhci_esdhc_imx_remove(struct platform_device *pdev)
+ {
+ 	struct sdhci_host *host = platform_get_drvdata(pdev);
+ 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+@@ -1794,8 +2005,6 @@ static int sdhci_esdhc_imx_remove(struct platform_device *pdev)
+ 		release_bus_freq(BUS_FREQ_HIGH);
+ 
+ 	sdhci_pltfm_free(pdev);
+-
+-	return 0;
+ }
+ 
+ #ifdef CONFIG_PM_SLEEP
+@@ -1823,15 +2032,34 @@ static int sdhci_esdhc_suspend(struct device *dev)
+ 	if (host->tuning_mode != SDHCI_TUNING_MODE_3)
+ 		mmc_retune_needed(host->mmc);
+ 
+-	ret = sdhci_suspend_host(host);
+-	if (ret)
+-		return ret;
++	/*
++	 * For the device need to keep power during system PM, need
++	 * to save the tuning delay value just in case the usdhc
++	 * lost power during system PM.
++	 */
++	if (mmc_card_keep_power(host->mmc) &&
++			(esdhc_is_usdhc(imx_data)))
++		sdhc_esdhc_tuning_save(host);
+ 
+-	ret = pinctrl_pm_select_sleep_state(dev);
++	ret = sdhci_suspend_host(host);
+ 	if (ret)
+ 		return ret;
++	/*
++	 * For the device which works as wakeup source, no need
++	 * to change the pinctrl to sleep state.
++	 * e.g. For SDIO device, the interrupt share with data pin,
++	 * but the pinctrl sleep state may config the data pin to
++	 * other function like GPIO function to save power in PM,
++	 * which finally block the SDIO wakeup function.
++	 */
++	if (!device_may_wakeup(dev) || !host->irq_wake_enabled) {
++		ret = pinctrl_pm_select_sleep_state(dev);
++		if (ret)
++			return ret;
++	}
+ 
+-	ret = mmc_gpio_set_cd_wake(host->mmc, true);
++	if (imx_data->boarddata.cd_gpio_wakeup)
++		ret = mmc_gpio_set_cd_wake(host->mmc, true);
+ 
+ 	pm_runtime_disable(dev);
+ 	pm_runtime_set_suspended(dev);
+@@ -1842,14 +2070,18 @@ static int sdhci_esdhc_suspend(struct device *dev)
+ static int sdhci_esdhc_resume(struct device *dev)
+ {
+ 	struct sdhci_host *host = dev_get_drvdata(dev);
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+ 	int ret;
+ 
+ 	pm_runtime_set_active(dev);
+ 	pm_runtime_enable(dev);
+ 
+-	ret = pinctrl_pm_select_default_state(dev);
+-	if (ret)
+-		return ret;
++	if (!device_may_wakeup(dev) || !host->irq_wake_enabled) {
++		ret = pinctrl_pm_select_default_state(dev);
++		if (ret)
++			return ret;
++	}
+ 
+ 	/* re-initialize hw state in case it's lost in low power mode */
+ 	sdhci_esdhc_imx_hwinit(host);
+@@ -1858,10 +2090,20 @@ static int sdhci_esdhc_resume(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * restore the saved tuning delay value for the device which keep
++	 * power during system PM.
++	 */
++	if (mmc_card_keep_power(host->mmc) &&
++			(esdhc_is_usdhc(imx_data)))
++		sdhc_esdhc_tuning_restore(host);
++
+ 	if (host->mmc->caps2 & MMC_CAP2_CQE)
+ 		ret = cqhci_resume(host->mmc);
++	if (ret)
++		return ret;
+ 
+-	if (!ret)
++	if (imx_data->boarddata.cd_gpio_wakeup)
+ 		ret = mmc_gpio_set_cd_wake(host->mmc, false);
+ 
+ 	pm_runtime_mark_last_busy(dev);
+@@ -1976,7 +2218,7 @@ static struct platform_driver sdhci_esdhc_imx_driver = {
+ 		.pm	= &sdhci_esdhc_pmops,
+ 	},
+ 	.probe		= sdhci_esdhc_imx_probe,
+-	.remove		= sdhci_esdhc_imx_remove,
++	.remove_new	= sdhci_esdhc_imx_remove,
+ };
+ 
+ module_platform_driver(sdhci_esdhc_imx_driver);
+diff --git a/drivers/pinctrl/freescale/pinctrl-imx93.c b/drivers/pinctrl/freescale/pinctrl-imx93.c
+index 417e41b37..5977dda3b 100644
+--- a/drivers/pinctrl/freescale/pinctrl-imx93.c
++++ b/drivers/pinctrl/freescale/pinctrl-imx93.c
+@@ -6,10 +6,10 @@
+ #include <linux/err.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
++#include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+-#include <linux/of.h>
+-#include <linux/of_device.h>
+ #include <linux/pinctrl/pinctrl.h>
++#include <linux/platform_device.h>
+ 
+ #include "pinctrl-imx.h"
+ 
+@@ -247,6 +247,7 @@ static const struct of_device_id imx93_pinctrl_of_match[] = {
+ 	{ .compatible = "fsl,imx93-iomuxc", },
+ 	{ /* sentinel */ }
+ };
++MODULE_DEVICE_TABLE(of, imx93_pinctrl_of_match);
+ 
+ static int imx93_pinctrl_probe(struct platform_device *pdev)
+ {
+diff --git a/drivers/soc/imx/soc-imx9.c b/drivers/soc/imx/soc-imx9.c
+index 288736b8f..147d89df8 100644
+--- a/drivers/soc/imx/soc-imx9.c
++++ b/drivers/soc/imx/soc-imx9.c
+@@ -59,23 +59,27 @@ static int imx9_soc_device_register(struct device *dev)
+ 		attr->revision = kasprintf(GFP_KERNEL, "unknown" );
+ 	}
+ 
++	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	err = nvmem_cell_read_u64(dev, "soc_unique_id", &v);
+ 	if (err)
+ 		goto revision;
+ 	attr->serial_number = kasprintf(GFP_KERNEL, "%016llX", v);
+ 
++	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	if (DIGPROG_MAJOR_UPPER(device_id) == 0x9 && DIGPROG_MAJOR_LOWER(device_id) == 0x2) {
+ 		attr->soc_id = kasprintf(GFP_KERNEL, "i.MX93");
+ 	} else {
+ 		attr->soc_id = kasprintf(GFP_KERNEL, "unknown");
+ 	}
+ 
++	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	sdev = soc_device_register(attr);
+ 	if (IS_ERR(sdev)) {
+ 		err = -ENODEV;
+ 		goto soc_id;
+ 	}
+ 
++	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	return 0;
+ 
+ soc_id:
+diff --git a/include/linux/dsa/sja1105.h b/include/linux/dsa/sja1105.h
+index 9e0707952..159e43171 100644
+--- a/include/linux/dsa/sja1105.h
++++ b/include/linux/dsa/sja1105.h
+@@ -35,23 +35,26 @@
+ #define SJA1105_META_SMAC			0x222222222222ull
+ #define SJA1105_META_DMAC			0x0180C200000Eull
+ 
+-#define SJA1105_HWTS_RX_EN			0
++enum sja1110_meta_tstamp {
++	SJA1110_META_TSTAMP_TX = 0,
++	SJA1110_META_TSTAMP_RX = 1,
++};
+ 
+-/* Global tagger data: each struct sja1105_port has a reference to
+- * the structure defined in struct sja1105_private.
+- */
++struct sja1105_deferred_xmit_work {
++	struct dsa_port *dp;
++	struct sk_buff *skb;
++	struct kthread_work work;
++};
++
++/* Global tagger data */
+ struct sja1105_tagger_data {
+-	struct sk_buff *stampable_skb;
+-	/* Protects concurrent access to the meta state machine
+-	 * from taggers running on multiple ports on SMP systems
+-	 */
+-	spinlock_t meta_lock;
+-	unsigned long state;
+-	u8 ts_id;
+-	/* Used on SJA1110 where meta frames are generated only for
+-	 * 2-step TX timestamps
+-	 */
+-	struct sk_buff_head skb_txtstamp_queue;
++	/* Tagger to switch */
++	void (*xmit_work_fn)(struct kthread_work *work);
++	void (*meta_tstamp_handler)(struct dsa_switch *ds, int port, u8 ts_id,
++				    enum sja1110_meta_tstamp dir, u64 tstamp);
++	/* Switch to tagger */
++	bool (*rxtstamp_get_state)(struct dsa_switch *ds);
++	void (*rxtstamp_set_state)(struct dsa_switch *ds, bool on);
+ };
+ 
+ struct sja1105_skb_cb {
+@@ -64,33 +67,13 @@ struct sja1105_skb_cb {
+ #define SJA1105_SKB_CB(skb) \
+ 	((struct sja1105_skb_cb *)((skb)->cb))
+ 
+-struct sja1105_port {
+-	struct kthread_worker *xmit_worker;
+-	struct kthread_work xmit_work;
+-	struct sk_buff_head xmit_queue;
+-	struct sja1105_tagger_data *data;
+-	struct dsa_port *dp;
+-	bool hwts_tx_en;
+-};
+-
+-/* Timestamps are in units of 8 ns clock ticks (equivalent to
+- * a fixed 125 MHz clock).
+- */
+-#define SJA1105_TICK_NS			8
+-
+-static inline s64 ns_to_sja1105_ticks(s64 ns)
+-{
+-	return ns / SJA1105_TICK_NS;
+-}
+-
+-static inline s64 sja1105_ticks_to_ns(s64 ticks)
++static inline struct sja1105_tagger_data *
++sja1105_tagger_data(struct dsa_switch *ds)
+ {
+-	return ticks * SJA1105_TICK_NS;
+-}
++	BUG_ON(ds->dst->tag_ops->proto != DSA_TAG_PROTO_SJA1105 &&
++	       ds->dst->tag_ops->proto != DSA_TAG_PROTO_SJA1110);
+ 
+-static inline bool dsa_port_is_sja1105(struct dsa_port *dp)
+-{
+-	return true;
++	return ds->tagger_data;
+ }
+ 
+ #endif /* _NET_DSA_SJA1105_H */
+diff --git a/include/linux/firmware/imx/dsp.h b/include/linux/firmware/imx/dsp.h
+index 4f7895a3b..1f176a268 100644
+--- a/include/linux/firmware/imx/dsp.h
++++ b/include/linux/firmware/imx/dsp.h
+@@ -37,17 +37,11 @@ struct imx_dsp_ipc {
+ 
+ static inline void imx_dsp_set_data(struct imx_dsp_ipc *ipc, void *data)
+ {
+-	if (!ipc)
+-		return;
+-
+ 	ipc->private_data = data;
+ }
+ 
+ static inline void *imx_dsp_get_data(struct imx_dsp_ipc *ipc)
+ {
+-	if (!ipc)
+-		return NULL;
+-
+ 	return ipc->private_data;
+ }
+ 
+diff --git a/include/linux/firmware/imx/ele_base_msg.h b/include/linux/firmware/imx/ele_base_msg.h
+index 04f1406d3..f63cfe484 100644
+--- a/include/linux/firmware/imx/ele_base_msg.h
++++ b/include/linux/firmware/imx/ele_base_msg.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: GPL-2.0+ */
+ /*
+- * Copyright 2021-2022 NXP
++ * Copyright 2021-2023 NXP
++ *
++ * Header file for the ELE Base API(s).
+  */
+ 
+ #ifndef ELE_BASE_MSG_H
+@@ -8,43 +10,76 @@
+ 
+ #include <linux/types.h>
+ 
+-#define MAX_RECV_SIZE 31
+-#define MAX_RECV_SIZE_BYTES (MAX_RECV_SIZE * sizeof(u32))
+-#define MAX_MESSAGE_SIZE 31
+-#define MAX_MESSAGE_SIZE_BYTES (MAX_MESSAGE_SIZE * sizeof(u32))
++#define WORD_SZ				4
++#define ELE_NONE_VAL			0x0
+ 
+-#define MESSAGING_VERSION_6		0x6
+-#define MESSAGING_VERSION_7		0x7
++#define ELE_SUCCESS_IND			0xD6
++
++#define ELE_GET_INFO_REQ		0xDA
++#define ELE_GET_INFO_REQ_MSG_SZ		0x10
++#define ELE_GET_INFO_RSP_MSG_SZ		0x08
++
++#define ELE_GET_INFO_BUFF_SZ		0x100
++#define ELE_GET_INFO_READ_SZ		0xA0
++#define DEVICE_GET_INFO_SZ		0x100
++
++#define GET_INFO_SOC_INFO_WORD_OFFSET	1
++#define GET_INFO_UUID_WORD_OFFSET	3
++#define GET_INFO_SL_NUM_MSB_WORD_OFF \
++	(GET_INFO_UUID_WORD_OFFSET + 3)
++#define GET_INFO_SL_NUM_LSB_WORD_OFF \
++	(GET_INFO_UUID_WORD_OFFSET + 0)
++
++#define ELE_PING_REQ			0x01
++#define ELE_PING_REQ_SZ			0x04
++#define ELE_PING_RSP_SZ			0x08
+ 
+-#define ELE_PING_REQ			0x1
+-#define ELE_OEM_CNTN_AUTH_REQ	0x87
+-#define ELE_VERIFY_IMAGE_REQ		0x88
+-#define ELE_RELEASE_CONTAINER_REQ	0x89
+-#define ELE_READ_FUSE_REQ		0x97
+-#define OTP_UNIQ_ID			0x01
+-#define OTFAD_CONFIG			0x2
+-#define ELE_GET_INFO_REQ                0xDA
+-#define GET_INFO_DATA                   0x17
+ #define ELE_START_RNG_REQ		0xA3
++#define ELE_START_RNG_REQ_MSG_SZ	0x04
++#define ELE_START_RNG_RSP_MSG_SZ	0x08
++
+ #define ELE_GET_TRNG_STATE_REQ		0xA4
+-#define ELE_GET_RANDOM_REQ		0x22
++#define ELE_GET_TRNG_STATE_REQ_MSG_SZ	0x04
++#define ELE_GET_TRNG_STATE_RSP_MSG_SZ	0x0C
++#define ELE_TRNG_STATE_OK		0x203
++#define ELE_GET_TRNG_STATE_RETRY_COUNT	0x5
+ #define CSAL_TRNG_STATE_MASK		0x0000ffff
+ 
+-#define ELE_VERSION			0x6
+-#define ELE_SUCCESS_IND		0xD6
+-#define ELE_FAILURE_IND		0x29
++#define ELE_SERVICE_SWAP_REQ		0xDF
++#define ELE_SERVICE_SWAP_REQ_MSG_SZ	0x18
++#define ELE_SERVICE_SWAP_RSP_MSG_SZ	0x0C
++#define ELE_IMEM_SIZE			0x10000
++#define ELE_IMEM_STATE_OK		0xCA
++#define ELE_IMEM_STATE_BAD		0xFE
++#define ELE_IMEM_STATE_WORD		0x27
++#define ELE_IMEM_STATE_MASK		0x00ff0000
++#define ELE_IMEM_EXPORT			0x1
++#define ELE_IMEM_IMPORT			0x2
+ 
+-#define ELE_MSG_DATA_NUM		10
++#define ELE_READ_FUSE_REQ		0x97
++#define ELE_READ_FUSE_REQ_MSG_SZ	0x08
++#define ELE_READ_FUSE_RSP_MSG_SZ	0x0C
++#define ELE_READ_FUSE_OTP_UNQ_ID_RSP_MSG_SZ \
++					0x1C
++#define OTP_UNIQ_ID			0x01
++#define OTFAD_CONFIG			0x2
+ 
+-#define ELE_OEM_CNTN_AUTH_REQ_SIZE	3
+-#define ELE_VERIFY_IMAGE_REQ_SIZE	2
+-#define ELE_REL_CONTAINER_REQ_SIZE	1
++#define ELE_GET_STATE			0xB2
++#define ELE_GET_STATE_REQ_SZ		0x04
++#define ELE_GET_STATE_RSP_SZ		0x10
+ 
++#define V2X_FW_STATE_UNKNOWN		0x00
++#define V2X_FW_STATE_RUNNING		0x15
+ 
+-int read_common_fuse(uint16_t fuse_index, u32 *value);
+-int ele_ping(void);
+-int ele_get_info(phys_addr_t addr, u32 data_size);
+-int ele_start_rng(void);
+-int ele_get_trng_state(void);
++int ele_get_info(struct device *dev, phys_addr_t addr, u32 data_size);
++int ele_ping(struct device *dev);
++int ele_start_rng(struct device *dev);
++int ele_get_trng_state(struct device *dev);
++int ele_service_swap(struct device *dev,
++		     phys_addr_t addr,
++		     u32 addr_size, u16 flag);
++int ele_get_v2x_fw_state(struct device *dev, uint32_t *state);
+ 
++int read_common_fuse(struct device *dev,
++		     uint16_t fuse_id, u32 *value);
+ #endif
+diff --git a/include/linux/firmware/imx/ele_mu_ioctl.h b/include/linux/firmware/imx/ele_mu_ioctl.h
+index 74190d1f5..104587182 100644
+--- a/include/linux/firmware/imx/ele_mu_ioctl.h
++++ b/include/linux/firmware/imx/ele_mu_ioctl.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: (GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause*/
+ /*
+- * Copyright 2019-2022 NXP
++ * Copyright 2019-2023 NXP
+  */
+ 
+ #ifndef ELE_MU_IOCTL_H
+@@ -25,6 +25,11 @@ struct ele_mu_ioctl_get_mu_info {
+ 	u8 interrupt_idx;
+ 	u8 tz;
+ 	u8 did;
++	u8 cmd_tag;
++	u8 rsp_tag;
++	u8 success_tag;
++	u8 base_api_ver;
++	u8 fw_api_ver;
+ };
+ 
+ struct ele_mu_ioctl_signed_message {
+@@ -33,19 +38,52 @@ struct ele_mu_ioctl_signed_message {
+ 	u32 error_code;
+ };
+ 
+-#define ELE_MU_IO_FLAGS_IS_INTPUT		(0x01u)
+-#define ELE_MU_IO_FLAGS_USE_SEC_MEM		(0x02u)
++struct ele_mu_ioctl_get_soc_info {
++	u16 soc_id;
++	u16 soc_rev;
++};
++
++/* IO Buffer Flags */
++#define ELE_MU_IO_FLAGS_IS_OUTPUT	(0x00u)
++#define ELE_MU_IO_FLAGS_IS_INPUT	(0x01u)
++#define ELE_MU_IO_FLAGS_USE_SEC_MEM	(0x02u)
+ #define ELE_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
++#define ELE_MU_IO_DATA_BUF_SHE_V2X  	(0x08u)
++#define ELE_MU_IO_FLAGS_IS_IN_OUT	(0x10u)
+ 
++/* IOCTLS */
+ #define ELE_MU_IOCTL			0x0A /* like MISC_MAJOR. */
++
++/*
++ * ioctl to designated the current fd as logical-reciever.
++ * This is ioctl is send when the nvm-daemon, a slave to the
++ * firmware is started by the user.
++ */
+ #define ELE_MU_IOCTL_ENABLE_CMD_RCV	_IO(ELE_MU_IOCTL, 0x01)
+-#define ELE_MU_IOCTL_SHARED_BUF_CFG	_IOW(ELE_MU_IOCTL, 0x02, \
+-					struct ele_mu_ioctl_shared_mem_cfg)
++
++/*
++ * ioctl to get the buffer allocated from the memory, which is shared
++ * between kernel and FW.
++ * Post allocation, the kernel tagged the allocated memory with:
++ *  Output
++ *  Input
++ *  Input-Output
++ *  Short address
++ *  Secure-memory
++ */
+ #define ELE_MU_IOCTL_SETUP_IOBUF	_IOWR(ELE_MU_IOCTL, 0x03, \
+ 					struct ele_mu_ioctl_setup_iobuf)
++
++/*
++ * ioctl to get the mu information, that is used to exchange message
++ * with FW, from user-spaced.
++ */
+ #define ELE_MU_IOCTL_GET_MU_INFO	_IOR(ELE_MU_IOCTL, 0x04, \
+ 					struct ele_mu_ioctl_get_mu_info)
+-#define ELE_MU_IOCTL_SIGNED_MESSAGE	_IOWR(ELE_MU_IOCTL, 0x05, \
+-					struct ele_mu_ioctl_signed_message)
++/*
++ * ioctl to get SoC Info from user-space.
++ */
++#define ELE_MU_IOCTL_GET_SOC_INFO      _IOR(ELE_MU_IOCTL, 0x06, \
++					struct ele_mu_ioctl_get_soc_info)
+ 
+ #endif
+diff --git a/include/linux/firmware/imx/sci.h b/include/linux/firmware/imx/sci.h
+index d45dbbe8f..b04fc70a0 100644
+--- a/include/linux/firmware/imx/sci.h
++++ b/include/linux/firmware/imx/sci.h
+@@ -51,27 +51,32 @@ int imx_scu_soc_init(struct device *dev);
+ #else
+ static inline int imx_scu_soc_init(struct device *dev)
+ {
+-	return -ENOTSUPP;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int imx_scu_enable_general_irq_channel(struct device *dev)
+ {
+-	return -ENOTSUPP;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int imx_scu_irq_register_notifier(struct notifier_block *nb)
+ {
+-	return -ENOTSUPP;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int imx_scu_irq_unregister_notifier(struct notifier_block *nb)
+ {
+-	return -ENOTSUPP;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int imx_scu_irq_group_enable(u8 group, u32 mask, u8 enable)
+ {
+-	return -ENOTSUPP;
++	return -EOPNOTSUPP;
++}
++
++static inline int imx_scu_irq_get_status(u8 group, u32 *irq_status)
++{
++	return -EOPNOTSUPP;
+ }
+ #endif
+ #endif /* _SC_SCI_H */
+diff --git a/include/linux/firmware/imx/se_fw_inc.h b/include/linux/firmware/imx/se_fw_inc.h
+new file mode 100644
+index 000000000..01cf62ebb
+--- /dev/null
++++ b/include/linux/firmware/imx/se_fw_inc.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2023 NXP
++ */
++
++#ifndef SE_FW_INC_H
++#define SE_FW_INC_H
++
++struct device *get_se_dev(const uint8_t *pdev_name);
++#endif /* SE_FW_INC_H */
+diff --git a/include/linux/firmware/imx/seco_mu_ioctl.h b/include/linux/firmware/imx/seco_mu_ioctl.h
+index 60399e9de..1c74a515d 100644
+--- a/include/linux/firmware/imx/seco_mu_ioctl.h
++++ b/include/linux/firmware/imx/seco_mu_ioctl.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: (GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause*/
+ /*
+- * Copyright 2019-2020 NXP
++ * Copyright 2019-2020, 2023 NXP
+  */
+ 
+ #ifndef SECO_MU_IOCTL_H
+@@ -24,6 +24,11 @@ struct seco_mu_ioctl_get_mu_info {
+ 	u8 interrupt_idx;
+ 	u8 tz;
+ 	u8 did;
++	u8 cmd_tag;
++	u8 rsp_tag;
++	u8 success_tag;
++	u8 base_api_ver;
++	u8 fw_api_ver;
+ };
+ 
+ struct seco_mu_ioctl_signed_message {
+@@ -32,6 +37,11 @@ struct seco_mu_ioctl_signed_message {
+ 	u32 error_code;
+ };
+ 
++struct seco_mu_ioctl_get_soc_info {
++	u16 soc_id;
++	u16 soc_rev;
++};
++
+ #define SECO_MU_IO_FLAGS_IS_INPUT	(0x01u)
+ #define SECO_MU_IO_FLAGS_USE_SEC_MEM	(0x02u)
+ #define SECO_MU_IO_FLAGS_USE_SHORT_ADDR	(0x04u)
+@@ -47,5 +57,7 @@ struct seco_mu_ioctl_signed_message {
+ 			struct seco_mu_ioctl_get_mu_info)
+ #define SECO_MU_IOCTL_SIGNED_MESSAGE	_IOWR(SECO_MU_IOCTL, 0x05, \
+ 			struct seco_mu_ioctl_signed_message)
++#define SECO_MU_IOCTL_GET_SOC_INFO	_IOR(SECO_MU_IOCTL, 0x06, \
++			struct seco_mu_ioctl_get_soc_info)
+ 
+ #endif
+diff --git a/include/linux/firmware/imx/sm.h b/include/linux/firmware/imx/sm.h
+new file mode 100644
+index 000000000..a29b9cf67
+--- /dev/null
++++ b/include/linux/firmware/imx/sm.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2023 NXP
++ */
++
++#ifndef _SCMI_IMX_H
++#define _SCMI_IMX_H
++
++#include <linux/bitfield.h>
++#include <linux/types.h>
++
++#define SCMI_IMX_CTRL_PDM_CLK_SEL	0	/* AON PDM clock sel */
++#define SCMI_IMX_CTRL_MQS1_SETTINGS	1	/* AON MQS settings */
++#define SCMI_IMX_CTRL_SAI1_MCLK		2	/* AON SAI1 MCLK */
++#define SCMI_IMX_CTRL_SAI3_MCLK		3	/* WAKE SAI3 MCLK */
++#define SCMI_IMX_CTRL_SAI4_MCLK		4	/* WAKE SAI4 MCLK */
++#define SCMI_IMX_CTRL_SAI5_MCLK		5	/* WAKE SAI5 MCLK */
++
++#if IS_ENABLED(CONFIG_IMX_SCMI_MISC_CONTROL)
++int scmi_imx_misc_ctrl_get(u32 id, u32 *num, u32 *val);
++int scmi_imx_misc_ctrl_set(u32 id, u32 val);
++#else
++static inline int scmi_imx_misc_ctrl_get(u32 id, u32 *num, u32 *val)
++{
++	return -EOPNOTSUPP;
++}
++
++static inline int scmi_imx_misc_ctrl_set(u32 id, u32 val);
++{
++	return -EOPNOTSUPP;
++}
++#endif
++
++#endif
+diff --git a/include/linux/firmware/imx/v2x_base_msg.h b/include/linux/firmware/imx/v2x_base_msg.h
+new file mode 100644
+index 000000000..116ba3272
+--- /dev/null
++++ b/include/linux/firmware/imx/v2x_base_msg.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2021-2023 NXP
++ *
++ * Header file for the ELE Base API(s).
++ */
++
++#ifndef V2X_BASE_MSG_H
++#define V2X_BASE_MSG_H
++
++#include <linux/types.h>
++
++#define WORD_SZ				4
++
++#define V2X_START_RNG_REQ		0x0E
++#define V2X_START_RNG_REQ_MSG_SZ	0x04
++#define V2X_START_RNG_RSP_MSG_SZ	0x0C
++
++int v2x_start_rng(struct device *dev);
++#endif
+-- 
+2.25.1
+
