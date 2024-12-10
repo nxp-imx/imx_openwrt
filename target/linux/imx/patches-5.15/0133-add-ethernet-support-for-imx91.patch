@@ -1,0 +1,32 @@
+From a4f66a25ed63a34da5c79287ea5e63ffb8c80de4 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Wed, 29 May 2024 09:26:05 +0800
+Subject: [PATCH 3/3] add ethernet support for imx91
+
+---
+ drivers/net/ethernet/stmicro/stmmac/dwmac-imx.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/ethernet/stmicro/stmmac/dwmac-imx.c b/drivers/net/ethernet/stmicro/stmmac/dwmac-imx.c
+index 2fb3fbbab..d98a6aee2 100644
+--- a/drivers/net/ethernet/stmicro/stmmac/dwmac-imx.c
++++ b/drivers/net/ethernet/stmicro/stmmac/dwmac-imx.c
+@@ -259,6 +259,7 @@ imx_dwmac_parse_dt(struct imx_priv_data *dwmac, struct device *dev)
+ 	dwmac->clk_mem = NULL;
+ 
+ 	if (of_machine_is_compatible("fsl,imx8dxl") ||
++	    of_machine_is_compatible("fsl,imx91") ||
+ 	    of_machine_is_compatible("fsl,imx93")) {
+ 		dwmac->clk_mem = devm_clk_get(dev, "mem");
+ 		if (IS_ERR(dwmac->clk_mem)) {
+@@ -268,6 +269,7 @@ imx_dwmac_parse_dt(struct imx_priv_data *dwmac, struct device *dev)
+ 	}
+ 
+ 	if (of_machine_is_compatible("fsl,imx8mp") ||
++	    of_machine_is_compatible("fsl,imx91") ||
+ 	    of_machine_is_compatible("fsl,imx93")) {
+ 		/* Binding doc describes the propety:
+ 		   is required by i.MX8MP, i.MX93.
+-- 
+2.34.1
+

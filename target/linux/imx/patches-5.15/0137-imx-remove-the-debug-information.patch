@@ -1,0 +1,44 @@
+From 7046e81ee8bbbffdc75961d61f3e630245f677d3 Mon Sep 17 00:00:00 2001
+From: Yuantian Tang <andy.tang@nxp.com>
+Date: Mon, 8 Jul 2024 15:02:31 +0800
+Subject: [PATCH] imx: remove the debug information
+
+---
+ drivers/soc/imx/soc-imx9.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/drivers/soc/imx/soc-imx9.c b/drivers/soc/imx/soc-imx9.c
+index 147d89df8..288736b8f 100644
+--- a/drivers/soc/imx/soc-imx9.c
++++ b/drivers/soc/imx/soc-imx9.c
+@@ -59,27 +59,23 @@ static int imx9_soc_device_register(struct device *dev)
+ 		attr->revision = kasprintf(GFP_KERNEL, "unknown" );
+ 	}
+ 
+-	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	err = nvmem_cell_read_u64(dev, "soc_unique_id", &v);
+ 	if (err)
+ 		goto revision;
+ 	attr->serial_number = kasprintf(GFP_KERNEL, "%016llX", v);
+ 
+-	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	if (DIGPROG_MAJOR_UPPER(device_id) == 0x9 && DIGPROG_MAJOR_LOWER(device_id) == 0x2) {
+ 		attr->soc_id = kasprintf(GFP_KERNEL, "i.MX93");
+ 	} else {
+ 		attr->soc_id = kasprintf(GFP_KERNEL, "unknown");
+ 	}
+ 
+-	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	sdev = soc_device_register(attr);
+ 	if (IS_ERR(sdev)) {
+ 		err = -ENODEV;
+ 		goto soc_id;
+ 	}
+ 
+-	printk("----- %s %s %d --\n", __FILE__,__func__,__LINE__);
+ 	return 0;
+ 
+ soc_id:
+-- 
+2.25.1
+
