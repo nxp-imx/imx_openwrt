@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Copyright 2022-2025 NXP
+#
+
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
@@ -145,6 +150,7 @@ endef
 define KernelPackage/mwifiex-9098-sdio
   $(KernelPackage/mwifiex-default)
   TITLE:=NXP WIFI 9098 SDIO Driver
+  CONFLICTS:=kmod-mwifiex-9098-pcie
   DEPENDS+= +kmod-mwifiex-9098-sdio-firmware
 endef
 
