@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Copyright 2022 NXP
+# Copyright 2022-2024 NXP
 #
 
 include $(TOPDIR)/rules.mk
@@ -12,21 +12,21 @@ FIRMWARE_URL:=https://www.nxp.com/lgfiles/NMG/MAD/YOCTO/
 
 include $(INCLUDE_DIR)/package.mk
 
-FIRMWARE_IMX:=firmware-imx-8.18
+FIRMWARE_IMX:=firmware-imx-8.25-27879f8
 FIRMWARE_IMX_BIN:=$(FIRMWARE_IMX).bin
 define Download/firmware-imx
   URL:=$(FIRMWARE_URL)
   FILE:=$(FIRMWARE_IMX_BIN)
-  HASH:=f050f60351a54fd75954fdeb133ddd014a5576040c72616e216b63db0e242dd4
+  HASH:=9ef069d5db8e9ebbfd8bdf19b25fab0b
 endef
 $(eval $(call Download,firmware-imx))
 
-FIRMWARE_SENTINEL:=firmware-sentinel-0.5.1
+FIRMWARE_SENTINEL:=firmware-ele-imx-0.1.3-4e6938c
 FIRMWARE_SENTINEL_BIN:=$(FIRMWARE_SENTINEL).bin
 define Download/firmware-sentinel
   URL:=$(FIRMWARE_URL)
   FILE:=$(FIRMWARE_SENTINEL_BIN)
-  HASH:=a4f249feef325fee59a67551d704511014fb5cf766b9ecaa4ba7d2a916056222
+  HASH:=6f9429e0fc561cb40854bc2c65f2870a
 endef
 $(eval $(call Download,firmware-sentinel))
 
@@ -65,21 +65,21 @@ ifeq ($(SUBTARGET),imx8)
 		$(1)/lib/firmware/imx/sdma
 else ifeq ($(SUBTARGET),cortexa55)
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/$(FIRMWARE_IMX)/firmware/ddr/synopsys/* \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX93
 endif
 endef
 
 define Package/firmware-sentinel
   $(Package/fw-default)
-  TITLE:=NXP firmware for imx9
+  TITLE:=NXP firmware for imx93
   DEPENDS:=+imx-mkimage
 endef
 
 define Package/firmware-sentinel/install
-	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)/imx-mkimage/iMX9
+	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)/imx-mkimage/iMX93
 	$(INSTALL_DATA) \
 		$(PKG_BUILD_DIR)/$(FIRMWARE_SENTINEL)/* \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX93
 endef
 
 UNPACK_CMD:=
