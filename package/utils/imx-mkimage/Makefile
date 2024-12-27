@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Copyright 2022 NXP
+# Copyright 2022-2024 NXP
 #
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=imx-mkimage
-PKG_VERSION:=lf-5.15.71-2.2.1
+PKG_VERSION:=lf-6.6.36-2.1.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-mkimage.git
-PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
-PKG_MIRROR_HASH:=40df71bda4dbcf9a3782cf55b51630d076ec3fcf7bb11e338e97fc808b0df730
+PKG_SOURCE_VERSION:=lf-6.6.36-2.1.0
+PKG_MIRROR_HASH:=cb196056be187340ad6d9df5656e25d3
 
 PKG_FLAGS:=nonshared
 
@@ -33,8 +33,8 @@ define Build/Compile
 endef
 
 define Build/InstallDev
-	mkdir -p $(STAGING_DIR_IMAGE)
-	$(CP) $(PKG_BUILD_DIR) $(STAGING_DIR_IMAGE)/imx-mkimage
+	mkdir -p $(STAGING_DIR_IMAGE)/imx-mkimage
+	$(CP) $(PKG_BUILD_DIR)/* $(STAGING_DIR_IMAGE)/imx-mkimage
 endef
 
 $(eval $(call BuildPackage,imx-mkimage))

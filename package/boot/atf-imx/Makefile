@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Copyright 2022 NXP
+# Copyright 2022-2024 NXP
 #
 
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=atf-imx
-PKG_VERSION:=lf-5.15.71-2.2.1
+PKG_NAME:=imx-atf
+PKG_VERSION:=lf-6.6.36-2.1.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/imx-atf.git
-PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
-PKG_MIRROR_HASH:=c3298ae7b9058656954321167177734891383cd26ded1619da7cbbe658b09f6c
+PKG_SOURCE_VERSION:=lf-6.6.36-2.1.0
+PKG_MIRROR_HASH:=ba0fe2fa233c4ceb48df36ebddace182
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
@@ -66,7 +66,7 @@ endef
 ifeq ($(SUBTARGET),imx8)
 	MKIMG_PLAT:=iMX8M
 else ifeq ($(SUBTARGET),cortexa55)
-	MKIMG_PLAT:=iMX9
+	MKIMG_PLAT:=iMX93
 endif
 
 MAKE_VARS = \

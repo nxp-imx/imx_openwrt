@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2013-2014 OpenWrt.org
+# Copyright (C) 2013-2014,2024 OpenWrt.org
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
@@ -8,13 +8,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=uboot-imx
-PKG_VERSION:=lf-5.15.71-2.2.1
+PKG_VERSION:=lf-6.6.36-2.1.0
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/uboot-imx.git
-PKG_SOURCE_VERSION:=lf-5.15.71-2.2.1
-PKG_MIRROR_HASH:=9c7530f7d286e1c719a9c33100341bd07c50fedd84d7997507784f46bc22fdcd
+PKG_SOURCE_VERSION:=lf-6.6.36-2.1.0
+PKG_MIRROR_HASH:=a4353593d52a9adbcde3167369873fe6
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
@@ -115,7 +115,7 @@ endef
 
 define U-Boot/imx93
   BUILD_DEVICES:=imx93
-  NAME:=imx8mmini lpddr4 board
+  NAME:=imx93evk board
   UBOOT_CONFIG:=imx93_11x11_evk
   ENV_NAME:=imx93-sdboot
   DTB_NAME:=imx93-11x11-evk.dtb
@@ -148,10 +148,7 @@ ifeq ($(SUBTARGET),imx8)
 else ifeq ($(SUBTARGET),cortexa55)
 	$(CP) $(PKG_BUILD_DIR)/u-boot.bin \
 		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
-		$(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9
-	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX9/mkimage_uboot
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX93
 endif
 
 ifneq ($(UBOOT_IMAGE),)
