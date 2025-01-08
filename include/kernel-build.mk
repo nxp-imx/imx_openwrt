@@ -55,6 +55,7 @@ define Download/git-kernel
   FILE:=$(LINUX_SOURCE)
   SUBDIR:=linux-$(LINUX_VERSION)
   OPTS:=$(KERNEL_GIT_OPTS)
+  MIRROR_HASH:=$(call qstrip,$(CONFIG_KERNEL_GIT_MIRROR_HASH))
 endef
 
 ifdef CONFIG_COLLECT_KERNEL_DEBUG
