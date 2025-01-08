@@ -26,11 +26,7 @@ remove_uri_prefix=$(subst git://,,$(subst http://,,$(subst https://,,$(1))))
 sanitize_uri=$(call qstrip,$(subst @,_,$(subst :,_,$(subst .,_,$(subst -,_,$(subst /,_,$(1)))))))
 
 ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
-  LINUX_VERSION:=$(call sanitize_uri,$(call remove_uri_prefix,$(CONFIG_KERNEL_GIT_CLONE_URI)))
-  ifeq ($(call qstrip,$(CONFIG_KERNEL_GIT_REF)),)
-    CONFIG_KERNEL_GIT_REF:=HEAD
-  endif
-  LINUX_VERSION:=$(LINUX_VERSION)-$(call sanitize_uri,$(CONFIG_KERNEL_GIT_REF))
+  LINUX_VERSION:=$(word 1,$(subst -, ,$(patsubst lf-%,%,$(call qstrip,$(CONFIG_KERNEL_GIT_REF)))))
 else
 ifdef KERNEL_PATCHVER
   LINUX_VERSION:=$(KERNEL_PATCHVER)$(strip $(LINUX_VERSION-$(KERNEL_PATCHVER)))
