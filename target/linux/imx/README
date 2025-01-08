@@ -1,0 +1,84 @@
+
+I.MX OpenWRT Quick Start
+
+This is a quick start guide for imx specific usage, like introducing
+how to configure, build, and deploy OpenWrt to imx boards, so that
+users can bring up the board without difficulty.
+
+1. Target support
+----------------------------
+* ARMv8 cortexa53 64-bit
+  IMX8MPlus_LPDDR4	(SD boot)
+  IMX8MMini_LPDDR4	(SD boot)
+  IMX8MNano_LPDDR4	(SD boot)
+  IMX8MQuad_LPDDR4	(SD boot)
+
+* ARMv8 cortexa55 64-bit
+  IMX93EVK		(SD boot)
+  IMX93QSB		(SD boot)
+  IMX93FRDM		(SD boot)
+  IMX91EVK		(SD boot)
+  IMX91QSB		(SD boot)
+  IMX91FRDM		(SD boot)
+
+* ARM cortexa7 and cortexa9
+  IMX6ULL			(SD boot)
+
+2. Build
+------------------------------
+2.1 Install Prerequisite Packages
+$ Please refer to: https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem
+  to install prerequisite packages.
+
+2.2 Install Expansion Packages
+$ make distclean
+$ ./scripts/feeds update -a
+$ ./scripts/feeds install -a
+
+2.3 Choose Target and Profile
+$ ******** cp defconfig .config ********** // Please don't miss this step.
+$ make menuconfig
+  Target System:   "NXP imx"
+  Subtarget:       (Select subtarget, for example: NXP i.MX with Cortex-A55)
+  Target Profile:  (Select device, for example: NXP imx91evk SD Boot)
+$ make (or make -j<n>)
+
+* Final firmware/image
+  Path:               bin/targets/imx/<subtarget>/
+  Image for SD card:  openwrt-imx-<subtarget>-<device>-<rootfs>-sdcard.img.gz
+
+  Take imx8mplus_lpddr4_evk board for example:
+  Will genterate: bin/targets/imx/imx8/openwrt-imx-cortexa53-imx8mplus-squashfs-sdcard.img
+
+3. Deploy
+---------
+  The *-sdcard.img is an all-in-one image including all things for OpenWrt staring up.
+
+3.0 Program sdcard.img to SD card
+---------------------------------
+  *-sdcard.img could be programmed to SD card in either u-boot environment
+  or linux environment. After programming, configure the board to boot
+  from SD card.
+
+3.1 Program *-sdcard.img in u-boot environment
+
+  => tftp a0000000 <image_name>-sdcard.img
+  => mmc write a0000000 0 a0000
+
+  Note: The default sdcard.img size is about 200MB. a0000 is the block number
+  for 320MB. blk_num = filesize / 512. Please increase this number if your image
+  is bigger.
+
+3.2 Program *-sdcard.img in linux environment
+  $ sudo dd if=./<image_name>-sdcard.img of=/dev/sdx bs=1M conv=fsync && sync
+
+  Note: please replace "sdx" with SD card device name.
+
+4. Known issues and limitation
+------------------------------
+
+5. Other references
+-------------------
+- NXP imx site: https://www.nxp.com/design/documentation:DOCUMENTATION#/
+
+- OpenWrt documentation: https://openwrt.org/docs/start
