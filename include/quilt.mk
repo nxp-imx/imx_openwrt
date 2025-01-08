@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Copyright (C) 2007-2020 OpenWrt.org
+# Copyright (C) 2007-2020,2025 OpenWrt.org
 
 ifeq ($(TARGET_BUILD),1)
   PKG_BUILD_DIR:=$(LINUX_DIR)
@@ -99,7 +99,6 @@ define Kernel/Patch/Default
 		echo "generic patches directory is present. please move your patches to the pending directory" ; \
 		exit 1; \
 	fi
-	$(call PatchDir,$(LINUX_DIR),$(GENERIC_BACKPORT_DIR),generic-backport/)
 	$(call PatchDir,$(LINUX_DIR),$(GENERIC_PATCH_DIR),generic/)
 	$(call PatchDir,$(LINUX_DIR),$(GENERIC_HACK_DIR),generic-hack/)
 	$(call PatchDir,$(LINUX_DIR),$(PATCH_DIR),platform/)

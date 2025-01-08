@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# Copyright (C) 2006-2020 OpenWrt.org
+# Copyright (C) 2006-2020,2025 OpenWrt.org
 
 ifdef CONFIG_STRIP_KERNEL_EXPORTS
   KERNEL_MAKEOPTS_IMAGE += \
@@ -30,6 +30,8 @@ ifeq ($(strip $(CONFIG_EXTERNAL_KERNEL_TREE)),"")
   else
     define Kernel/Prepare/Default
 	$(LINUX_CAT) $(DL_DIR)/$(LINUX_SOURCE) | $(TAR) -C $(KERNEL_BUILD_DIR) $(TAR_OPTIONS)
+	$(Kernel/Patch)
+	$(if $(QUILT),touch $(LINUX_DIR)/.quilt_used)
     endef
   endif
 else
