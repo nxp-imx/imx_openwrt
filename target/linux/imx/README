@@ -12,8 +12,6 @@ users can bring up the board without difficulty.
   IMX8MMini_LPDDR4	(SD boot)
   IMX8MNano_LPDDR4	(SD boot)
   IMX8MQuad_LPDDR4	(SD boot)
-
-* ARMv8 cortexa55 64-bit
   IMX93EVK		(SD boot)
   IMX93QSB		(SD boot)
   IMX93FRDM		(SD boot)
@@ -39,7 +37,7 @@ $ ./scripts/feeds install -a
 $ ******** cp defconfig .config ********** // Please don't miss this step.
 $ make menuconfig
   Target System:   "NXP imx"
-  Subtarget:       (Select subtarget, for example: NXP i.MX with Cortex-A55)
+  Subtarget:       (Select subtarget, for example: NXP i.MX with Cortex-A53)
   Target Profile:  (Select device, for example: NXP imx91evk SD Boot)
 $ make (or make -j<n>)
 

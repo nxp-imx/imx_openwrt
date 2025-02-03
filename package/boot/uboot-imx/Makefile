@@ -76,6 +76,7 @@ define U-Boot/imx8mp
   ENV_NAME:=imx8mp-sdboot
   DTB_NAME:=imx8mp-evk.dtb
   ENV_SIZE:=0x4000
+  IMG_DIR:=iMX8M
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
@@ -88,6 +89,7 @@ define U-Boot/imx8mm
   DTB_NAME:=imx8mm-evk.dtb
   DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
+  IMG_DIR:=iMX8M
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
@@ -98,6 +100,7 @@ define U-Boot/imx8mn
   ENV_NAME:=imx8mn-sdboot
   DTB_NAME:=imx8mn-evk.dtb
   ENV_SIZE:=0x4000
+  IMG_DIR:=iMX8M
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
@@ -108,6 +111,7 @@ define U-Boot/imx8mq
   ENV_NAME:=imx8mq-sdboot
   DTB_NAME:=imx8mq-evk.dtb
   ENV_SIZE:=0x4000
+  IMG_DIR:=iMX8M
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
@@ -119,7 +123,7 @@ define U-Boot/imx91evk
   DTB_NAME:=imx91-11x11-evk.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX91
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define U-Boot/imx91frdm
@@ -130,7 +134,7 @@ define U-Boot/imx91frdm
   DTB_NAME:=imx91-11x11-frdm.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX91
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define U-Boot/imx91qsb
@@ -141,7 +145,7 @@ define U-Boot/imx91qsb
   DTB_NAME:=imx91-9x9-qsb.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX91
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define U-Boot/imx93evk
@@ -152,7 +156,7 @@ define U-Boot/imx93evk
   DTB_NAME:=imx93-11x11-evk.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX93
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define U-Boot/imx93frdm
@@ -163,7 +167,7 @@ define U-Boot/imx93frdm
   DTB_NAME:=imx93-11x11-frdm.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX93
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define U-Boot/imx93qsb
@@ -174,7 +178,7 @@ define U-Boot/imx93qsb
   DTB_NAME:=imx93-9x9-qsb.dtb
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX93
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 UBOOT_TARGETS := \
@@ -198,15 +202,12 @@ define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
 ifeq ($(SUBTARGET),cortexa53)
 	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
+		$(PKG_BUILD_DIR)/u-boot.bin \
 		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
 		$(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX8M
-	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
-		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX8M/mkimage_uboot
-else ifeq ($(SUBTARGET),cortexa55)
-	$(CP) $(PKG_BUILD_DIR)/u-boot.bin \
-		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
 		$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR)
+	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
+		$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR)/mkimage_uboot
 endif
 
 ifneq ($(UBOOT_IMAGE),)

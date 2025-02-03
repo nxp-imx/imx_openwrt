@@ -59,7 +59,7 @@ define Package/atf-imx9/Default
   CATEGORY:=Boot Loaders
   TITLE:=NXP i.MX9 SD Boot Trusted Firmware
   BUILD_TARGET:=imx
-  DEPENDS:=@TARGET_imx_cortexa55 +imx-mkimage
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
 define Package/atf-imx91evk

@@ -50,9 +50,17 @@ define Build/imx-append-env
 	dd if=$(STAGING_DIR_IMAGE)/$(1) of="$@" bs=1M seek=7 conv=notrunc
 endef
 
+SOC_OFFSET= \
+	$(shell if [[ $(CONFIG_TARGET_PROFILE) =~ imx8mp || \
+				$(CONFIG_TARGET_PROFILE) =~ imx8mm ]] ; then \
+		echo 33; \
+	else \
+		echo 32; \
+	fi; )
+
 define Build/imx-append-boot
 	# Append the uboot, firmware etc.
-	dd if=$(STAGING_DIR_IMAGE)/imx-mkimage/iMX8M/flash.bin of="$@" bs=1K seek=$(1) conv=notrunc
+	dd if=$(STAGING_DIR_IMAGE)/imx-mkimage/$(1)/flash.bin of="$@" bs=1K seek=$(SOC_OFFSET) conv=notrunc
 endef
 
 define Build/imx-append-kernel
@@ -97,7 +105,7 @@ define Device/imx8mplus
 	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
 	boot-img-ext4 | \
 	sdcard-img-ext4 | \
-	imx-append-boot $$(BOOT_OFFSET) | \
+	imx-append-boot iMX8M | \
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx8mplus
@@ -122,7 +130,7 @@ define Device/imx8mmini
 	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
 	boot-img-ext4 | \
 	sdcard-img-ext4 | \
-	imx-append-boot $$(BOOT_OFFSET) | \
+	imx-append-boot iMX8M | \
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx8mmini
@@ -147,7 +155,7 @@ define Device/imx8mnano
 	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
 	boot-img-ext4 | \
 	sdcard-img-ext4 | \
-	imx-append-boot $$(BOOT_OFFSET) | \
+	imx-append-boot iMX8M | \
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx8mnano
@@ -172,7 +180,168 @@ define Device/imx8mquad
 	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
 	boot-img-ext4 | \
 	sdcard-img-ext4 | \
-	imx-append-boot $$(BOOT_OFFSET) | \
+	imx-append-boot iMX8M | \
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx8mquad
+
+define Device/imx91evk
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx91evk
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX91
+  SOC_TYPE := iMX91
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx91evk-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx91evk \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx91evk
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-evk*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX91 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx91evk
+
+define Device/imx91frdm
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx91frdm
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX91
+  SOC_TYPE := iMX91
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx91frdm-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx91frdm \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx91frdm
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX91 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx91frdm
+
+define Device/imx91qsb
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx91qsb
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX91
+  SOC_TYPE := iMX91
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx91qsb-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx91qsb \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx91qsb
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-9x9-qsb*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX91 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx91qsb
+
+define Device/imx93evk
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx93evk
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX93
+  SOC_TYPE := iMX93
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx93evk-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx93evk \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx93evk
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-*-evk*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX93 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx93evk
+
+define Device/imx93frdm
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx93frdm
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX93
+  SOC_TYPE := iMX93
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx93frdm-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx93frdm \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx93frdm
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-11x11-frdm*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX93 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx93frdm
+
+define Device/imx93qsb
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx93qsb
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX93
+  SOC_TYPE := iMX93
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx93qsb-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx93qsb \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx93qsb
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-9x9-qsb*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX93 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx93qsb
