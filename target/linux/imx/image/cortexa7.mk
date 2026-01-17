@@ -128,3 +128,34 @@ define Device/imx6ull
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx6ull
+
+define Device/i2som-gw102e
+  SOC := imx6ull
+  DEVICE_VENDOR := i2SOM
+  DEVICE_MODEL := GW102E
+  DEVICE_TITLE := i2SOM-GW102E
+  DEVICE_DTS := i2som-gw102e
+
+  # Bring in the same boot assets as imx6ull
+  DEVICE_PACKAGES += \
+        firmware-sdma \
+        u-boot-i2som_gw102e \
+        kmod-usb2 kmod-usb-ehci kmod-usb-storage
+
+  # U-Boot artifacts to append into the SD image
+  UBOOT_NAME := i2som_gw102e-u-boot-dtb.imx
+  ENV_NAME := i2som_gw102e-sdboot
+  # Plain zImage (no uImage header) to match bootz
+  KERNEL := kernel-bin
+  KERNEL_NAME := zImage
+  KERNEL_SUFFIX := -zImage
+
+  IMAGES := sdcard.img
+  IMAGE/sdcard.img := \
+        imx-clean | \
+        boot-img-ext4 | \
+        sdcard-img-ext4 | \
+        imx-append-boot $$(UBOOT_NAME) | \
+        imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += i2som-gw102e

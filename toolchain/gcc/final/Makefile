@@ -10,6 +10,7 @@ GCC_CONFIGURE += \
 	--with-slibdir=$(TOOLCHAIN_DIR)/lib \
 	--enable-plugins \
 	--enable-lto \
+	--with-system-zlib \
 	--with-libelf=$(STAGING_DIR_HOST)
 
 ifndef CONFIG_USE_GLIBC

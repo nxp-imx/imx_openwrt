@@ -1,0 +1,67 @@
+From 0f0c8f6b8bfb2f0c2c6f3d9b7f8a1a2b3c4d5e6f Mon Sep 17 00:00:00 2001
+From: OpenWrt GW <gw@example.com>
+Date: Tue, 7 Jan 2025 00:00:00 +0000
+Subject: [PATCH] arm: dts: add i2SOM GW102E U-Boot device tree
+
+Add a GW102E-specific U-Boot DTB with both PHYs enabled on their
+respective FEC controllers to ensure proper initialization at boot.
+---
+ arch/arm/dts/Makefile         |  1 +
+ arch/arm/dts/i2som-gw102e.dts | 41 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 42 insertions(+)
+ create mode 100644 arch/arm/dts/i2som-gw102e.dts
+
+diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
+index 3c8f5d2c8a4f..2c9f3f2fb8d0 100644
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -869,6 +869,7 @@ dtb-$(CONFIG_MX6ULL) += \
+ 	imx6ull-myir-mys-6ulx-eval.dtb \
+ 	imx6ull-seeed-npi-imx6ull-dev-board.dtb \
+ 	imx6ull-phytec-segin-ff-rdk-emmc.dtb \
++	i2som-gw102e.dtb \
+ 	imx6ull-dart-6ul.dtb \
+ 	imx6ull-somlabs-visionsom.dtb \
+ 	imx6ulz-bsh-smm-m2.dtb \
+diff --git a/arch/arm/dts/i2som-gw102e.dts b/arch/arm/dts/i2som-gw102e.dts
+new file mode 100644
+index 000000000000..cbb57f1e1f0b
+--- /dev/null
++++ b/arch/arm/dts/i2som-gw102e.dts
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/dts-v1/;
++
++#include "imx6ull.dtsi"
++#include "imx6ul-14x14-evk.dtsi"
++
++/ {
++	model = "i2SOM GW102E";
++	compatible = "i2som,gw102e", "fsl,imx6ull";
++};
++
++&ethphy0 {
++	compatible = "ethernet-phy-ieee802.3-c22";
++	reg = <0>;
++};
++
++&ethphy1 {
++	compatible = "ethernet-phy-ieee802.3-c22";
++	reg = <1>;
++};
++
++&fec1 {
++	status = "okay";
++	phy-handle = <&ethphy0>;
++	phy-reset-gpios = <&gpio5 0 GPIO_ACTIVE_LOW>;
++	phy-reset-duration = <26>;
++	phy-reset-post-delay = <100>;
++};
++
++&fec2 {
++	status = "okay";
++	phy-handle = <&ethphy1>;
++	phy-reset-gpios = <&gpio5 6 GPIO_ACTIVE_LOW>;
++	phy-reset-duration = <26>;
++	phy-reset-post-delay = <100>;
++};

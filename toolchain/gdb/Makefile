@@ -38,6 +38,7 @@ HOST_CONFIGURE_ARGS = \
 	--with-mpfr=$(STAGING_DIR_HOST) \
 	--with-mpc=$(STAGING_DIR_HOST) \
 	--with-expat=$(STAGING_DIR_HOST) \
+	--with-system-zlib \
 	--disable-werror \
 	--without-uiout \
 	--enable-tui --disable-gdbtk --without-x \

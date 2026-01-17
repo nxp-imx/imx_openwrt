@@ -1,0 +1,12 @@
+--- a/board/technexion/pico-imx7d/spl.c	2024-07-01 11:07:18.000000000 -0700
++++ b/board/technexion/pico-imx7d/spl.c	2025-10-25 16:41:02.000000000 -0700
+@@ -153,7 +153,8 @@
+ 	board_init_r(NULL, 0);
+ }
+ 
+-void reset_cpu(void)
++#include <linux/compiler.h>
++__weak void reset_cpu(void)
+ {
+ }
+ 

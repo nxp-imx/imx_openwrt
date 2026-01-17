@@ -23,7 +23,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -3135,11 +3135,19 @@ static int mtk_dma_init(struct mtk_eth *
+@@ -3113,11 +3113,19 @@ static int mtk_dma_init(struct mtk_eth *
  static void mtk_dma_free(struct mtk_eth *eth)
  {
  	const struct mtk_soc_data *soc = eth->soc;
@@ -46,4 +46,4 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 -			netdev_reset_queue(eth->netdev[i]);
  	if (!MTK_HAS_CAPS(soc->caps, MTK_SRAM) && eth->scratch_ring) {
  		dma_free_coherent(eth->dma_dev,
- 				  MTK_QDMA_RING_SIZE * soc->tx.desc_size,
+ 				  MTK_QDMA_RING_SIZE * soc->txrx.txd_size,

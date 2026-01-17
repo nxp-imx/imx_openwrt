@@ -69,6 +69,17 @@ define U-Boot/imx6ull
   UBOOT_IMAGE:=u-boot-dtb.imx
 endef
 
+define U-Boot/i2som_gw102e
+  NAME:=i2SOM GW102E LoRa Gateway
+  BUILD_SUBTARGET:=cortexa7
+  BUILD_DEVICES:=i2som-gw102e
+  UBOOT_CONFIG:=i2som_gw102e
+  ENV_SIZE:=0x2000
+  ENV_NAME:=i2som_gw102e-sdboot
+  DTB_NAME:=i2som-gw102e
+  UBOOT_IMAGE:=u-boot-dtb.imx
+endef
+
 define U-Boot/imx8mp
   NAME:=imx8mplus lpddr4 board
   BUILD_TARGET:=imx
@@ -192,7 +203,10 @@ UBOOT_TARGETS := \
 	imx91qsb \
 	imx93evk \
 	imx93frdm \
-	imx93qsb
+    imx93qsb \
+    i2som_gw102e
+
+
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)

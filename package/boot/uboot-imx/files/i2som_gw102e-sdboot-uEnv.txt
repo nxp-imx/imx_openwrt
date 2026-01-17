@@ -1,0 +1,30 @@
+fdt_addr=0x83000000
+loadaddr=0x80800000
+fdt_high=0xffffffff
+initrd_high=0xffffffffffffffff
+
+kernel_img=/zImage
+fdt_img=/i2som-gw102e.dtb
+
+sd_mmcdev=0
+emmc_mmcdev=1
+bootpart=1
+rootpart=2
+
+bootargs_common=rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttymxc0,115200
+bootargs_sd=root=/dev/mmcblk0p2 rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttymxc0,115200
+bootargs_emmc=root=/dev/mmcblk1p2 rw rootwait rootfstype=squashfs,f2fs noinitrd console=ttymxc0,115200
+
+set_bootargs_sd=setenv bootargs ${bootargs_sd}
+set_bootargs_emmc=setenv bootargs ${bootargs_emmc}
+
+load_img_sd=ext4load mmc ${sd_mmcdev}:${bootpart} ${loadaddr} ${kernel_img}
+load_fdt_sd=ext4load mmc ${sd_mmcdev}:${bootpart} ${fdt_addr} ${fdt_img}
+
+load_img_emmc=ext4load mmc ${emmc_mmcdev}:${bootpart} ${loadaddr} ${kernel_img}
+load_fdt_emmc=ext4load mmc ${emmc_mmcdev}:${bootpart} ${fdt_addr} ${fdt_img}
+
+sd_boot=echo Booting from SD...; run set_bootargs_sd; run load_img_sd && run load_fdt_sd && bootz ${loadaddr} - ${fdt_addr}
+emmc_boot=echo Booting from eMMC...; run set_bootargs_emmc; run load_img_emmc && run load_fdt_emmc && bootz ${loadaddr} - ${fdt_addr}
+bootcmd=if run sd_boot; then; else echo SD boot failed; run emmc_boot; fi
+bootdelay=3

@@ -1,0 +1,21 @@
+#include <dt-bindings/input/input.h>
+#include "imx6ull.dtsi"
+#include "i2s6uby2-14x14.dtsi"
+#include "i2s6uby2_emmc.dtsi"
+
+/ {
+	model = "i2SOM i2S-6UBY2 eMMC SOM";
+	compatible = "i2som,i2s6ullemmc", "i2som,i2s6ull", "i2som,i2s6ull14x14", "fsl,imx6ull";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&qspi {
+	status = "okay";
+};
+
+&usdhc2 {
+	status = "okay";
+};

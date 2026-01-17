@@ -9,6 +9,7 @@ GCC_CONFIGURE += \
 	--enable-languages=c \
 	--disable-shared \
 	--disable-threads \
+	--with-system-zlib \
 
 define Host/Compile
 	+$(GCC_MAKE) $(HOST_JOBS) -C $(GCC_BUILD_DIR) \
@@ -26,3 +27,5 @@ define Host/Install
 endef
 
 $(eval $(call HostBuild))
+
+HOST_CONFIGURE_ARGS += --with-system-zlib
