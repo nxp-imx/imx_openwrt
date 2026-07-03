@@ -1,0 +1,33 @@
+From cb7557f881dec091e67950966557e31cbc2e1265 Mon Sep 17 00:00:00 2001
+From: ChunHao Lin <hau@realtek.com>
+Date: Tue, 18 Mar 2025 16:37:20 +0800
+Subject: [PATCH 244/351] r8169: enable RTL8168H/RTL8168EP/RTL8168FP ASPM
+ support
+
+This patch will enable RTL8168H/RTL8168EP/RTL8168FP ASPM support on
+the platforms that have tested with ASPM enabled.
+
+Signed-off-by: ChunHao Lin <hau@realtek.com>
+Reviewed-by: Heiner Kallweit <hkallweit1@gmail.com>
+Link: https://patch.msgid.link/20250318083721.4127-2-hau@realtek.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/ethernet/realtek/r8169_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/realtek/r8169_main.c b/drivers/net/ethernet/realtek/r8169_main.c
+index e2ca14b7d727..217e167c7b4f 100644
+--- a/drivers/net/ethernet/realtek/r8169_main.c
++++ b/drivers/net/ethernet/realtek/r8169_main.c
+@@ -5424,7 +5424,7 @@ static void rtl_init_mac_address(struct rtl8169_private *tp)
+ /* register is set if system vendor successfully tested ASPM 1.2 */
+ static bool rtl_aspm_is_safe(struct rtl8169_private *tp)
+ {
+-	if (tp->mac_version >= RTL_GIGA_MAC_VER_61 &&
++	if (tp->mac_version >= RTL_GIGA_MAC_VER_46 &&
+ 	    r8168_mac_ocp_read(tp, 0xc0b2) & 0xf)
+ 		return true;
+ 
+-- 
+2.25.1
+

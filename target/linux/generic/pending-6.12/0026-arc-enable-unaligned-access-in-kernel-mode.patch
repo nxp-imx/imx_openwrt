@@ -1,0 +1,31 @@
+From 88a6c050bcbfc9b4a820f3e3a34c66970b1e6ba2 Mon Sep 17 00:00:00 2001
+From: Alexey Brodkin <abrodkin@synopsys.com>
+Date: Mon, 29 Jun 2026 18:25:39 +0900
+Subject: [PATCH 026/169] arc: enable unaligned access in kernel mode
+
+This enables misaligned access handling even in kernel mode.
+Some wireless drivers (ath9k-htc and mt7601u) use misaligned accesses
+here and there and to cope with that without fixing stuff in the drivers
+we're just gracefully handling it on ARC.
+
+Signed-off-by: Alexey Brodkin <abrodkin@synopsys.com>
+---
+ arch/arc/kernel/unaligned.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arc/kernel/unaligned.c b/arch/arc/kernel/unaligned.c
+index d2f5ceaaed1b..691db93b7808 100644
+--- a/arch/arc/kernel/unaligned.c
++++ b/arch/arc/kernel/unaligned.c
+@@ -203,7 +203,7 @@ int misaligned_fixup(unsigned long address, struct pt_regs *regs,
+ 	char buf[TASK_COMM_LEN];
+ 
+ 	/* handle user mode only and only if enabled by sysadmin */
+-	if (!user_mode(regs) || !unaligned_enabled)
++	if (!unaligned_enabled)
+ 		return 1;
+ 
+ 	if (no_unaligned_warning) {
+-- 
+2.25.1
+

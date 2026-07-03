@@ -1,0 +1,39 @@
+From b1f4a96e235524ca38ea3a4ec3ff9cd514cd3e3d Mon Sep 17 00:00:00 2001
+From: Guanhua Gao <guanhua.gao@nxp.com>
+Date: Wed, 15 Jul 2026 14:54:45 +0900
+Subject: [PATCH 1/6] Fix compiling error introduced by ethtool_netlink.h
+
+Signed-off-by: Guanhua Gao <guanhua.gao@nxp.com>
+---
+ include/linux/ethtool_netlink.h | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/ethtool_netlink.h b/include/linux/ethtool_netlink.h
+index 8077b2550..7eb5c12e9 100644
+--- a/include/linux/ethtool_netlink.h
++++ b/include/linux/ethtool_netlink.h
+@@ -129,6 +129,11 @@ static inline void mm_state_to_cfg(const struct ethtool_mm_state *state,
+ {
+ }
+ 
++static inline void ethnl_pse_send_ntf(struct phy_device *phydev,
++				      unsigned long notif)
++{
++}
++
+ #endif /* IS_ENABLED(CONFIG_ETHTOOL_NETLINK) */
+ 
+ static inline int ethnl_cable_test_result(struct phy_device *phydev, u8 pair,
+@@ -145,9 +150,4 @@ static inline int ethnl_cable_test_fault_length(struct phy_device *phydev,
+ 						      ETHTOOL_A_CABLE_INF_SRC_TDR);
+ }
+ 
+-static inline void ethnl_pse_send_ntf(struct phy_device *phydev,
+-				      unsigned long notif)
+-{
+-}
+-
+ #endif /* _LINUX_ETHTOOL_NETLINK_H_ */
+-- 
+2.25.1
+

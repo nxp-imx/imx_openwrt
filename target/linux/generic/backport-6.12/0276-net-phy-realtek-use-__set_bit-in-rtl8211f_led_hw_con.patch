@@ -1,0 +1,47 @@
+From 5059c417efb57b0a4fe8b9e3e232967e78404579 Mon Sep 17 00:00:00 2001
+From: Michael Klein <michael@fossekall.de>
+Date: Sun, 4 May 2025 19:29:15 +0200
+Subject: [PATCH 276/351] net: phy: realtek: use __set_bit() in
+ rtl8211f_led_hw_control_get()
+
+rtl8211f_led_hw_control_get() does not need atomic bit operations,
+replace set_bit() by __set_bit().
+
+Signed-off-by: Michael Klein <michael@fossekall.de>
+Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+Link: https://patch.msgid.link/20250504172916.243185-6-michael@fossekall.de
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+---
+ drivers/net/phy/realtek/realtek_main.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/phy/realtek/realtek_main.c b/drivers/net/phy/realtek/realtek_main.c
+index e01b13a9b5c3..e26098a2ff27 100644
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -659,17 +659,17 @@ static int rtl8211f_led_hw_control_get(struct phy_device *phydev, u8 index,
+ 	val &= RTL8211F_LEDCR_MASK;
+ 
+ 	if (val & RTL8211F_LEDCR_LINK_10)
+-		set_bit(TRIGGER_NETDEV_LINK_10, rules);
++		__set_bit(TRIGGER_NETDEV_LINK_10, rules);
+ 
+ 	if (val & RTL8211F_LEDCR_LINK_100)
+-		set_bit(TRIGGER_NETDEV_LINK_100, rules);
++		__set_bit(TRIGGER_NETDEV_LINK_100, rules);
+ 
+ 	if (val & RTL8211F_LEDCR_LINK_1000)
+-		set_bit(TRIGGER_NETDEV_LINK_1000, rules);
++		__set_bit(TRIGGER_NETDEV_LINK_1000, rules);
+ 
+ 	if (val & RTL8211F_LEDCR_ACT_TXRX) {
+-		set_bit(TRIGGER_NETDEV_RX, rules);
+-		set_bit(TRIGGER_NETDEV_TX, rules);
++		__set_bit(TRIGGER_NETDEV_RX, rules);
++		__set_bit(TRIGGER_NETDEV_TX, rules);
+ 	}
+ 
+ 	return 0;
+-- 
+2.25.1
+

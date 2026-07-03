@@ -1,0 +1,34 @@
+From 6ce4207e2ad35d1f1e0e0efd94949790077a7f6c Mon Sep 17 00:00:00 2001
+From: Gabor Juhos <j4g8y7@gmail.com>
+Date: Mon, 28 Apr 2025 09:30:55 +0200
+Subject: [PATCH 029/351] spi: spi-qpic-snand: fix NAND_READ_LOCATION_2
+ register handling
+
+The precomputed value for the NAND_READ_LOCATION_2 register should be
+stored in 'snandc->regs->read_location2'.
+
+Fix the qcom_spi_set_read_loc_first() function accordingly.
+
+Fixes: 7304d1909080 ("spi: spi-qpic: add driver for QCOM SPI NAND flash Interface")
+Signed-off-by: Gabor Juhos <j4g8y7@gmail.com>
+Reviewed-by: Md Sadre Alam <quic_mdalam@quicinc.com>
+---
+ drivers/spi/spi-qpic-snand.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/spi/spi-qpic-snand.c b/drivers/spi/spi-qpic-snand.c
+index 4f08cd0e41cc..f01f9517c15d 100644
+--- a/drivers/spi/spi-qpic-snand.c
++++ b/drivers/spi/spi-qpic-snand.c
+@@ -142,7 +142,7 @@ static void qcom_spi_set_read_loc_first(struct qcom_nand_controller *snandc,
+ 	else if (reg == NAND_READ_LOCATION_1)
+ 		snandc->regs->read_location1 = locreg_val;
+ 	else if (reg == NAND_READ_LOCATION_2)
+-		snandc->regs->read_location1 = locreg_val;
++		snandc->regs->read_location2 = locreg_val;
+ 	else if (reg == NAND_READ_LOCATION_3)
+ 		snandc->regs->read_location3 = locreg_val;
+ }
+-- 
+2.25.1
+

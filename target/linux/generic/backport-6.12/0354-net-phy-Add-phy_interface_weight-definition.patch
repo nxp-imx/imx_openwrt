@@ -1,0 +1,29 @@
+From dd60d04e24ec493e606c6ae670eeb2d797f48470 Mon Sep 17 00:00:00 2001
+From: Guanhua Gao <guanhua.gao@nxp.com>
+Date: Wed, 15 Jul 2026 15:12:25 +0900
+Subject: [PATCH 3/6] Add phy_interface_weight definition
+
+Signed-off-by: Guanhua Gao <guanhua.gao@nxp.com>
+---
+ include/linux/phy.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/include/linux/phy.h b/include/linux/phy.h
+index 49d574aa0..f647b4fba 100644
+--- a/include/linux/phy.h
++++ b/include/linux/phy.h
+@@ -192,6 +192,11 @@ static inline bool phy_interface_empty(const unsigned long *intf)
+ 	return bitmap_empty(intf, PHY_INTERFACE_MODE_MAX);
+ }
+ 
++static inline unsigned int phy_interface_weight(const unsigned long *intf)
++{
++	return bitmap_weight(intf, PHY_INTERFACE_MODE_MAX);
++}
++
+ static inline void phy_interface_and(unsigned long *dst, const unsigned long *a,
+ 				     const unsigned long *b)
+ {
+-- 
+2.25.1
+

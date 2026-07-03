@@ -1,0 +1,34 @@
+From 9fdb2a6bc4ce39acf31a0f3de68d90e2a260b7af Mon Sep 17 00:00:00 2001
+From: Heiner Kallweit <hkallweit1@gmail.com>
+Date: Mon, 3 Feb 2025 21:35:24 +0100
+Subject: [PATCH 239/351] r8169: make Kconfig option for LED support
+ user-visible
+
+Make config option R8169_LEDS user-visible, so that users can remove
+support if not needed.
+
+Signed-off-by: Heiner Kallweit <hkallweit1@gmail.com>
+Reviewed-by: Simon Horman <horms@kernel.org>
+Link: https://patch.msgid.link/d29f0cdb-32bf-435f-b59d-dc96bca1e3ab@gmail.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/ethernet/realtek/Kconfig | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/realtek/Kconfig b/drivers/net/ethernet/realtek/Kconfig
+index 8a8ea51c639e..fe136f61586f 100644
+--- a/drivers/net/ethernet/realtek/Kconfig
++++ b/drivers/net/ethernet/realtek/Kconfig
+@@ -114,7 +114,8 @@ config R8169
+ 	  will be called r8169.  This is recommended.
+ 
+ config R8169_LEDS
+-	def_bool R8169 && LEDS_TRIGGER_NETDEV
++	bool "Support for controlling the NIC LEDs"
++	depends on R8169 && LEDS_TRIGGER_NETDEV
+ 	depends on !(R8169=y && LEDS_CLASS=m)
+ 	help
+ 	  Optional support for controlling the NIC LED's with the netdev
+-- 
+2.25.1
+

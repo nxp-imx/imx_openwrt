@@ -1,0 +1,63 @@
+From 08bc9acbd9bfb1c05d3347fd1ee908d2df5e4be2 Mon Sep 17 00:00:00 2001
+From: "Russell King (Oracle)" <rmk+kernel@armlinux.org.uk>
+Date: Thu, 5 Dec 2024 09:42:34 +0000
+Subject: [PATCH 076/351] net: pcs: xpcs: implement pcs_inband_caps() method
+
+Report the PCS inband capabilities to phylink for XPCS.
+
+Signed-off-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+Link: https://patch.msgid.link/E1tJ8NW-006L5V-I9@rmk-PC.armlinux.org.uk
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/pcs/pcs-xpcs.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/drivers/net/pcs/pcs-xpcs.c b/drivers/net/pcs/pcs-xpcs.c
+index 3f3e44c99ddc..48542913ba65 100644
+--- a/drivers/net/pcs/pcs-xpcs.c
++++ b/drivers/net/pcs/pcs-xpcs.c
+@@ -640,6 +640,33 @@ static void xpcs_disable(struct phylink_pcs *pcs)
+ 		xpcs_phy_reset(xpcs);
+ }
+ 
++static unsigned int xpcs_inband_caps(struct phylink_pcs *pcs,
++				     phy_interface_t interface)
++{
++	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
++	const struct dw_xpcs_compat *compat;
++
++	compat = xpcs_find_compat(xpcs->desc, interface);
++	if (!compat)
++		return 0;
++
++	switch (compat->an_mode) {
++	case DW_AN_C73:
++		return LINK_INBAND_ENABLE;
++
++	case DW_AN_C37_SGMII:
++	case DW_AN_C37_1000BASEX:
++		return LINK_INBAND_DISABLE | LINK_INBAND_ENABLE;
++
++	case DW_10GBASER:
++	case DW_2500BASEX:
++		return LINK_INBAND_DISABLE;
++
++	default:
++		return 0;
++	}
++}
++
+ void xpcs_get_interfaces(struct dw_xpcs *xpcs, unsigned long *interfaces)
+ {
+ 	int i, j;
+@@ -1473,6 +1500,7 @@ static const struct dw_xpcs_desc xpcs_desc_list[] = {
+ static const struct phylink_pcs_ops xpcs_phylink_ops = {
+ 	.pcs_validate = xpcs_validate,
+ 	.pcs_disable = xpcs_disable,
++	.pcs_inband_caps = xpcs_inband_caps,
+ 	.pcs_config = xpcs_config,
+ 	.pcs_get_state = xpcs_get_state,
+ 	.pcs_an_restart = xpcs_an_restart,
+-- 
+2.25.1
+

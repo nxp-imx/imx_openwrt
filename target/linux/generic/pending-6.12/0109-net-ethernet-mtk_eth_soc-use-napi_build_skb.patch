@@ -1,0 +1,38 @@
+From 86483593e17fb05e800b898e3ec33eabfc9f1b3f Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 20 May 2024 14:29:58 +0200
+Subject: [PATCH 109/169] net: ethernet: mtk_eth_soc: use napi_build_skb()
+
+The napi_build_skb() can reuse the skb in skb cache per CPU or
+can allocate skbs in bulk, which helps improve the performance.
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ drivers/net/ethernet/mediatek/mtk_eth_soc.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/mediatek/mtk_eth_soc.c b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+index b4b495935b02..f005be4b77e2 100644
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -2312,7 +2312,7 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
+ 			if (ret != XDP_PASS)
+ 				goto skip_rx;
+ 
+-			skb = build_skb(data, PAGE_SIZE);
++			skb = napi_build_skb(data, PAGE_SIZE);
+ 			if (unlikely(!skb)) {
+ 				page_pool_put_full_page(ring->page_pool,
+ 							page, true);
+@@ -2350,7 +2350,7 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
+ 			dma_unmap_single(eth->dma_dev, ((u64)trxd.rxd1 | addr64),
+ 					 ring->buf_size, DMA_FROM_DEVICE);
+ 
+-			skb = build_skb(data, ring->frag_size);
++			skb = napi_build_skb(data, ring->frag_size);
+ 			if (unlikely(!skb)) {
+ 				netdev->stats.rx_dropped++;
+ 				skb_free_frag(data);
+-- 
+2.25.1
+

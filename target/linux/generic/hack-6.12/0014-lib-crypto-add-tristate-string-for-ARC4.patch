@@ -1,0 +1,28 @@
+From 73466f8be33540b0c2dd668ad3ba83451df7905c Mon Sep 17 00:00:00 2001
+From: OpenWrt community <openwrt-devel@lists.openwrt.org>
+Date: Wed, 13 Jul 2022 13:35:18 +0200
+Subject: [PATCH 14/54] lib/crypto: add tristate string for ARC4
+
+This makes it possible to select CONFIG_CRYPTO_LIB_ARC4 directly. We
+need this to be able to compile this into the kernel and make use of it
+from backports.
+---
+ lib/crypto/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/crypto/Kconfig b/lib/crypto/Kconfig
+index b09e78da959a..6bd7c7ba58e6 100644
+--- a/lib/crypto/Kconfig
++++ b/lib/crypto/Kconfig
+@@ -20,7 +20,7 @@ config CRYPTO_LIB_AESGCM
+ 	select CRYPTO_LIB_UTILS
+ 
+ config CRYPTO_LIB_ARC4
+-	tristate
++	tristate "ARC4 cipher library"
+ 
+ config CRYPTO_LIB_GF128MUL
+ 	tristate
+-- 
+2.25.1
+

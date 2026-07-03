@@ -1,0 +1,31 @@
+From b5995c0ec7ca3ec04fcd097d5b3435f15c98defd Mon Sep 17 00:00:00 2001
+From: OpenWrt community <openwrt-devel@lists.openwrt.org>
+Date: Wed, 13 Jul 2022 12:19:01 +0200
+Subject: [PATCH 053/169] spi-nor/xmc.c: add xm25qh128c
+
+The XMC XM25QH128C is a 16MB SPI NOR chip. The patch is verified on
+Ruijie RG-EW3200GX PRO.
+Datasheet available at https://www.xmcwh.com/uploads/435/XM25QH128C.pdf
+---
+ drivers/mtd/spi-nor/xmc.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/xmc.c b/drivers/mtd/spi-nor/xmc.c
+index d5a06054b0dd..8eb2d957c8ad 100644
+--- a/drivers/mtd/spi-nor/xmc.c
++++ b/drivers/mtd/spi-nor/xmc.c
+@@ -19,6 +19,11 @@ static const struct flash_info xmc_nor_parts[] = {
+ 		.name = "XM25QH128A",
+ 		.size = SZ_16M,
+ 		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
++	}, {
++		.id = SNOR_ID(0x20, 0x40, 0x18),
++		.name = "XM25QH128C",
++		.size = SZ_16M,
++		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
+ 	},
+ };
+ 
+-- 
+2.25.1
+

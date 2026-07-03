@@ -1,0 +1,26 @@
+From 8f593c5c6e24149e924164327564a0b6f8619737 Mon Sep 17 00:00:00 2001
+From: Guanhua Gao <guanhua.gao@nxp.com>
+Date: Wed, 15 Jul 2026 18:12:59 +0900
+Subject: [PATCH 6/6] Remove dtbslist
+
+Signed-off-by: Guanhua Gao <guanhua.gao@nxp.com>
+---
+ Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Makefile b/Makefile
+index b9d0d6d14..604cc82aa 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1412,7 +1412,7 @@ ifneq ($(dtstree),)
+ 
+ PHONY += dtbs dtbs_prepare dtbs_install dtbs_check
+ dtbs: dtbs_prepare
+-	$(Q)$(MAKE) $(build)=$(dtstree) need-dtbslist=1
++	$(Q)$(MAKE) $(build)=$(dtstree)
+ 
+ # include/config/kernel.release is actually needed when installing DTBs because
+ # INSTALL_DTBS_PATH contains $(KERNELRELEASE). However, we do not want to make
+-- 
+2.25.1
+

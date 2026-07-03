@@ -1,0 +1,65 @@
+From 619938ac50a8cf807f4a04cb3bba44ae65677915 Mon Sep 17 00:00:00 2001
+From: "Russell King (Oracle)" <rmk+kernel@armlinux.org.uk>
+Date: Tue, 3 Dec 2024 15:31:48 +0000
+Subject: [PATCH 073/351] net: phylink: remove phylink_phy_no_inband()
+
+Remove phylink_phy_no_inband() now that we are handling the lack of
+inband negotiation by querying the capabilities of the PHY and PCS,
+and the BCM84881 PHY driver provides us the information necessary to
+make the decision.
+
+Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+Signed-off-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+Link: https://patch.msgid.link/E1tIUsO-006IUt-KN@rmk-PC.armlinux.org.uk
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/phy/phylink.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/phy/phylink.c b/drivers/net/phy/phylink.c
+index 8fdf2ee6050c..012573499bd3 100644
+--- a/drivers/net/phy/phylink.c
++++ b/drivers/net/phy/phylink.c
+@@ -3602,10 +3602,11 @@ static phy_interface_t phylink_choose_sfp_interface(struct phylink *pl,
+ 	return interface;
+ }
+ 
+-static void phylink_sfp_set_config(struct phylink *pl, u8 mode,
++static void phylink_sfp_set_config(struct phylink *pl,
+ 				   unsigned long *supported,
+ 				   struct phylink_link_state *state)
+ {
++	u8 mode = MLO_AN_INBAND;
+ 	bool changed = false;
+ 
+ 	phylink_dbg(pl, "requesting link mode %s/%s with support %*pb\n",
+@@ -3695,7 +3696,7 @@ static int phylink_sfp_config_phy(struct phylink *pl, struct phy_device *phy)
+ 	if (ret) {
+ 		phylink_err(pl,
+ 			    "validation of %s/%s with support %*pb failed: %pe\n",
+-			    phylink_an_mode_str(mode),
++			    phylink_an_mode_str(pl->req_link_an_mode),
+ 			    phy_modes(config.interface),
+ 			    __ETHTOOL_LINK_MODE_MASK_NBITS, support,
+ 			    ERR_PTR(ret));
+@@ -3704,7 +3705,7 @@ static int phylink_sfp_config_phy(struct phylink *pl, struct phy_device *phy)
+ 
+ 	pl->link_port = pl->sfp_port;
+ 
+-	phylink_sfp_set_config(pl, mode, support, &config);
++	phylink_sfp_set_config(pl, support, &config);
+ 
+ 	return 0;
+ }
+@@ -3779,7 +3780,7 @@ static int phylink_sfp_config_optical(struct phylink *pl)
+ 
+ 	pl->link_port = pl->sfp_port;
+ 
+-	phylink_sfp_set_config(pl, MLO_AN_INBAND, pl->sfp_support, &config);
++	phylink_sfp_set_config(pl, pl->sfp_support, &config);
+ 
+ 	return 0;
+ }
+-- 
+2.25.1
+

@@ -1,0 +1,29 @@
+From f2c0d02c23a058fa7af02d7d1c6a5f5166a72ad8 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 29 Jun 2026 18:25:22 +0900
+Subject: [PATCH 023/169] fix errors in unresolved weak symbols on arm
+
+lede-commit: 570699d4838a907c3ef9f2819bf19eb72997b32f
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ arch/arm/kernel/module.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm/kernel/module.c b/arch/arm/kernel/module.c
+index da488d92e7a0..2c4772fc494d 100644
+--- a/arch/arm/kernel/module.c
++++ b/arch/arm/kernel/module.c
+@@ -112,6 +112,10 @@ apply_relocate(Elf32_Shdr *sechdrs, const char *strtab, unsigned int symindex,
+ 			return -ENOEXEC;
+ 		}
+ 
++		if ((IS_ERR_VALUE(sym->st_value) || !sym->st_value) &&
++		    ELF_ST_BIND(sym->st_info) == STB_WEAK)
++			continue;
++
+ 		loc = dstsec->sh_addr + rel->r_offset;
+ 
+ 		switch (ELF32_R_TYPE(rel->r_info)) {
+-- 
+2.25.1
+

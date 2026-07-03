@@ -1,0 +1,146 @@
+From 052e7417e123c98f802fbb9198daf461bfeb0aa1 Mon Sep 17 00:00:00 2001
+From: Rosen Penev <rosenp@gmail.com>
+Date: Wed, 5 Nov 2025 12:55:24 -0800
+Subject: [PATCH 021/169] Revert "powerpc: dts: mpc85xx: remove "simple-bus"
+ compatible from ifc node"
+
+This reverts commit 0bf51cc9e9e57a751b4c5dacbfa499ba5cd8bd72.
+
+simple-bus is needed for legacy platforms such as P1010 so that nodes
+are populated properly.
+
+Fixes fsl,ifc-nand probing under at least P1010.
+
+Signed-off-by: Rosen Penev <rosenp@gmail.com>
+---
+ arch/powerpc/boot/dts/fsl/b4si-post.dtsi      | 2 +-
+ arch/powerpc/boot/dts/fsl/bsc9131si-post.dtsi | 2 +-
+ arch/powerpc/boot/dts/fsl/bsc9132si-post.dtsi | 2 +-
+ arch/powerpc/boot/dts/fsl/c293si-post.dtsi    | 2 +-
+ arch/powerpc/boot/dts/fsl/p1010si-post.dtsi   | 2 +-
+ arch/powerpc/boot/dts/fsl/t1023si-post.dtsi   | 2 +-
+ arch/powerpc/boot/dts/fsl/t1040si-post.dtsi   | 2 +-
+ arch/powerpc/boot/dts/fsl/t2081si-post.dtsi   | 2 +-
+ arch/powerpc/boot/dts/fsl/t4240si-post.dtsi   | 2 +-
+ 9 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/arch/powerpc/boot/dts/fsl/b4si-post.dtsi b/arch/powerpc/boot/dts/fsl/b4si-post.dtsi
+index fb3200b006ad..4f044b41a776 100644
+--- a/arch/powerpc/boot/dts/fsl/b4si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/b4si-post.dtsi
+@@ -50,7 +50,7 @@ &qman_pfdr {
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <25 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/bsc9131si-post.dtsi b/arch/powerpc/boot/dts/fsl/bsc9131si-post.dtsi
+index 5c53cee8755f..2a677fd323eb 100644
+--- a/arch/powerpc/boot/dts/fsl/bsc9131si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/bsc9131si-post.dtsi
+@@ -35,7 +35,7 @@
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <16 2 0 0 20 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/bsc9132si-post.dtsi b/arch/powerpc/boot/dts/fsl/bsc9132si-post.dtsi
+index 4da451e000d9..b8e0edd1ac69 100644
+--- a/arch/powerpc/boot/dts/fsl/bsc9132si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/bsc9132si-post.dtsi
+@@ -35,7 +35,7 @@
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	/* FIXME: Test whether interrupts are split */
+ 	interrupts = <16 2 0 0 20 2 0 0>;
+ };
+diff --git a/arch/powerpc/boot/dts/fsl/c293si-post.dtsi b/arch/powerpc/boot/dts/fsl/c293si-post.dtsi
+index 2d443d519274..f208fb8f64b3 100644
+--- a/arch/powerpc/boot/dts/fsl/c293si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/c293si-post.dtsi
+@@ -35,7 +35,7 @@
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <19 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/p1010si-post.dtsi b/arch/powerpc/boot/dts/fsl/p1010si-post.dtsi
+index 2d2550729dcc..b540e58ff79e 100644
+--- a/arch/powerpc/boot/dts/fsl/p1010si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/p1010si-post.dtsi
+@@ -35,7 +35,7 @@
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <16 2 0 0 19 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/t1023si-post.dtsi b/arch/powerpc/boot/dts/fsl/t1023si-post.dtsi
+index 8ef0c020206b..aa5152ca8120 100644
+--- a/arch/powerpc/boot/dts/fsl/t1023si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/t1023si-post.dtsi
+@@ -52,7 +52,7 @@ &qman_pfdr {
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <25 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/t1040si-post.dtsi b/arch/powerpc/boot/dts/fsl/t1040si-post.dtsi
+index c9542b73bd7f..776788623204 100644
+--- a/arch/powerpc/boot/dts/fsl/t1040si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/t1040si-post.dtsi
+@@ -52,7 +52,7 @@ &qman_pfdr {
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <25 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/t2081si-post.dtsi b/arch/powerpc/boot/dts/fsl/t2081si-post.dtsi
+index 6bb95878d39d..27714dc2f04a 100644
+--- a/arch/powerpc/boot/dts/fsl/t2081si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/t2081si-post.dtsi
+@@ -50,7 +50,7 @@ &qman_pfdr {
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <25 2 0 0>;
+ };
+ 
+diff --git a/arch/powerpc/boot/dts/fsl/t4240si-post.dtsi b/arch/powerpc/boot/dts/fsl/t4240si-post.dtsi
+index 65f3e17c0d41..fcac73486d48 100644
+--- a/arch/powerpc/boot/dts/fsl/t4240si-post.dtsi
++++ b/arch/powerpc/boot/dts/fsl/t4240si-post.dtsi
+@@ -50,7 +50,7 @@ &qman_pfdr {
+ &ifc {
+ 	#address-cells = <2>;
+ 	#size-cells = <1>;
+-	compatible = "fsl,ifc";
++	compatible = "fsl,ifc", "simple-bus";
+ 	interrupts = <25 2 0 0>;
+ };
+ 
+-- 
+2.25.1
+

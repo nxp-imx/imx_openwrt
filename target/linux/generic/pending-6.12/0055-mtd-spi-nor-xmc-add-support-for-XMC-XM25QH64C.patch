@@ -1,0 +1,32 @@
+From f343789a82f854f024b5cc47734abb50612b103c Mon Sep 17 00:00:00 2001
+From: Joe Mullally <jwmullally@gmail.com>
+Date: Tue, 30 Jun 2026 10:40:00 +0900
+Subject: [PATCH 055/169] mtd/spi-nor/xmc: add support for XMC XM25QH64C
+
+The XMC XM25QH64C is a 8MB SPI NOR chip. The patch is verified on TL-WPA8631P v3.
+Datasheet available at https://www.xmcwh.com/uploads/442/XM25QH64C.pdf
+
+Signed-off-by: Joe Mullally <jwmullally@gmail.com>
+---
+ drivers/mtd/spi-nor/xmc.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/xmc.c b/drivers/mtd/spi-nor/xmc.c
+index 8eb2d957c8ad..d52756562489 100644
+--- a/drivers/mtd/spi-nor/xmc.c
++++ b/drivers/mtd/spi-nor/xmc.c
+@@ -14,6 +14,11 @@ static const struct flash_info xmc_nor_parts[] = {
+ 		.name = "XM25QH64A",
+ 		.size = SZ_8M,
+ 		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
++	}, {
++		.id = SNOR_ID(0x20, 0x40, 0x17),
++		.name = "XM25QH64C",
++		.size = SZ_8M,
++		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
+ 	}, {
+ 		.id = SNOR_ID(0x20, 0x70, 0x18),
+ 		.name = "XM25QH128A",
+-- 
+2.25.1
+

@@ -1,0 +1,32 @@
+From b77a7ec84676e27b74805a6657e195da73768899 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Mon, 5 Jan 2026 17:55:02 +0000
+Subject: [PATCH 102/169] net: phy: realtek: rate-adapter in C22 mode
+
+Use rate-adapter mode in case the PHY is connected to the host using
+Clause-22 MDIO.
+
+This is necessary because phylink only handles dynamically switching the
+interface mode if the PHY is connected using Clause-45 MDIO.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ drivers/net/phy/realtek/realtek_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/phy/realtek/realtek_main.c b/drivers/net/phy/realtek/realtek_main.c
+index 0645f8c8ab62..e752c6ad7c16 100644
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -1387,7 +1387,7 @@ static int rtl822x_set_serdes_option_mode(struct phy_device *phydev, bool gen1)
+ 		return 0;
+ 
+ 	/* determine SerDes option mode */
+-	if (has_2500 && !has_sgmii) {
++	if (has_2500 && (!has_sgmii || !phydev->is_c45)) {
+ 		mode = RTL822X_VND1_SERDES_OPTION_MODE_2500BASEX;
+ 		phydev->rate_matching = RATE_MATCH_PAUSE;
+ 	} else {
+-- 
+2.25.1
+

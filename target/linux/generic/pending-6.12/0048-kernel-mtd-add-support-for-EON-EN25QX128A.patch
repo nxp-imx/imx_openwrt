@@ -1,0 +1,31 @@
+From d3fcd7405d9ebf473e8c7183e195254ee3b827dc Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Tue, 30 Jun 2026 10:39:22 +0900
+Subject: [PATCH 048/169] kernel/mtd: add support for EON EN25QX128A
+
+Add support for EON EN25QX128A with no flags as it does
+support SFDP parsing.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+ drivers/mtd/spi-nor/eon.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/eon.c b/drivers/mtd/spi-nor/eon.c
+index d43b68873cf1..a3b57a6871a3 100644
+--- a/drivers/mtd/spi-nor/eon.c
++++ b/drivers/mtd/spi-nor/eon.c
+@@ -22,6 +22,10 @@ static const struct flash_info eon_nor_parts[] = {
+ 		.name = "en25q128",
+ 		.size = SZ_16M,
+ 		.no_sfdp_flags = SECT_4K,
++	}, {
++		.id = SNOR_ID(0x1c, 0x71, 0x18),
++		.name = "en25qx128a",
++		.size = SZ_16M,
+ 	}, {
+ 		.id = SNOR_ID(0x1c, 0x30, 0x14),
+ 		.name = "en25q80a",
+-- 
+2.25.1
+

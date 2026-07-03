@@ -1,0 +1,29 @@
+From 51279fb70dffdcffaf8d0e0fa9d3d491e9357923 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Mon, 29 Jun 2026 18:17:58 +0900
+Subject: [PATCH 007/169] jffs2: add splice ops
+
+Add splice_read using generic_file_splice_read.
+Add splice_write using iter_file_splice_write
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ fs/jffs2/file.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/fs/jffs2/file.c b/fs/jffs2/file.c
+index 13c18ccc13b0..b08616967891 100644
+--- a/fs/jffs2/file.c
++++ b/fs/jffs2/file.c
+@@ -53,6 +53,8 @@ const struct file_operations jffs2_file_operations =
+ 	.open =		generic_file_open,
+  	.read_iter =	generic_file_read_iter,
+  	.write_iter =	generic_file_write_iter,
++	.splice_read =	filemap_splice_read,
++	.splice_write =	iter_file_splice_write,
+ 	.unlocked_ioctl=jffs2_ioctl,
+ 	.mmap =		generic_file_readonly_mmap,
+ 	.fsync =	jffs2_fsync,
+-- 
+2.25.1
+

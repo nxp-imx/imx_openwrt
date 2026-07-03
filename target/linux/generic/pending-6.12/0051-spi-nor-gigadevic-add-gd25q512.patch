@@ -1,0 +1,30 @@
+From 91d63f251db577f192431ac7bf5cd82123a94c5a Mon Sep 17 00:00:00 2001
+From: OpenWrt community <openwrt-devel@lists.openwrt.org>
+Date: Thu, 14 Jul 2022 08:38:07 +0200
+Subject: [PATCH 051/169] spi-nor/gigadevic: add gd25q512
+
+---
+ drivers/mtd/spi-nor/gigadevice.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/gigadevice.c b/drivers/mtd/spi-nor/gigadevice.c
+index 2cf2db123751..c4bf82b41914 100644
+--- a/drivers/mtd/spi-nor/gigadevice.c
++++ b/drivers/mtd/spi-nor/gigadevice.c
+@@ -70,6 +70,13 @@ static const struct flash_info gigadevice_nor_parts[] = {
+ 		.flags = SPI_NOR_HAS_LOCK | SPI_NOR_HAS_TB | SPI_NOR_TB_SR_BIT6,
+ 		.fixups = &gd25q256_fixups,
+ 		.fixup_flags = SPI_NOR_4B_OPCODES,
++	}, {
++		.id = SNOR_ID(0xc8, 0x40, 0x20),
++		.name = "gd25q512",
++		.size = SZ_64M,
++		.flags = SPI_NOR_HAS_LOCK | SPI_NOR_HAS_TB,
++		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
++		.fixup_flags = SPI_NOR_4B_OPCODES,
+ 	}, {
+ 		.id = SNOR_ID(0xc8, 0x60, 0x16),
+ 		.name = "gd25lq32",
+-- 
+2.25.1
+

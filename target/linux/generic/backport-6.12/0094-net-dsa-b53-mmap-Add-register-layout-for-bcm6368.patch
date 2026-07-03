@@ -1,0 +1,47 @@
+From 490e7804e61155e1abf7258dc0af74882faf426f Mon Sep 17 00:00:00 2001
+From: Kyle Hendry <kylehendrydev@gmail.com>
+Date: Wed, 23 Jul 2025 20:52:45 -0700
+Subject: [PATCH 094/351] net: dsa: b53: mmap: Add register layout for bcm6368
+
+Add ephy register info for bcm6368.
+
+Signed-off-by: Kyle Hendry <kylehendrydev@gmail.com>
+Reviewed-by: Florian Fainelli <florian.fainelli@broadcom.com>
+Link: https://patch.msgid.link/20250724035300.20497-7-kylehendrydev@gmail.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/dsa/b53/b53_mmap.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/net/dsa/b53/b53_mmap.c b/drivers/net/dsa/b53/b53_mmap.c
+index 29f9f87426d5..da78fe06d82d 100644
+--- a/drivers/net/dsa/b53/b53_mmap.c
++++ b/drivers/net/dsa/b53/b53_mmap.c
+@@ -49,6 +49,15 @@ static const struct b53_phy_info bcm6318_ephy_info = {
+ 	.ephy_offset = bcm6318_ephy_offsets,
+ };
+ 
++static const u32 bcm6368_ephy_offsets[] = {2, 3, 4, 5};
++
++static const struct b53_phy_info bcm6368_ephy_info = {
++	.ephy_enable_mask = BIT(0),
++	.ephy_port_mask = GENMASK((ARRAY_SIZE(bcm6368_ephy_offsets) - 1), 0),
++	.ephy_bias_bit = 0,
++	.ephy_offset = bcm6368_ephy_offsets,
++};
++
+ static const u32 bcm63268_ephy_offsets[] = {4, 9, 14};
+ 
+ static const struct b53_phy_info bcm63268_ephy_info = {
+@@ -347,6 +356,8 @@ static int b53_mmap_probe(struct platform_device *pdev)
+ 		    pdata->chip_id == BCM6328_DEVICE_ID ||
+ 		    pdata->chip_id == BCM6362_DEVICE_ID)
+ 			priv->phy_info = &bcm6318_ephy_info;
++		else if (pdata->chip_id == BCM6368_DEVICE_ID)
++			priv->phy_info = &bcm6368_ephy_info;
+ 		else if (pdata->chip_id == BCM63268_DEVICE_ID)
+ 			priv->phy_info = &bcm63268_ephy_info;
+ 	}
+-- 
+2.25.1
+

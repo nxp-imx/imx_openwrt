@@ -1,0 +1,126 @@
+From d5c0e9b6b8dbd6d620a2f5c297fd079b4dd6d531 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Sat, 8 Jul 2017 08:20:43 +0200
+Subject: [PATCH 50/54] debloat: dmabuf
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ drivers/base/Kconfig           |  2 +-
+ drivers/dma-buf/Makefile       | 20 ++++++++++++--------
+ drivers/dma-buf/dma-buf.c      |  3 ++-
+ drivers/dma-buf/heaps/Makefile |  6 +++---
+ fs/d_path.c                    |  1 +
+ kernel/sched/core.c            |  1 +
+ net/Kconfig                    |  2 +-
+ 7 files changed, 21 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/base/Kconfig b/drivers/base/Kconfig
+index 064eb52ff7e2..f17614172bf7 100644
+--- a/drivers/base/Kconfig
++++ b/drivers/base/Kconfig
+@@ -198,7 +198,7 @@ config SOC_BUS
+ source "drivers/base/regmap/Kconfig"
+ 
+ config DMA_SHARED_BUFFER
+-	bool
++	tristate
+ 	default n
+ 	select IRQ_WORK
+ 	help
+diff --git a/drivers/dma-buf/Makefile b/drivers/dma-buf/Makefile
+index 70ec901edf2c..4efa1df475f0 100644
+--- a/drivers/dma-buf/Makefile
++++ b/drivers/dma-buf/Makefile
+@@ -1,12 +1,14 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-obj-y := dma-buf.o dma-fence.o dma-fence-array.o dma-fence-chain.o \
++obj-$(CONFIG_DMA_SHARED_BUFFER) := dma-shared-buffer.o
++
++dma-buf-objs-y := dma-buf.o dma-fence.o dma-fence-array.o dma-fence-chain.o \
+ 	 dma-fence-unwrap.o dma-resv.o
+-obj-$(CONFIG_DMABUF_HEAPS)	+= dma-heap.o
+-obj-$(CONFIG_DMABUF_HEAPS)	+= heaps/
+-obj-$(CONFIG_SYNC_FILE)		+= sync_file.o
+-obj-$(CONFIG_SW_SYNC)		+= sw_sync.o sync_debug.o
+-obj-$(CONFIG_UDMABUF)		+= udmabuf.o
+-obj-$(CONFIG_DMABUF_SYSFS_STATS) += dma-buf-sysfs-stats.o
++dma-buf-objs-$(CONFIG_DMABUF_HEAPS)	+= dma-heap.o
++obj-$(CONFIG_DMABUF_HEAPS)		+= heaps/
++dma-buf-objs-$(CONFIG_SYNC_FILE)	+= sync_file.o
++dma-buf-objs-$(CONFIG_SW_SYNC)		+= sw_sync.o sync_debug.o
++dma-buf-objs-$(CONFIG_UDMABUF)		+= udmabuf.o
++dma-buf-objs-$(CONFIG_DMABUF_SYSFS_STATS) += dma-buf-sysfs-stats.o
+ 
+ dmabuf_selftests-y := \
+ 	selftest.o \
+@@ -15,4 +17,6 @@ dmabuf_selftests-y := \
+ 	st-dma-fence-unwrap.o \
+ 	st-dma-resv.o
+ 
+-obj-$(CONFIG_DMABUF_SELFTESTS)	+= dmabuf_selftests.o
++dma-buf-objs-$(CONFIG_DMABUF_SELFTESTS)	+= dmabuf_selftests.o
++
++dma-shared-buffer-objs :=  $(dma-buf-objs-y)
+diff --git a/drivers/dma-buf/dma-buf.c b/drivers/dma-buf/dma-buf.c
+index ec3f5edd8f33..689ee4bca004 100644
+--- a/drivers/dma-buf/dma-buf.c
++++ b/drivers/dma-buf/dma-buf.c
+@@ -1775,4 +1775,5 @@ static void __exit dma_buf_deinit(void)
+ 	kern_unmount(dma_buf_mnt);
+ 	dma_buf_uninit_sysfs_statistics();
+ }
+-__exitcall(dma_buf_deinit);
++module_exit(dma_buf_deinit);
++MODULE_LICENSE("GPL");
+diff --git a/drivers/dma-buf/heaps/Makefile b/drivers/dma-buf/heaps/Makefile
+index 29733f84c354..c508ac3179c0 100644
+--- a/drivers/dma-buf/heaps/Makefile
++++ b/drivers/dma-buf/heaps/Makefile
+@@ -1,4 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+-obj-$(CONFIG_DMABUF_HEAPS_SYSTEM)	+= system_heap.o
+-obj-$(CONFIG_DMABUF_HEAPS_CMA)		+= cma_heap.o
+-obj-$(CONFIG_DMABUF_HEAPS_DSP)          += dsp_heap.o
++dma-buf-objs-$(CONFIG_DMABUF_HEAPS_SYSTEM)	+= system_heap.o
++dma-buf-objs-$(CONFIG_DMABUF_HEAPS_CMA)		+= cma_heap.o
++dma-buf-objs-$(CONFIG_DMABUF_HEAPS_DSP)          += dsp_heap.o
+diff --git a/fs/d_path.c b/fs/d_path.c
+index 5f4da5c8d5db..69d49d7ab260 100644
+--- a/fs/d_path.c
++++ b/fs/d_path.c
+@@ -314,6 +314,7 @@ char *dynamic_dname(char *buffer, int buflen, const char *fmt, ...)
+ 	buffer += buflen - sz;
+ 	return memcpy(buffer, temp, sz);
+ }
++EXPORT_SYMBOL_GPL(dynamic_dname);
+ 
+ char *simple_dname(struct dentry *dentry, char *buffer, int buflen)
+ {
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 4b1953b6c76a..ca7ee02dc916 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -4433,6 +4433,7 @@ int wake_up_state(struct task_struct *p, unsigned int state)
+ {
+ 	return try_to_wake_up(p, state, 0);
+ }
++EXPORT_SYMBOL_GPL(wake_up_state);
+ 
+ /*
+  * Perform scheduler related setup for a newly forked process p.
+diff --git a/net/Kconfig b/net/Kconfig
+index 04947ced830c..48ec6704f7d3 100644
+--- a/net/Kconfig
++++ b/net/Kconfig
+@@ -74,7 +74,7 @@ config SKB_EXTENSIONS
+ 
+ config NET_DEVMEM
+ 	def_bool y
+-	depends on DMA_SHARED_BUFFER
++	depends on DMA_SHARED_BUFFER=y
+ 	depends on GENERIC_ALLOCATOR
+ 	depends on PAGE_POOL
+ 
+-- 
+2.25.1
+

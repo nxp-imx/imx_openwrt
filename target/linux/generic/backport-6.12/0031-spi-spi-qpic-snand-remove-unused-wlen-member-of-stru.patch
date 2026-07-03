@@ -1,0 +1,29 @@
+From 965c3949bf3ce1edbc0ee5fc6432ef6798f54ffa Mon Sep 17 00:00:00 2001
+From: Gabor Juhos <j4g8y7@gmail.com>
+Date: Thu, 24 Apr 2025 20:10:59 +0200
+Subject: [PATCH 031/351] spi: spi-qpic-snand: remove unused 'wlen' member of
+ 'struct qpic_spi_nand'
+
+The 'wlen' member of the qpic_spi_nand structure is never used in the
+code so remove that.
+
+Signed-off-by: Gabor Juhos <j4g8y7@gmail.com>
+---
+ drivers/spi/spi-qpic-snand.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/drivers/spi/spi-qpic-snand.c b/drivers/spi/spi-qpic-snand.c
+index b03ab39727da..98d32d269d55 100644
+--- a/drivers/spi/spi-qpic-snand.c
++++ b/drivers/spi/spi-qpic-snand.c
+@@ -116,7 +116,6 @@ struct qpic_spi_nand {
+ 	struct nand_ecc_engine ecc_eng;
+ 	u8 *data_buf;
+ 	u8 *oob_buf;
+-	u32 wlen;
+ 	__le32 addr1;
+ 	__le32 addr2;
+ 	__le32 cmd;
+-- 
+2.25.1
+

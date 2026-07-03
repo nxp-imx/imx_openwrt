@@ -1,0 +1,29 @@
+From 30364eb985f27c18d05ee44b1b675d4a52294dd3 Mon Sep 17 00:00:00 2001
+From: Piotr Dymacz <pepe2k@gmail.com>
+Date: Tue, 30 Jun 2026 10:39:17 +0900
+Subject: [PATCH 047/169] kernel/mtd: add support for EON EN25Q128
+
+Signed-off-by: Piotr Dymacz <pepe2k@gmail.com>
+---
+ drivers/mtd/spi-nor/eon.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/mtd/spi-nor/eon.c b/drivers/mtd/spi-nor/eon.c
+index c1ddf662f782..d43b68873cf1 100644
+--- a/drivers/mtd/spi-nor/eon.c
++++ b/drivers/mtd/spi-nor/eon.c
+@@ -17,6 +17,11 @@ static const struct flash_info eon_nor_parts[] = {
+ 		.id = SNOR_ID(0x1c, 0x20, 0x17),
+ 		.name = "en25p64",
+ 		.size = SZ_8M,
++	}, {
++		.id = SNOR_ID(0x1c, 0x30, 0x18),
++		.name = "en25q128",
++		.size = SZ_16M,
++		.no_sfdp_flags = SECT_4K,
+ 	}, {
+ 		.id = SNOR_ID(0x1c, 0x30, 0x14),
+ 		.name = "en25q80a",
+-- 
+2.25.1
+

@@ -1,0 +1,50 @@
+From 8e9a25f53603b9fd9f1faf979f395f991b757378 Mon Sep 17 00:00:00 2001
+From: Mark Miller <mark@mirell.org>
+Date: Mon, 29 Jun 2026 18:24:57 +0900
+Subject: [PATCH 018/169] mips: expose CONFIG_BOOT_RAW
+
+This exposes the CONFIG_BOOT_RAW symbol in Kconfig. This is needed on
+certain Broadcom chipsets running CFE in order to load the kernel.
+
+Signed-off-by: Mark Miller <mark@mirell.org>
+Acked-by: Rob Landley <rob@landley.net>
+---
+ arch/mips/Kconfig | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index 5078ebf071ec..a330c7152049 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -1055,9 +1055,6 @@ config FW_ARC
+ config ARCH_MAY_HAVE_PC_FDC
+ 	bool
+ 
+-config BOOT_RAW
+-	bool
+-
+ config CEVT_BCM1480
+ 	bool
+ 
+@@ -2990,6 +2987,18 @@ choice
+ 		bool "Extend builtin kernel arguments with bootloader arguments"
+ endchoice
+ 
++config BOOT_RAW
++	bool "Enable the kernel to be executed from the load address"
++	default n
++	help
++	 Allow the kernel to be executed from the load address for
++	 bootloaders which cannot read the ELF format. This places
++	 a jump to start_kernel at the load address.
++
++	 If unsure, say N.
++
++
++
+ endmenu
+ 
+ config LOCKDEP_SUPPORT
+-- 
+2.25.1
+

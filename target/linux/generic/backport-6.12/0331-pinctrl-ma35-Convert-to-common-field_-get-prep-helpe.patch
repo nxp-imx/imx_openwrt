@@ -1,0 +1,34 @@
+From b5145791bd0c313ad1829b334dd1f9dd7bd928a3 Mon Sep 17 00:00:00 2001
+From: Geert Uytterhoeven <geert+renesas@glider.be>
+Date: Thu, 6 Nov 2025 14:34:08 +0100
+Subject: [PATCH 331/351] pinctrl: ma35: Convert to common field_{get,prep}()
+ helpers
+
+Drop the driver-specific field_get() and field_prep() macros, in favor
+of the globally available variants from <linux/bitfield.h>.
+
+Signed-off-by: Geert Uytterhoeven <geert+renesas@glider.be>
+Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+Signed-off-by: Yury Norov (NVIDIA) <yury.norov@gmail.com>
+---
+ drivers/pinctrl/nuvoton/pinctrl-ma35.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/drivers/pinctrl/nuvoton/pinctrl-ma35.c b/drivers/pinctrl/nuvoton/pinctrl-ma35.c
+index 59c4e7c6cdde..3ba28faa8e14 100644
+--- a/drivers/pinctrl/nuvoton/pinctrl-ma35.c
++++ b/drivers/pinctrl/nuvoton/pinctrl-ma35.c
+@@ -81,10 +81,6 @@
+ #define MVOLT_1800			0
+ #define MVOLT_3300			1
+ 
+-/* Non-constant mask variant of FIELD_GET() and FIELD_PREP() */
+-#define field_get(_mask, _reg)	(((_reg) & (_mask)) >> (ffs(_mask) - 1))
+-#define field_prep(_mask, _val)	(((_val) << (ffs(_mask) - 1)) & (_mask))
+-
+ static const char * const gpio_group_name[] = {
+ 	"gpioa", "gpiob", "gpioc", "gpiod", "gpioe", "gpiof", "gpiog",
+ 	"gpioh", "gpioi", "gpioj", "gpiok", "gpiol", "gpiom", "gpion",
+-- 
+2.25.1
+

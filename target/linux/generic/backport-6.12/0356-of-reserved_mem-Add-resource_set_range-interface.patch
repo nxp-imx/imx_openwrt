@@ -1,0 +1,35 @@
+From 88e82e5c835c7fc8ef81411b5b6c8ebc9ae20e23 Mon Sep 17 00:00:00 2001
+From: Guanhua Gao <guanhua.gao@nxp.com>
+Date: Wed, 15 Jul 2026 15:48:25 +0900
+Subject: [PATCH 5/6] Add resource_set_range interface
+
+Signed-off-by: Guanhua Gao <guanhua.gao@nxp.com>
+---
+ include/linux/ioport.h | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/include/linux/ioport.h b/include/linux/ioport.h
+index 6e9fb667a..d32cfcf8e 100644
+--- a/include/linux/ioport.h
++++ b/include/linux/ioport.h
+@@ -249,6 +249,17 @@ struct resource *lookup_resource(struct resource *root, resource_size_t start);
+ int adjust_resource(struct resource *res, resource_size_t start,
+ 		    resource_size_t size);
+ resource_size_t resource_alignment(struct resource *res);
++static inline void resource_set_size(struct resource *res, resource_size_t size)
++{
++	res->end = res->start + size - 1;
++}
++static inline void resource_set_range(struct resource *res,
++				      resource_size_t start,
++				      resource_size_t size)
++{
++	res->start = start;
++	resource_set_size(res, size);
++}
+ static inline resource_size_t resource_size(const struct resource *res)
+ {
+ 	return res->end - res->start + 1;
+-- 
+2.25.1
+

@@ -1,0 +1,32 @@
+From b37a570ef860f33a443a6fd0f3afee6f8e4b6676 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Tue, 23 Apr 2024 12:35:21 +0200
+Subject: [PATCH 24/54] net: enable fraglist GRO by default
+
+This can significantly improve performance for packet forwarding/bridging
+
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ include/linux/netdev_features.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/netdev_features.h b/include/linux/netdev_features.h
+index e2e3dd919068..8b9e912f6db6 100644
+--- a/include/linux/netdev_features.h
++++ b/include/linux/netdev_features.h
+@@ -235,10 +235,10 @@ static inline int find_next_netdev_feature(u64 feature, unsigned long start)
+ #define NETIF_F_UPPER_DISABLES	NETIF_F_LRO
+ 
+ /* changeable features with no special hardware requirements */
+-#define NETIF_F_SOFT_FEATURES	(NETIF_F_GSO | NETIF_F_GRO)
++#define NETIF_F_SOFT_FEATURES	(NETIF_F_GSO | NETIF_F_GRO | NETIF_F_GRO_FRAGLIST)
+ 
+ /* Changeable features with no special hardware requirements that defaults to off. */
+-#define NETIF_F_SOFT_FEATURES_OFF	(NETIF_F_GRO_FRAGLIST | NETIF_F_GRO_UDP_FWD)
++#define NETIF_F_SOFT_FEATURES_OFF	(NETIF_F_GRO_UDP_FWD)
+ 
+ #define NETIF_F_VLAN_FEATURES	(NETIF_F_HW_VLAN_CTAG_FILTER | \
+ 				 NETIF_F_HW_VLAN_CTAG_RX | \
+-- 
+2.25.1
+

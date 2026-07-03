@@ -1,0 +1,38 @@
+From 3f567c7f234bb93f6fb9d92783ae176449530d13 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Sat, 22 Apr 2023 01:25:39 +0100
+Subject: [PATCH 095/169] net: phy: c45: check validity of 10GbE link-partner
+ advertisement
+
+Only use link-partner advertisement bits for 10GbE modes if they are
+actually valid. Check LOCALOK and REMOTEOK bits and clear 10GbE modes
+unless both of them are set.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ include/linux/mdio.h | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/include/linux/mdio.h b/include/linux/mdio.h
+index c92b7eb3f1ee..eb059b77b0dd 100644
+--- a/include/linux/mdio.h
++++ b/include/linux/mdio.h
+@@ -323,8 +323,14 @@ static inline u32 linkmode_adv_to_mii_10gbt_adv_t(unsigned long *advertising)
+  * to linkmode advertisement settings. Other bits in advertising aren't changed.
+  */
+ static inline void mii_10gbt_stat_mod_linkmode_lpa_t(unsigned long *advertising,
+-						     u32 lpa)
++						     u32 lpa_in)
+ {
++	u32 lpa = lpa_in;
++
++	if (!(lpa & MDIO_AN_10GBT_STAT_REMOK) ||
++	    !(lpa & MDIO_AN_10GBT_STAT_LOCOK))
++		lpa = 0;
++
+ 	linkmode_mod_bit(ETHTOOL_LINK_MODE_2500baseT_Full_BIT,
+ 			 advertising, lpa & MDIO_AN_10GBT_STAT_LP2_5G);
+ 	linkmode_mod_bit(ETHTOOL_LINK_MODE_5000baseT_Full_BIT,
+-- 
+2.25.1
+

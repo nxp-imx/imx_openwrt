@@ -1,0 +1,39 @@
+From e72653e29f6a3810f5559b952bc0ed43355603f7 Mon Sep 17 00:00:00 2001
+From: OpenWrt community <openwrt-devel@lists.openwrt.org>
+Date: Wed, 13 Jul 2022 13:33:30 +0200
+Subject: [PATCH 11/54] Kconfig: add tristate for OID and ASNI string
+
+---
+ init/Kconfig | 2 +-
+ lib/Kconfig  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/init/Kconfig b/init/Kconfig
+index 2df0a0d3b080..c6f3e0220310 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -2062,7 +2062,7 @@ config PADATA
+ 	bool
+ 
+ config ASN1
+-	tristate
++	tristate "ASN1"
+ 	help
+ 	  Build a simple ASN.1 grammar compiler that produces a bytecode output
+ 	  that can be interpreted by the ASN.1 stream decoder and used to
+diff --git a/lib/Kconfig b/lib/Kconfig
+index 1ddb823c425e..c8cc10b1f163 100644
+--- a/lib/Kconfig
++++ b/lib/Kconfig
+@@ -642,7 +642,7 @@ config LIBFDT
+ 	bool
+ 
+ config OID_REGISTRY
+-	tristate
++	tristate "OID"
+ 	help
+ 	  Enable fast lookup object identifier registry.
+ 
+-- 
+2.25.1
+

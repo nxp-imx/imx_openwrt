@@ -1,0 +1,61 @@
+From c81f94c27ef008deddd9b95165f2f48610444ae4 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Tue, 30 Jun 2026 10:40:18 +0900
+Subject: [PATCH 058/169] try auto-mounting ubi0:rootfs in init/do_mounts.c
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ init/do_mounts.c | 30 +++++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/init/do_mounts.c b/init/do_mounts.c
+index 6af29da8889e..cbb4237700aa 100644
+--- a/init/do_mounts.c
++++ b/init/do_mounts.c
+@@ -250,7 +250,30 @@ void __init mount_root_generic(char *name, char *pretty_name, int flags)
+ out:
+ 	put_page(page);
+ }
+- 
++
++#ifdef CONFIG_MTD_ROOTFS_ROOT_DEV
++static int __init mount_ubi_rootfs(void)
++{
++	int flags = MS_SILENT;
++	int err, tried = 0;
++
++	while (tried < 2) {
++		err = do_mount_root("ubi0:rootfs", "ubifs", flags, \
++					root_mount_data);
++		switch (err) {
++			case -EACCES:
++				flags |= MS_RDONLY;
++				tried++;
++				break;
++			default:
++				return err;
++		}
++	}
++
++	return -EINVAL;
++}
++#endif
++
+ #ifdef CONFIG_ROOT_NFS
+ 
+ #define NFSROOT_TIMEOUT_MIN	5
+@@ -387,6 +410,11 @@ static inline void mount_block_root(char *root_device_name)
+ 
+ void __init mount_root(char *root_device_name)
+ {
++#ifdef CONFIG_MTD_ROOTFS_ROOT_DEV
++	if (!mount_ubi_rootfs())
++		return;
++#endif
++
+ 	switch (ROOT_DEV) {
+ 	case Root_NFS:
+ 		mount_nfs_root();
+-- 
+2.25.1
+

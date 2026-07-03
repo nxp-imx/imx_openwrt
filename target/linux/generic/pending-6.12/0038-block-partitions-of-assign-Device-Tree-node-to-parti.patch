@@ -1,0 +1,30 @@
+From 35ea549e4b917e3130f608ac9e725530524dfb64 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Mon, 7 Oct 2024 23:43:32 +0100
+Subject: [PATCH 038/169] block: partitions: of: assign Device Tree node to
+ partition
+
+Assign partition of_node so other drivers are able to identify a
+partition by its Device Tree node.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ block/partitions/of.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/block/partitions/of.c b/block/partitions/of.c
+index 4e760fdffb3f..8b82f9f39686 100644
+--- a/block/partitions/of.c
++++ b/block/partitions/of.c
+@@ -48,7 +48,7 @@ static void add_of_partition(struct parsed_partitions *state, int slot,
+ 	u64 offset = of_read_number(reg, a_cells) / SECTOR_SIZE;
+ 	u64 size = of_read_number(reg + a_cells, s_cells) / SECTOR_SIZE;
+ 
+-	put_partition(state, slot, offset, size);
++	of_put_partition(state, slot, offset, size, np);
+ 
+ 	if (of_property_read_bool(np, "read-only"))
+ 		state->parts[slot].flags |= ADDPART_FLAG_READONLY;
+-- 
+2.25.1
+

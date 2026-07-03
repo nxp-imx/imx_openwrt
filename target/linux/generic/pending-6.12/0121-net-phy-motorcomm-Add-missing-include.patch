@@ -1,0 +1,27 @@
+From 5801c8be9cd1b8549a4152d7977c9e44bbfb55c9 Mon Sep 17 00:00:00 2001
+From: Hauke Mehrtens <hauke@hauke-m.de>
+Date: Sun, 21 May 2023 22:24:56 +0200
+Subject: [PATCH 121/169] net: phy: motorcomm: Add missing include
+
+Directly include linux/bitfield.h which provides FIELD_PREP.
+
+Signed-off-by: Hauke Mehrtens <hauke@hauke-m.de>
+---
+ drivers/net/phy/motorcomm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/phy/motorcomm.c b/drivers/net/phy/motorcomm.c
+index 0e91f5d1a4fd..cb57ebb87237 100644
+--- a/drivers/net/phy/motorcomm.c
++++ b/drivers/net/phy/motorcomm.c
+@@ -6,6 +6,7 @@
+  * Author: Frank <Frank.Sae@motor-comm.com>
+  */
+ 
++#include <linux/bitfield.h>
+ #include <linux/etherdevice.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+-- 
+2.25.1
+

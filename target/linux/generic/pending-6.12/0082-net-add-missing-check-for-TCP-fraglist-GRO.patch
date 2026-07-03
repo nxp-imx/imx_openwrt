@@ -1,0 +1,31 @@
+From 275670ce4f260e8a1fe89edf0a73c44155a816f6 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Tue, 7 May 2024 11:24:50 +0200
+Subject: [PATCH 082/169] net: add missing check for TCP fraglist GRO
+
+It turns out that the existing checks do not guarantee that the skb can be
+pulled up to the GRO offset. When using the usb r8152 network driver with
+GRO fraglist, the BUG() in __skb_pull is often triggered.
+Fix the crash by adding the missing check.
+
+Fixes: 8d95dc474f85 ("net: add code for TCP fraglist GRO")
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ net/ipv4/tcp_offload.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/net/ipv4/tcp_offload.c b/net/ipv4/tcp_offload.c
+index 3a9c5c14c310..eaf92be2d7fe 100644
+--- a/net/ipv4/tcp_offload.c
++++ b/net/ipv4/tcp_offload.c
+@@ -354,6 +354,7 @@ struct sk_buff *tcp_gro_receive(struct list_head *head, struct sk_buff *skb,
+ 		flush |= (__force int)(flags ^ tcp_flag_word(th2));
+ 		flush |= skb->ip_summed != p->ip_summed;
+ 		flush |= skb->csum_level != p->csum_level;
++		flush |= !pskb_may_pull(skb, skb_gro_offset(skb));
+ 		flush |= NAPI_GRO_CB(p)->count >= 64;
+ 		skb_set_network_header(skb, skb_gro_receive_network_offset(skb));
+ 
+-- 
+2.25.1
+

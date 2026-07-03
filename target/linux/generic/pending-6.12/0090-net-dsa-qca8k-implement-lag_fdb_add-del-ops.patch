@@ -1,0 +1,95 @@
+From 14dfbf1606094f3a7beb0a80339d5e82e8586be5 Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Tue, 4 Jul 2023 22:50:12 +0200
+Subject: [PATCH 090/169] net: dsa: qca8k: implement lag_fdb_add/del ops
+
+Implement lag_fdb_add/del ops to correctly support using LAG interface.
+Qca8k switch supports declaring fdb entry for link aggregation by simply
+setting the DES_PORT bits to all the LAG member.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+ drivers/net/dsa/qca/qca8k-8xxx.c   |  2 ++
+ drivers/net/dsa/qca/qca8k-common.c | 36 ++++++++++++++++++++++++++++++
+ drivers/net/dsa/qca/qca8k.h        |  6 +++++
+ 3 files changed, 44 insertions(+)
+
+diff --git a/drivers/net/dsa/qca/qca8k-8xxx.c b/drivers/net/dsa/qca/qca8k-8xxx.c
+index 59b4a7240b58..de3d1227d1ae 100644
+--- a/drivers/net/dsa/qca/qca8k-8xxx.c
++++ b/drivers/net/dsa/qca/qca8k-8xxx.c
+@@ -2031,6 +2031,8 @@ static const struct dsa_switch_ops qca8k_switch_ops = {
+ 	.port_fdb_add		= qca8k_port_fdb_add,
+ 	.port_fdb_del		= qca8k_port_fdb_del,
+ 	.port_fdb_dump		= qca8k_port_fdb_dump,
++	.lag_fdb_add		= qca8k_lag_fdb_add,
++	.lag_fdb_del		= qca8k_lag_fdb_del,
+ 	.port_mdb_add		= qca8k_port_mdb_add,
+ 	.port_mdb_del		= qca8k_port_mdb_del,
+ 	.port_mirror_add	= qca8k_port_mirror_add,
+diff --git a/drivers/net/dsa/qca/qca8k-common.c b/drivers/net/dsa/qca/qca8k-common.c
+index 560c74c4ac3d..2194f706aed5 100644
+--- a/drivers/net/dsa/qca/qca8k-common.c
++++ b/drivers/net/dsa/qca/qca8k-common.c
+@@ -1234,6 +1234,42 @@ int qca8k_port_lag_leave(struct dsa_switch *ds, int port,
+ 	return qca8k_lag_refresh_portmap(ds, port, lag, true);
+ }
+ 
++int qca8k_lag_fdb_add(struct dsa_switch *ds, struct dsa_lag lag,
++		      const unsigned char *addr, u16 vid,
++		      struct dsa_db db)
++{
++	struct qca8k_priv *priv = (struct qca8k_priv *)ds->priv;
++	struct dsa_port *dp;
++	u16 port_mask = 0;
++
++	/* Set the vid to the port vlan id if no vid is set */
++	if (!vid)
++		vid = QCA8K_PORT_VID_DEF;
++
++	dsa_lag_foreach_port(dp, ds->dst, &lag)
++		port_mask |= BIT(dp->index);
++
++	return qca8k_port_fdb_insert(priv, addr, port_mask, vid);
++}
++
++int qca8k_lag_fdb_del(struct dsa_switch *ds, struct dsa_lag lag,
++		      const unsigned char *addr, u16 vid,
++		      struct dsa_db db)
++{
++	struct qca8k_priv *priv = (struct qca8k_priv *)ds->priv;
++	struct dsa_port *dp;
++	u16 port_mask = 0;
++
++	/* Set the vid to the port vlan id if no vid is set */
++	if (!vid)
++		vid = QCA8K_PORT_VID_DEF;
++
++	dsa_lag_foreach_port(dp, ds->dst, &lag)
++	port_mask |= BIT(dp->index);
++
++	return qca8k_fdb_del(priv, addr, port_mask, vid);
++}
++
+ int qca8k_read_switch_id(struct qca8k_priv *priv)
+ {
+ 	u32 val;
+diff --git a/drivers/net/dsa/qca/qca8k.h b/drivers/net/dsa/qca/qca8k.h
+index 3664a2e2f1f6..894bd1f1e123 100644
+--- a/drivers/net/dsa/qca/qca8k.h
++++ b/drivers/net/dsa/qca/qca8k.h
+@@ -592,5 +592,11 @@ int qca8k_port_lag_join(struct dsa_switch *ds, int port, struct dsa_lag lag,
+ 			struct netlink_ext_ack *extack);
+ int qca8k_port_lag_leave(struct dsa_switch *ds, int port,
+ 			 struct dsa_lag lag);
++int qca8k_lag_fdb_add(struct dsa_switch *ds, struct dsa_lag lag,
++		      const unsigned char *addr, u16 vid,
++		      struct dsa_db db);
++int qca8k_lag_fdb_del(struct dsa_switch *ds, struct dsa_lag lag,
++		      const unsigned char *addr, u16 vid,
++		      struct dsa_db db);
+ 
+ #endif /* __QCA8K_H */
+-- 
+2.25.1
+

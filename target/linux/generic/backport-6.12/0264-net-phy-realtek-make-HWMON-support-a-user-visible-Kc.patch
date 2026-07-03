@@ -1,0 +1,40 @@
+From 47bc7ae6f2e0ce5dc6645971edfca68a67189e10 Mon Sep 17 00:00:00 2001
+From: Heiner Kallweit <hkallweit1@gmail.com>
+Date: Mon, 3 Feb 2025 21:33:39 +0100
+Subject: [PATCH 264/351] net: phy: realtek: make HWMON support a user-visible
+ Kconfig symbol
+
+Make config symbol REALTEK_PHY_HWMON user-visible, so that users can
+remove support if not needed.
+
+Suggested-by: Geert Uytterhoeven <geert@linux-m68k.org>
+Signed-off-by: Heiner Kallweit <hkallweit1@gmail.com>
+Reviewed-by: Simon Horman <horms@kernel.org>
+Link: https://patch.msgid.link/3466ee92-166a-4b0f-9ae7-42b9e046f333@gmail.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/phy/realtek/Kconfig | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/phy/realtek/Kconfig b/drivers/net/phy/realtek/Kconfig
+index 31935f147d87..b05c2a1e9024 100644
+--- a/drivers/net/phy/realtek/Kconfig
++++ b/drivers/net/phy/realtek/Kconfig
+@@ -4,8 +4,12 @@ config REALTEK_PHY
+ 	help
+ 	  Currently supports RTL821x/RTL822x and fast ethernet PHYs
+ 
++if REALTEK_PHY
++
+ config REALTEK_PHY_HWMON
+-	def_bool REALTEK_PHY && HWMON
+-	depends on !(REALTEK_PHY=y && HWMON=m)
++	bool "HWMON support for Realtek PHYs"
++	depends on HWMON && !(REALTEK_PHY=y && HWMON=m)
+ 	help
+ 	  Optional hwmon support for the temperature sensor
++
++endif # REALTEK_PHY
+-- 
+2.25.1
+

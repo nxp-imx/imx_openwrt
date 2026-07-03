@@ -1,0 +1,34 @@
+From bb10dac1acec3606b57076aacd1887a5339ff5d2 Mon Sep 17 00:00:00 2001
+From: Felix Fietkau <nbd@nbd.name>
+Date: Tue, 30 Jun 2026 12:37:18 +0900
+Subject: [PATCH 09/54] hack: net: remove bogus netfilter dependencies
+
+lede-commit: 589d2a377dee27d206fc3725325309cf649e4df6
+Signed-off-by: Felix Fietkau <nbd@nbd.name>
+---
+ net/netfilter/Kconfig | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/net/netfilter/Kconfig b/net/netfilter/Kconfig
+index df2dc21304ef..f7cde787a680 100644
+--- a/net/netfilter/Kconfig
++++ b/net/netfilter/Kconfig
+@@ -259,7 +259,6 @@ config NF_CONNTRACK_FTP
+ 
+ config NF_CONNTRACK_H323
+ 	tristate "H.323 protocol support"
+-	depends on IPV6 || IPV6=n
+ 	depends on NETFILTER_ADVANCED
+ 	help
+ 	  H.323 is a VoIP signalling protocol from ITU-T. As one of the most
+@@ -1120,7 +1119,6 @@ config NETFILTER_XT_TARGET_SECMARK
+ 
+ config NETFILTER_XT_TARGET_TCPMSS
+ 	tristate '"TCPMSS" target support'
+-	depends on IPV6 || IPV6=n
+ 	default m if NETFILTER_ADVANCED=n
+ 	help
+ 	  This option adds a `TCPMSS' target, which allows you to alter the
+-- 
+2.25.1
+

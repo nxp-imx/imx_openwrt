@@ -1,0 +1,81 @@
+From 81aa9012427a3ed2b662eac7f7b44554f98da675 Mon Sep 17 00:00:00 2001
+From: Guanhua Gao <guanhua.gao@nxp.com>
+Date: Wed, 15 Jul 2026 15:01:50 +0900
+Subject: [PATCH] Fix phylink compiling errors
+
+Signed-off-by: Guanhua Gao <guanhua.gao@nxp.com>
+
+diff --git a/drivers/net/phy/phylink.c b/drivers/net/phy/phylink.c
+index 89b93ec2d299..da75784c148f 100644
+--- a/drivers/net/phy/phylink.c
++++ b/drivers/net/phy/phylink.c
+@@ -1342,12 +1342,19 @@ static void phylink_pcs_neg_mode(struct phylink *pl, struct phylink_pcs *pcs,
+ 	unsigned int neg_mode, mode;
+ 	enum inband_type type;
+ 
++	mode = pl->req_link_an_mode;
++
+ 	if (phylink_autoneg_c73(mode)) {
+ 		if (linkmode_test_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
+-				      advertising))
+-			return PHYLINK_PCS_NEG_C73_ENABLED;
++				      advertising)) {
++			pl->pcs_neg_mode = PHYLINK_PCS_NEG_C73_ENABLED;
++			pl->act_link_an_mode = mode;
++			return;
++		}
+ 
+-		return PHYLINK_PCS_NEG_C73_DISABLED;
++		pl->pcs_neg_mode = PHYLINK_PCS_NEG_C73_DISABLED;
++		pl->act_link_an_mode = mode;
++		return;
+ 	}
+ 
+ 	type = phylink_get_inband_type(interface);
+@@ -1357,8 +1364,6 @@ static void phylink_pcs_neg_mode(struct phylink *pl, struct phylink_pcs *pcs,
+ 		return;
+ 	}
+ 
+-	mode = pl->req_link_an_mode;
+-
+ 	pl->phy_ib_mode = 0;
+ 
+ 	if (pcs)
+@@ -1871,7 +1876,6 @@ static void phylink_resolve(struct work_struct *w)
+ 				link_state.speed = pl->phy_state.speed;
+ 				link_state.duplex = pl->phy_state.duplex;
+ 			}
+-			break;
+ 
+ 			/* If we have a PHY, we need to update with the PHY
+ 			 * flow control bits.
+@@ -2296,7 +2300,7 @@ static int phylink_bringup_phy(struct phylink *pl, struct phy_device *phy,
+ 		return ret;
+ 	}
+ 
+-	use_inband = phylink_autoneg_inband(pl->cur_link_an_mode);
++	use_inband = phylink_autoneg_inband(pl->act_link_an_mode);
+ 
+ 	ret = phy_config_inband_aneg(phy, use_inband);
+ 	if (ret && ret != -EOPNOTSUPP) {
+@@ -2416,7 +2420,7 @@ int phylink_connect_phy(struct phylink *pl, struct phy_device *phy)
+ {
+ 	int ret;
+ 
+-	pl->cur_link_an_mode = phylink_fixup_inband_aneg(pl, phy,
++	pl->act_link_an_mode = phylink_fixup_inband_aneg(pl, phy,
+ 							 pl->cfg_link_an_mode);
+ 
+ 	/* Use PHY device/driver interface */
+@@ -2504,7 +2508,7 @@ int phylink_fwnode_phy_connect(struct phylink *pl,
+ 	if (pl->config->mac_requires_rxc)
+ 		flags |= PHY_F_RXC_ALWAYS_ON;
+ 
+-	pl->cur_link_an_mode = phylink_fixup_inband_aneg(pl, phy_dev,
++	pl->act_link_an_mode = phylink_fixup_inband_aneg(pl, phy_dev,
+ 							 pl->cfg_link_an_mode);
+ 
+ 	ret = phy_attach_direct(pl->netdev, phy_dev, flags,
+-- 
+2.25.1
+

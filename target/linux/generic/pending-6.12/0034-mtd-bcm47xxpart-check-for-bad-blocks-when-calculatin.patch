@@ -1,0 +1,81 @@
+From 2d6e8ac9b56d1c76518a59cfeef1170ec56d2da1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Rafa=C5=82=20Mi=C5=82ecki?= <zajec5@gmail.com>
+Date: Tue, 30 Jun 2026 10:37:55 +0900
+Subject: [PATCH 034/169] mtd: bcm47xxpart: check for bad blocks when
+ calculating offsets
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Rafał Miłecki <zajec5@gmail.com>
+---
+ drivers/mtd/parsers/parser_trx.c | 35 ++++++++++++++++++++++++++++----
+ 1 file changed, 31 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mtd/parsers/parser_trx.c b/drivers/mtd/parsers/parser_trx.c
+index 4814cf218e17..a1aed25d433f 100644
+--- a/drivers/mtd/parsers/parser_trx.c
++++ b/drivers/mtd/parsers/parser_trx.c
+@@ -25,6 +25,33 @@ struct trx_header {
+ 	uint32_t offset[3];
+ } __packed;
+ 
++/*
++ * Calculate real end offset (address) for a given amount of data. It checks
++ * all blocks skipping bad ones.
++ */
++static size_t parser_trx_real_offset(struct mtd_info *mtd, size_t bytes)
++{
++	size_t real_offset = 0;
++
++	if (mtd_block_isbad(mtd, real_offset))
++		pr_warn("Base offset shouldn't be at bad block");
++
++	while (bytes >= mtd->erasesize) {
++		bytes -= mtd->erasesize;
++		real_offset += mtd->erasesize;
++		while (mtd_block_isbad(mtd, real_offset)) {
++			real_offset += mtd->erasesize;
++
++			if (real_offset >= mtd->size)
++				return real_offset - mtd->erasesize;
++		}
++	}
++
++	real_offset += bytes;
++
++	return real_offset;
++}
++
+ static const char *parser_trx_data_part_name(struct mtd_info *master,
+ 					     size_t offset)
+ {
+@@ -86,21 +113,21 @@ static int parser_trx_parse(struct mtd_info *mtd,
+ 	if (trx.offset[2]) {
+ 		part = &parts[curr_part++];
+ 		part->name = "loader";
+-		part->offset = trx.offset[i];
++		part->offset = parser_trx_real_offset(mtd, trx.offset[i]);
+ 		i++;
+ 	}
+ 
+ 	if (trx.offset[i]) {
+ 		part = &parts[curr_part++];
+ 		part->name = "linux";
+-		part->offset = trx.offset[i];
++		part->offset = parser_trx_real_offset(mtd, trx.offset[i]);
+ 		i++;
+ 	}
+ 
+ 	if (trx.offset[i]) {
+ 		part = &parts[curr_part++];
+-		part->name = parser_trx_data_part_name(mtd, trx.offset[i]);
+-		part->offset = trx.offset[i];
++		part->offset = parser_trx_real_offset(mtd, trx.offset[i]);
++		part->name = parser_trx_data_part_name(mtd, part->offset);
+ 		i++;
+ 	}
+ 
+-- 
+2.25.1
+
