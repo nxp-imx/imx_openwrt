@@ -3,6 +3,8 @@
 # Copyright (C) 2024-2025 OpenWrt.org
 
 IMX_SD_KERNEL_PARTSIZE = 64
+DEVICE_VARS += IMX_UBOOT_DTB BOOT_OFFSET
+
 IMX_SD_KERNELPART_OFFSET = 16
 IMX_SD_ROOTFSPART_OFFSET = 56
 IMX_SD_ROOTFS_PARTSIZE = 100
@@ -43,7 +45,13 @@ endef
 
 define Build/imx-create-flash
 	# Combile firmware + bl31 + uboot to flash.bin
-	cd $(STAGING_DIR_IMAGE)/imx-mkimage && $(MAKE) SOC=$(1) $(2)
+	# imx-mkimage's flash_evk target (i.MX 8M) defaults to <plat>-evk.dtb.
+	# Boards whose u-boot DTB differs (e.g. the FRDM boards) set
+	# IMX_UBOOT_DTB to override it via the dtbs= variable. The override is
+	# only meaningful for flash_evk; other boot types (e.g. the i.MX 9
+	# flash_singleboot flow) embed the DTB in u-boot.bin and ignore dtbs=.
+	cd $(STAGING_DIR_IMAGE)/imx-mkimage && $(MAKE) SOC=$(1) $(2) \
+		$(if $(filter flash_evk,$(2)),$(if $(IMX_UBOOT_DTB),dtbs=$(IMX_UBOOT_DTB)))
 endef
 
 define Build/imx-append-env
@@ -51,17 +59,12 @@ define Build/imx-append-env
 	dd if=$(STAGING_DIR_IMAGE)/$(1) of="$@" bs=1M seek=7 conv=notrunc
 endef
 
-SOC_OFFSET= \
-	$(shell if [[ $(CONFIG_TARGET_PROFILE) =~ imx8mp || \
-				$(CONFIG_TARGET_PROFILE) =~ imx8mm ]] ; then \
-		echo 33; \
-	else \
-		echo 32; \
-	fi; )
-
 define Build/imx-append-boot
 	# Append the uboot, firmware etc.
-	dd if=$(STAGING_DIR_IMAGE)/imx-mkimage/$(1)/flash.bin of="$@" bs=1K seek=$(SOC_OFFSET) conv=notrunc
+	# The bootloader offset on the SD card depends on the SoC (see the i.MX
+	# Linux User's Guide UG10163): 33 KB for i.MX 8M Quad/Mini, 32 KB for
+	# i.MX 8M Plus/Nano and i.MX 9. Each device sets it via BOOT_OFFSET.
+	dd if=$(STAGING_DIR_IMAGE)/imx-mkimage/$(1)/flash.bin of="$@" bs=1K seek=$(BOOT_OFFSET) conv=notrunc
 endef
 
 define Build/imx-append-kernel
@@ -110,6 +113,33 @@ define Device/imx8mplus
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx8mplus
+
+define Device/imx8mpfrdm
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := IMX8MPLUS
+  DEVICE_VARIANT := FRDM SD Card Boot
+  BOARD_NAME := iMX8MP
+  SOC_TYPE := iMX8M
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_evk
+  ENV_NAME:=imx8mpfrdm-sdboot
+  IMX_UBOOT_DTB := imx8mp-frdm.dtb
+  DEVICE_PACKAGES += \
+	atf-imx8mp \
+	firmware-imx \
+	imx-mkimage \
+	u-boot-imx8mpfrdm
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-frdm.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX8M | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx8mpfrdm
 
 define Device/imx8mmini
   DEVICE_VENDOR := NXP

@@ -80,6 +80,17 @@ define U-Boot/imx8mp
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
+define U-Boot/imx8mpfrdm
+  NAME:=imx8mplus frdm board
+  BUILD_TARGET:=imx
+  UBOOT_CONFIG:=imx8mp_frdm
+  ENV_NAME:=imx8mpfrdm-sdboot
+  DTB_NAME:=imx8mp-frdm.dtb
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX8M
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
+endef
+
 define U-Boot/imx8mm
   NAME:=imx8mmini lpddr4 board
   BUILD_TARGET:=imx
@@ -188,6 +199,7 @@ UBOOT_TARGETS := \
 	wandboard \
 	imx6ull \
 	imx8mp \
+	imx8mpfrdm \
 	imx8mm \
 	imx8mn \
 	imx8mq \
@@ -204,8 +216,18 @@ ifeq ($(SUBTARGET),cortexa53)
 	$(CP) $(PKG_BUILD_DIR)/u-boot-nodtb.bin \
 		$(PKG_BUILD_DIR)/u-boot.bin \
 		$(PKG_BUILD_DIR)/spl/u-boot-spl.bin \
-		$(PKG_BUILD_DIR)/dts/upstream/src/arm64/freescale/$(DTB_NAME) \
 		$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR)
+	# Boards with CONFIG_OF_UPSTREAM (e.g. the EVKs) build the device tree
+	# under dts/upstream/src/arm64/freescale, while NXP-specific boards
+	# (e.g. the FRDM boards) build it under arch/arm/dts. Copy from
+	# whichever location the DTB was produced in.
+	if [ -f $(PKG_BUILD_DIR)/dts/upstream/src/arm64/freescale/$(DTB_NAME) ]; then \
+		$(CP) $(PKG_BUILD_DIR)/dts/upstream/src/arm64/freescale/$(DTB_NAME) \
+			$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR); \
+	else \
+		$(CP) $(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
+			$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR); \
+	fi
 	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
 		$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR)/mkimage_uboot
 endif

@@ -9,6 +9,7 @@ users can bring up the board without difficulty.
 ----------------------------
 * ARMv8 cortexa53 64-bit
   IMX8MPlus_LPDDR4	(SD boot)
+  IMX8MPlus_FRDM	(SD boot)
   IMX8MMini_LPDDR4	(SD boot)
   IMX8MNano_LPDDR4	(SD boot)
   IMX8MQuad_LPDDR4	(SD boot)
