@@ -72,6 +72,11 @@ define Package/atf-imx91frdm
   VARIANT:=imx91
 endef
 
+define Package/atf-imx91frdm-imx91s
+  $(call Package/atf-imx9/Default)
+  VARIANT:=imx91
+endef
+
 define Package/atf-imx91qsb
   $(call Package/atf-imx9/Default)
   VARIANT:=imx91
@@ -114,6 +119,7 @@ $(eval $(call BuildPackage,atf-imx8mn))
 $(eval $(call BuildPackage,atf-imx8mq))
 $(eval $(call BuildPackage,atf-imx91evk))
 $(eval $(call BuildPackage,atf-imx91frdm))
+$(eval $(call BuildPackage,atf-imx91frdm-imx91s))
 $(eval $(call BuildPackage,atf-imx91qsb))
 $(eval $(call BuildPackage,atf-imx93evk))
 $(eval $(call BuildPackage,atf-imx93frdm))

@@ -269,6 +269,33 @@ define Device/imx91frdm
 endef
 TARGET_DEVICES += imx91frdm
 
+define Device/imx91frdm-imx91s
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx91frdm
+  DEVICE_VARIANT := IMX91S SD Boot
+  BOARD_NAME := iMX91
+  SOC_TYPE := iMX91
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx91frdm-imx91s-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx91frdm-imx91s \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx91frdm-imx91s
+  DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm-imx91s*.dts)))
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX91 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx91frdm-imx91s
+
 define Device/imx91qsb
   $(call Device/Default)
   DEVICE_VENDOR := NXP

@@ -19,6 +19,7 @@ users can bring up the board without difficulty.
   IMX91EVK		(SD boot)
   IMX91QSB		(SD boot)
   IMX91FRDM		(SD boot)
+  IMX91FRDM_IMX91S	(SD boot)
 
 * ARM cortexa7 and cortexa9
   IMX6ULL			(SD boot)

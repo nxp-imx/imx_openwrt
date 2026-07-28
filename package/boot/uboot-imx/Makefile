@@ -148,6 +148,17 @@ define U-Boot/imx91frdm
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
+define U-Boot/imx91frdm-imx91s
+  BUILD_DEVICES:=imx91
+  NAME:=imx91s frdm board
+  UBOOT_CONFIG:=imx91_11x11_frdm_imx91s
+  ENV_NAME:=imx91frdm-imx91s-sdboot
+  DTB_NAME:=imx91-11x11-frdm-imx91s.dtb
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX91
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
+endef
+
 define U-Boot/imx91qsb
   BUILD_DEVICES:=imx91
   NAME:=imx91qsb board
@@ -205,6 +216,7 @@ UBOOT_TARGETS := \
 	imx8mq \
 	imx91evk \
 	imx91frdm \
+	imx91frdm-imx91s \
 	imx91qsb \
 	imx93evk \
 	imx93frdm \
