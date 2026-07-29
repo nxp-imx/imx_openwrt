@@ -3,7 +3,7 @@
 # Copyright (C) 2024-2025 OpenWrt.org
 
 IMX_SD_KERNEL_PARTSIZE = 64
-DEVICE_VARS += IMX_UBOOT_DTB BOOT_OFFSET
+DEVICE_VARS += IMX_UBOOT_DTB BOOT_OFFSET IMX_MKIMAGE_EXTRA IMX_OEI_BOARD
 
 IMX_SD_KERNELPART_OFFSET = 16
 IMX_SD_ROOTFSPART_OFFSET = 56
@@ -52,6 +52,29 @@ define Build/imx-create-flash
 	# flash_singleboot flow) embed the DTB in u-boot.bin and ignore dtbs=.
 	cd $(STAGING_DIR_IMAGE)/imx-mkimage && $(MAKE) SOC=$(1) $(2) \
 		$(if $(filter flash_evk,$(2)),$(if $(IMX_UBOOT_DTB),dtbs=$(IMX_UBOOT_DTB)))
+endef
+
+define Build/imx95-select-oei
+	# i.MX95 flash_a55 consumes a single oei-m33-ddr.bin from the iMX95 dir.
+	# The imx-oei package installs a per-board variant (oei-m33-ddr-<board>.bin);
+	# copy the one that matches this device into place before building flash.bin.
+	$(CP) $(STAGING_DIR_IMAGE)/imx-mkimage/iMX95/oei-m33-ddr-$(IMX_OEI_BOARD).bin \
+		$(STAGING_DIR_IMAGE)/imx-mkimage/iMX95/oei-m33-ddr.bin
+endef
+
+define Build/imx95-create-flash
+	# Build i.MX95 flash.bin using imx-mkimage's flash_a55 target (ELE +
+	# System Manager m33_image + OEI DDR firmware + ATF container + SPL +
+	# U-Boot). The M7 demo image is intentionally omitted (flash_a55 instead
+	# of flash_all) as it is not needed to boot Linux on the A55 cores.
+	# Per-variant flags (REV/OEI/LPDDR_TYPE) come from IMX_MKIMAGE_EXTRA.
+	rm -rf $@.xxdbin && mkdir -p $@.xxdbin
+	real_xxd="$$(PATH=/usr/bin:/bin:$$PATH command -v xxd)"; \
+		[ -n "$$real_xxd" ] || { echo "real xxd (vim-common) not found; needed for i.MX95 fw-header"; exit 1; }; \
+		ln -sf "$$real_xxd" $@.xxdbin/xxd
+	cd $(STAGING_DIR_IMAGE)/imx-mkimage && export PATH="$@.xxdbin:$$PATH" && \
+		$(MAKE) SOC=iMX95 $(IMX_MKIMAGE_EXTRA) flash_a55
+	rm -rf $@.xxdbin
 endef
 
 define Build/imx-append-env
@@ -403,3 +426,127 @@ define Device/imx93qsb
 	imx-append-env $$(ENV_NAME)-uboot-env.bin
 endef
 TARGET_DEVICES += imx93qsb
+
+define Device/imx95_15x15_evk
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx95evk
+  DEVICE_VARIANT := 15x15 SD Boot
+  BOARD_NAME := iMX95
+  SOC_TYPE := iMX95
+  BOOT_OFFSET := 32
+  ENV_NAME:=imx95_15x15_evk-sdboot
+  IMX_OEI_BOARD := mx95lp4x-15
+  IMX_MKIMAGE_EXTRA := REV=B0 OEI=YES LPDDR_TYPE=lpddr4x
+  DEVICE_PACKAGES += \
+	atf-imx95_15x15_evk \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	imx-oei \
+	imx-sm \
+	u-boot-imx95_15x15_evk
+  DEVICE_DTS := imx95-15x15-evk
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx95-select-oei | \
+	imx95-create-flash | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX95 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx95_15x15_evk
+
+define Device/imx95_19x19_evk
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx95evk
+  DEVICE_VARIANT := 19x19 SD Boot
+  BOARD_NAME := iMX95
+  SOC_TYPE := iMX95
+  BOOT_OFFSET := 32
+  ENV_NAME:=imx95_19x19_evk-sdboot
+  IMX_OEI_BOARD := mx95lp5
+  IMX_MKIMAGE_EXTRA := REV=B0 OEI=YES
+  DEVICE_PACKAGES += \
+	atf-imx95_19x19_evk \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	imx-oei \
+	imx-sm \
+	u-boot-imx95_19x19_evk
+  DEVICE_DTS := imx95-19x19-evk
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx95-select-oei | \
+	imx95-create-flash | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX95 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx95_19x19_evk
+
+define Device/imx95frdm
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx95frdm
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX95
+  SOC_TYPE := iMX95
+  BOOT_OFFSET := 32
+  ENV_NAME:=imx95frdm-sdboot
+  IMX_OEI_BOARD := mx95lp4x-15
+  IMX_MKIMAGE_EXTRA := REV=B0 OEI=YES LPDDR_TYPE=lpddr4x
+  DEVICE_PACKAGES += \
+	atf-imx95frdm \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	imx-oei \
+	imx-sm \
+	u-boot-imx95frdm
+  DEVICE_DTS := imx95-15x15-frdm
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx95-select-oei | \
+	imx95-create-flash | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX95 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx95frdm
+
+define Device/imx95frdmpro
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx95frdmpro
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX95
+  SOC_TYPE := iMX95
+  BOOT_OFFSET := 32
+  ENV_NAME:=imx95frdmpro-sdboot
+  IMX_OEI_BOARD := mx95lp5
+  IMX_MKIMAGE_EXTRA := REV=B0 OEI=YES
+  DEVICE_PACKAGES += \
+	atf-imx95frdmpro \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	imx-oei \
+	imx-sm \
+	u-boot-imx95frdmpro
+  DEVICE_DTS := imx95-19x19-frdm-pro
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx95-select-oei | \
+	imx95-create-flash | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX95 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx95frdmpro

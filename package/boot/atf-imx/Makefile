@@ -97,6 +97,30 @@ define Package/atf-imx93qsb
   VARIANT:=imx93
 endef
 
+define Package/atf-imx95_15x15_evk
+  $(call Package/atf-imx9/Default)
+  TITLE:=NXP i.MX95 SD Boot Trusted Firmware
+  VARIANT:=imx95
+endef
+
+define Package/atf-imx95_19x19_evk
+  $(call Package/atf-imx9/Default)
+  TITLE:=NXP i.MX95 SD Boot Trusted Firmware
+  VARIANT:=imx95
+endef
+
+define Package/atf-imx95frdm
+  $(call Package/atf-imx9/Default)
+  TITLE:=NXP i.MX95 SD Boot Trusted Firmware
+  VARIANT:=imx95
+endef
+
+define Package/atf-imx95frdmpro
+  $(call Package/atf-imx9/Default)
+  TITLE:=NXP i.MX95 SD Boot Trusted Firmware
+  VARIANT:=imx95
+endef
+
 MKIMG_PLAT=$(shell if [[ ${BUILD_VARIANT} =~ imx8 ]]; then echo iMX8M; \
          else echo ${BUILD_VARIANT} | sed 's/mx/MX/'; fi )
 
@@ -124,3 +148,7 @@ $(eval $(call BuildPackage,atf-imx91qsb))
 $(eval $(call BuildPackage,atf-imx93evk))
 $(eval $(call BuildPackage,atf-imx93frdm))
 $(eval $(call BuildPackage,atf-imx93qsb))
+$(eval $(call BuildPackage,atf-imx95_15x15_evk))
+$(eval $(call BuildPackage,atf-imx95_19x19_evk))
+$(eval $(call BuildPackage,atf-imx95frdm))
+$(eval $(call BuildPackage,atf-imx95frdmpro))

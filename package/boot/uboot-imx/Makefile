@@ -203,6 +203,46 @@ define U-Boot/imx93qsb
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
+define U-Boot/imx95_15x15_evk
+  BUILD_DEVICES:=imx95
+  NAME:=imx95 15x15 evk board
+  UBOOT_CONFIG:=imx95_15x15_evk
+  ENV_NAME:=imx95_15x15_evk-sdboot
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX95
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage +imx-sm +imx-oei
+endef
+
+define U-Boot/imx95_19x19_evk
+  BUILD_DEVICES:=imx95
+  NAME:=imx95 19x19 evk board
+  UBOOT_CONFIG:=imx95_19x19_evk
+  ENV_NAME:=imx95_19x19_evk-sdboot
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX95
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage +imx-sm +imx-oei
+endef
+
+define U-Boot/imx95frdm
+  BUILD_DEVICES:=imx95
+  NAME:=imx95 frdm board
+  UBOOT_CONFIG:=imx95_15x15_frdm
+  ENV_NAME:=imx95frdm-sdboot
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX95
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage +imx-sm +imx-oei
+endef
+
+define U-Boot/imx95frdmpro
+  BUILD_DEVICES:=imx95
+  NAME:=imx95 frdm-pro board
+  UBOOT_CONFIG:=imx95_19x19_frdm_pro
+  ENV_NAME:=imx95frdmpro-sdboot
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX95
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage +imx-sm +imx-oei
+endef
+
 UBOOT_TARGETS := \
 	apalis_imx6 \
 	mx6cuboxi \
@@ -220,7 +260,11 @@ UBOOT_TARGETS := \
 	imx91qsb \
 	imx93evk \
 	imx93frdm \
-	imx93qsb
+	imx93qsb \
+	imx95_15x15_evk \
+	imx95_19x19_evk \
+	imx95frdm \
+	imx95frdmpro
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
@@ -233,6 +277,9 @@ ifeq ($(SUBTARGET),cortexa53)
 	# under dts/upstream/src/arm64/freescale, while NXP-specific boards
 	# (e.g. the FRDM boards) build it under arch/arm/dts. Copy from
 	# whichever location the DTB was produced in.
+	# i.MX95 boards embed the DTB in the boot container (binman) and set an
+	# empty DTB_NAME, so the copy is skipped for them.
+ifneq ($(DTB_NAME),)
 	if [ -f $(PKG_BUILD_DIR)/dts/upstream/src/arm64/freescale/$(DTB_NAME) ]; then \
 		$(CP) $(PKG_BUILD_DIR)/dts/upstream/src/arm64/freescale/$(DTB_NAME) \
 			$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR); \
@@ -240,6 +287,7 @@ ifeq ($(SUBTARGET),cortexa53)
 		$(CP) $(PKG_BUILD_DIR)/arch/arm/dts/$(DTB_NAME) \
 			$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR); \
 	fi
+endif
 	$(CP) $(PKG_BUILD_DIR)/tools/mkimage \
 		$(STAGING_DIR_IMAGE)/imx-mkimage/$(IMG_DIR)/mkimage_uboot
 endif
