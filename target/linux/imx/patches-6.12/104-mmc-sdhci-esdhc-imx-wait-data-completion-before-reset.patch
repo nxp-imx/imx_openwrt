@@ -1,0 +1,68 @@
+From 8ceb70c9f970bfbdceb1e51578850a60b9de2236 Mon Sep 17 00:00:00 2001
+From: Luke Wang <ziniu.wang_1@nxp.com>
+Date: Thu, 11 Dec 2025 15:56:03 +0800
+Subject: [PATCH] mmc: sdhci-esdhc-imx: wait for data transfer completion before
+ reset
+
+On IMX7ULP platforms, certain SD cards (e.g. Kingston Canvas Go! Plus)
+cause system hangs and reboots during manual tuning. These cards exhibit
+large gaps (~16us) between tuning command response and data transmission.
+When cmd CRC errors occur during tuning, the code assumes data errors even
+tuning data hasn't been fully received and then reset host data circuit.
+
+Per IMX7ULP reference manual, reset operations (RESET_DATA/ALL) need to
+make sure no active data transfers. Previously, resetting while data was
+in-flight would clear data circuit, including ADMA/SDMA address, causing
+data to be transmitted to incorrect memory address. This patch adds
+polling for data transfer completion before executing resets.
+
+Backported from NXP lf-6.18.20-2.0.0 commit f424381e9711
+(cherry picked from mainline commit 8ceb70c9f970).
+
+This also fixes intermittent "error -110 whilst initialising SDIO card"
+on the i.MX93W IW610 (usdhc3) and "tried to HW reset card, got error
+-110" / SQUASHFS read errors on the SD card (usdhc2), both caused by the
+same reset-while-data-in-flight race.
+
+Signed-off-by: Luke Wang <ziniu.wang_1@nxp.com>
+Reviewed-by: Bough Chen <haibo.chen@nxp.com>
+Acked-by: Adrian Hunter <adrian.hunter@intel.com>
+Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+---
+ drivers/mmc/host/sdhci-esdhc-imx.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+--- a/drivers/mmc/host/sdhci-esdhc-imx.c
++++ b/drivers/mmc/host/sdhci-esdhc-imx.c
+@@ -220,6 +220,8 @@
+ #define ESDHC_FLAG_DUMMY_PAD		BIT(20)
+ 
+ #define ESDHC_AUTO_TUNING_WINDOW	3
++/* 100ms timeout for data inhibit */
++#define ESDHC_DATA_INHIBIT_WAIT_US	100000
+ 
+ enum wp_types {
+ 	ESDHC_WP_NONE,		/* no WP, neither controller nor gpio */
+@@ -1483,6 +1485,22 @@ static void esdhc_set_uhs_signaling(stru
+ 
+ static void esdhc_reset(struct sdhci_host *host, u8 mask)
+ {
++	u32 present_state;
++	int ret;
++
++	/*
++	 * For data or full reset, ensure any active data transfer completes
++	 * before resetting to avoid system hang.
++	 */
++	if (mask & (SDHCI_RESET_DATA | SDHCI_RESET_ALL)) {
++		ret = readl_poll_timeout_atomic(host->ioaddr + ESDHC_PRSSTAT, present_state,
++						!(present_state & SDHCI_DATA_INHIBIT), 2,
++						ESDHC_DATA_INHIBIT_WAIT_US);
++		if (ret == -ETIMEDOUT)
++			dev_warn(mmc_dev(host->mmc),
++				 "timeout waiting for data transfer completion\n");
++	}
++
+ 	sdhci_and_cqhci_reset(host, mask);
+ 
+ 	sdhci_writel(host, host->ier, SDHCI_INT_ENABLE);

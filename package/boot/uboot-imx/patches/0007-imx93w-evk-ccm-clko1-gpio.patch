@@ -1,0 +1,46 @@
+From dfdc6bc3ed78c38676fbcfb426e463dc593c39e6 Mon Sep 17 00:00:00 2001
+From: Ye Li <ye.li@nxp.com>
+Date: Mon, 15 Dec 2025 11:46:13 +0800
+Subject: [PATCH] LFU-953-2 arm: dts: imx93w-evk: Configure CCM_CLKO1 pin to
+ GPIO
+
+CCM_CLKO1 default iomux setting 0 is used for output of CCM CLKO1 clock.
+However on i.MX93W, it connects to IW610 boot config[3]. If it outputs clock,
+the boot mode of IW610 may be wrong.
+In u-boot, we have to configure CCM_CLKO1 to GPIO input and internal pull up
+to resolve the problem. Since CCM_CLKO1 eventually will be used as SPI_INT
+for IW610, the setting is aligned with SPI_INT.
+
+Backported from NXP uboot-imx lf-6.18.20-2.0.0 commit dfdc6bc3ed78.
+This fixes the intermittent IW610 SDIO init failure on i.MX93W EVK
+(CMD5 responds but OCR ready bit never sets -> error -110) caused by
+the CCM_CLKO1 clock output disturbing the IW610 boot-mode strap.
+
+Signed-off-by: Ye Li <ye.li@nxp.com>
+Reviewed-by: Peng Fan <peng.fan@nxp.com>
+---
+ arch/arm/dts/imx93w-evk-u-boot.dtsi | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+--- a/arch/arm/dts/imx93w-evk-u-boot.dtsi
++++ b/arch/arm/dts/imx93w-evk-u-boot.dtsi
+@@ -5,6 +5,19 @@
+ 
+ #include "imx93-11x11-evk-u-boot.dtsi"
+ 
++&iomuxc {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_hog>;
++
++	pinctrl_hog: hoggrp {
++		bootph-all;
++
++		fsl,pins = <
++			MX93_PAD_CCM_CLKO1__GPIO3_IO26			0x31e
++		>;
++	};
++};
++
+ &pinctrl_lpi2c3_gpio {
+        fsl,pins = <
+                MX93_PAD_GPIO_IO00__GPIO2_IO00                  0x31e

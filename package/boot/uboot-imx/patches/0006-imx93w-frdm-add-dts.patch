@@ -1,0 +1,109 @@
+From 61102f3db8f7af1f67a7a1b9fc5e96c551c6c791 Mon Sep 17 00:00:00 2001
+From: Joseph Guo <qijian.guo@nxp.com>
+Date: Mon, 16 Mar 2026 15:48:45 +0900
+Subject: [PATCH 2/2] LFU-993-1: arm: dts: imx93w-frdm: add DTS file for
+ FRDM-IMX93W
+
+i.MX93W FRDM use almost same design as i.MX93 FRDM.
+Add kernel DTS of i.MX93W FRDM board. The changes of I2C3 and
+CCM_CLKO1 into u-boot.dtsi.
+
+MQS node is delete from kernel dts because mqs node is not supported
+in u-boot.
+
+Signed-off-by: Joseph Guo <qijian.guo@nxp.com>
+Reviewed-by: Ye li <ye.li@nxp.com>
+---
+ arch/arm/dts/Makefile                |  3 ++-
+ arch/arm/dts/imx93w-frdm-u-boot.dtsi | 31 ++++++++++++++++++++++++++++
+ arch/arm/dts/imx93w-frdm.dts         | 26 +++++++++++++++++++++++
+ 3 files changed, 59 insertions(+), 1 deletion(-)
+ create mode 100644 arch/arm/dts/imx93w-frdm-u-boot.dtsi
+ create mode 100644 arch/arm/dts/imx93w-frdm.dts
+
+diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
+index 05ab05b075d..354af058e88 100644
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -976,7 +976,8 @@ dtb-$(CONFIG_ARCH_IMX9) += \
+ 	imx93-var-som-symphony.dtb \
+ 	imx93-phyboard-segin.dtb \
+ 	imx93-11x11-frdm.dtb \
+-	imx93w-evk.dtb
++	imx93w-evk.dtb \
++	imx93w-frdm.dtb
+ 
+ dtb-$(CONFIG_ARCH_IMXRT) += imxrt1050-evk.dtb \
+ 	imxrt1020-evk.dtb \
+diff --git a/arch/arm/dts/imx93w-frdm-u-boot.dtsi b/arch/arm/dts/imx93w-frdm-u-boot.dtsi
+new file mode 100644
+index 00000000000..4ee6c11dead
+--- /dev/null
++++ b/arch/arm/dts/imx93w-frdm-u-boot.dtsi
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2026 NXP
++ */
++
++#include "imx93-11x11-frdm-u-boot.dtsi"
++
++&iomuxc {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_hog>;
++
++	pinctrl_hog: hoggrp {
++		bootph-all;
++
++		fsl,pins = <
++			MX93_PAD_CCM_CLKO1__GPIO3_IO26			0x31e
++		>;
++	};
++
++	pinctrl_lpi2c3_gpio: lpi2c3gpiogrp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO00__GPIO2_IO00			0x31e
++			MX93_PAD_GPIO_IO01__GPIO2_IO01			0x31e
++		>;
++	};
++};
++
++&lpi2c3 {
++	gpios = <&gpio2 0 GPIO_ACTIVE_LOW>,
++		<&gpio2 1 GPIO_ACTIVE_LOW>;
++};
+diff --git a/arch/arm/dts/imx93w-frdm.dts b/arch/arm/dts/imx93w-frdm.dts
+new file mode 100644
+index 00000000000..8db2d9dc6a1
+--- /dev/null
++++ b/arch/arm/dts/imx93w-frdm.dts
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2026 NXP
++ */
++
++#include "imx93-11x11-frdm.dts"
++
++/ {
++	model = "NXP i.MX93W FRDM board";
++	compatible = "fsl,imx93w-frdm", "fsl,imx93";
++
++	/delete-node/ usdhc3_pwrseq;
++
++	sound-bt-sco {
++		status = "disabled";
++	};
++};
++
++&iomuxc {
++	pinctrl_lpi2c3: lpi2c3grp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO00__LPI2C3_SDA			0x40000b9e
++			MX93_PAD_GPIO_IO01__LPI2C3_SCL			0x40000b9e
++		>;
++	};
++};
+-- 
+2.25.1
+

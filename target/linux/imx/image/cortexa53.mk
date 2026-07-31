@@ -427,6 +427,60 @@ define Device/imx93qsb
 endef
 TARGET_DEVICES += imx93qsb
 
+define Device/imx93wevk
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx93wevk
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX93
+  SOC_TYPE := iMX93
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx93wevk-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx93wevk \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx93wevk
+  DEVICE_DTS := imx93w-evk
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX93 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx93wevk
+
+define Device/imx93wfrdm
+  $(call Device/Default)
+  DEVICE_VENDOR := NXP
+  DEVICE_MODEL := imx93wfrdm
+  DEVICE_VARIANT := SD Boot
+  BOARD_NAME := iMX93
+  SOC_TYPE := iMX93
+  BOOT_OFFSET := 32
+  BOOT_TYPE := flash_singleboot
+  ENV_NAME:=imx93wfrdm-sdboot
+  DEVICE_PACKAGES += \
+	atf-imx93wfrdm \
+	firmware-imx \
+	firmware-sentinel \
+	imx-mkimage \
+	u-boot-imx93wfrdm
+  DEVICE_DTS := imx93w-frdm
+  IMAGE/sdcard.img := \
+	imx-clean | \
+	imx-create-flash $$(BOARD_NAME) $$(BOOT_TYPE) | \
+	boot-img-ext4 | \
+	sdcard-img-ext4 | \
+	imx-append-boot iMX93 | \
+	imx-append-env $$(ENV_NAME)-uboot-env.bin
+endef
+TARGET_DEVICES += imx93wfrdm
+
 define Device/imx95_15x15_evk
   $(call Device/Default)
   DEVICE_VENDOR := NXP

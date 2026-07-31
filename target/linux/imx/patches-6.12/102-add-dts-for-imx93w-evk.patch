@@ -1,0 +1,150 @@
+From 474243627d17f007e51902ffd00a6cc1ac4d35e2 Mon Sep 17 00:00:00 2001
+From: Sherry Sun <sherry.sun@nxp.com>
+Date: Mon, 20 Oct 2025 14:05:40 +0800
+Subject: [PATCH] LF-16850 arch: arm64: imx93-wevk: Add i.MX93W EVK board
+ support
+
+i.MX93W SiP is created by integrating i.MX93 and IW610 WLCSP (Wi-Fi +
+BLE + 802.15.4). And i.MX93W EVK board with the i.MX93W SiP basically
+reuse the i.MX93 EVK board, with some minor functional and pin
+connection differences.
+
+Here are the detailed differences between i.MX93W EVK and i.MX93 11x11
+EVK board.
+
+Function differences:
+Function	i.MX93W EVK			i.MX93 EVK
+WIFI/BT		IW610 in i.MX93W		IW612 M.2 module
+MQS		N				Y
+PDM MIC		N				Y
+M.2		N				Y
+RPi 40-pin HDR	Limited support(pin conflict) 	Y
+
+Pin connection differences:
+Function  Signal name	i.MX93W EVK		i.MX93 EVK
+WIFI/BT	  SPI_FRM	SAI1_TXFS (spi1.PCS0)	GPIO_IO08 (spi3.PCS0)
+	  SPI_TXD	SAI1_TXC (spi1.SIN)	GPIO_IO09 (spi3.SIN)
+	  SPI_RXD	SAI1_RXD0 (spi1.SOUT)	GPIO_IO10 (spi3.SOUT)
+	  SPI_CLK	SAI1_TXD0 (spi1.SCK)	GPIO_IO11 (spi3.SCK)
+	  SPI_INT	CCM_CLKO1		on-board IO expander
+	  NB_WAKE_IN	PDM_CLK			on-module IO expander
+	  WL_WAKE_IN	PDM_BIT_STREAM0		on-module IO expander
+	  IND_RST_WL	PDM_BIT_STREAM1		on-module IO expander
+	  IND_RST_NB	GPIO_IO28		on-module IO expander
+	  PDn		GPIO_IO29		on-module IO expander
+	  NB_WAKE_OUT	GPIO_IO14		on-board IO expander
+	  WL_WAKE_OUT	GPIO_IO15		CCM_CLKO1
+I2C3	  I2C3_SDA	GPIO_IO00		GPIO_IO28
+	  I2C3_SCL	GPIO_IO01		GPIO_IO29
+
+Signed-off-by: Sherry Sun <sherry.sun@nxp.com>
+Reviewed-by: Haibo Chen <haibo.chen@nxp.com>
+Reviewed-by: Ye Li <ye.li@nxp.com>
+---
+ arch/arm64/boot/dts/freescale/Makefile       |  2 +
+ arch/arm64/boot/dts/freescale/imx93w-evk.dts | 80 ++++++++++++++++++++
+ 2 files changed, 82 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/freescale/imx93w-evk.dts
+
+diff --git a/arch/arm64/boot/dts/freescale/Makefile b/arch/arm64/boot/dts/freescale/Makefile
+index 3ac7ac4dfcb3..384ba2e21597 100644
+--- a/arch/arm64/boot/dts/freescale/Makefile
++++ b/arch/arm64/boot/dts/freescale/Makefile
+@@ -378,6 +378,8 @@ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-evk.dtb \
+ 			  imx93-11x11-evk-rpmsg.dtb \
+ 			  imx93-11x11-evk-8mic-reve.dtb
+ 
++dtb-$(CONFIG_ARCH_MXC) += imx93w-evk.dtb
++
+ dtb-$(CONFIG_ARCH_MXC) += imx93-11x11-frdm.dtb imx93-11x11-frdm-8mic-reve.dtb \
+ 			  imx93-11x11-frdm-aud-hat.dtb imx93-11x11-frdm-ld.dtb \
+ 			  imx93-11x11-frdm-mt9m114.dtb imx93-11x11-frdm-lpuart.dtb
+diff --git a/arch/arm64/boot/dts/freescale/imx93w-evk.dts b/arch/arm64/boot/dts/freescale/imx93w-evk.dts
+new file mode 100644
+index 000000000000..f6cd9b6d429c
+--- /dev/null
++++ b/arch/arm64/boot/dts/freescale/imx93w-evk.dts
+@@ -0,0 +1,80 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright 2025 NXP
++ */
++
++#include "imx93-11x11-evk.dts"
++
++/ {
++	model = "NXP i.MX93W EVK board";
++	compatible = "fsl,imx93w-evk", "fsl,imx93";
++
++	/delete-node/ regulator-m2-pwr;
++
++	sound-bt-sco {
++		status = "disabled";
++	};
++
++	sound-micfil {
++		status = "disabled";
++	};
++};
++
++&pcal6524 {
++	/delete-node/ m2-pcm-level-shifter-hog;
++};
++
++&reg_usdhc3_vmmc {
++	/delete-property/ vin-supply;
++	pinctrl-0 = <&pinctrl_reg_usdhc3_vmmc>;
++	pinctrl-names = "default";
++	gpio = <&gpio2 29 GPIO_ACTIVE_HIGH>;
++};
++
++&usdhc3_pwrseq {
++	pinctrl-0 = <&pinctrl_usdhc3_pwrseq>;
++	pinctrl-names = "default";
++	reset-gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
++};
++
++&usdhc3 {
++	wifi_wake_host {
++		interrupt-parent = <&gpio2>;
++		interrupts = <15 IRQ_TYPE_LEVEL_LOW>;
++	};
++};
++
++&micfil {
++	status = "disabled";
++};
++
++&sai1 {
++	status = "disabled";
++};
++
++&iomuxc {
++	pinctrl_lpi2c3: lpi2c3grp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO00__LPI2C3_SDA			0x40000b9e
++			MX93_PAD_GPIO_IO01__LPI2C3_SCL			0x40000b9e
++		>;
++	};
++
++	pinctrl_reg_usdhc3_vmmc: regusdhc3vmmcgrp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO29__GPIO2_IO29			0x39e
++		>;
++	};
++
++	pinctrl_usdhc3_pwrseq: usdhc3pwrseqgrp {
++		fsl,pins = <
++			MX93_PAD_PDM_BIT_STREAM1__GPIO1_IO10		0x39e
++		>;
++	};
++
++	pinctrl_usdhc3_wlan: usdhc3wlangrp {
++		fsl,pins = <
++			MX93_PAD_GPIO_IO15__GPIO2_IO15			0x39e
++		>;
++	};
++};
+-- 
+2.25.1
+

@@ -203,6 +203,28 @@ define U-Boot/imx93qsb
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
 endef
 
+define U-Boot/imx93wevk
+  BUILD_DEVICES:=imx93
+  NAME:=imx93w evk board
+  UBOOT_CONFIG:=imx93w_evk
+  ENV_NAME:=imx93wevk-sdboot
+  DTB_NAME:=imx93w-evk.dtb
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX93
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
+endef
+
+define U-Boot/imx93wfrdm
+  BUILD_DEVICES:=imx93
+  NAME:=imx93w frdm board
+  UBOOT_CONFIG:=imx93w_frdm
+  ENV_NAME:=imx93wfrdm-sdboot
+  DTB_NAME:=imx93w-frdm.dtb
+  ENV_SIZE:=0x4000
+  IMG_DIR:=iMX93
+  DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
+endef
+
 define U-Boot/imx95_15x15_evk
   BUILD_DEVICES:=imx95
   NAME:=imx95 15x15 evk board
@@ -261,6 +283,8 @@ UBOOT_TARGETS := \
 	imx93evk \
 	imx93frdm \
 	imx93qsb \
+	imx93wevk \
+	imx93wfrdm \
 	imx95_15x15_evk \
 	imx95_19x19_evk \
 	imx95frdm \

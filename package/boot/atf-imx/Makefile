@@ -97,6 +97,16 @@ define Package/atf-imx93qsb
   VARIANT:=imx93
 endef
 
+define Package/atf-imx93wevk
+  $(call Package/atf-imx9/Default)
+  VARIANT:=imx93
+endef
+
+define Package/atf-imx93wfrdm
+  $(call Package/atf-imx9/Default)
+  VARIANT:=imx93
+endef
+
 define Package/atf-imx95_15x15_evk
   $(call Package/atf-imx9/Default)
   TITLE:=NXP i.MX95 SD Boot Trusted Firmware
@@ -148,6 +158,8 @@ $(eval $(call BuildPackage,atf-imx91qsb))
 $(eval $(call BuildPackage,atf-imx93evk))
 $(eval $(call BuildPackage,atf-imx93frdm))
 $(eval $(call BuildPackage,atf-imx93qsb))
+$(eval $(call BuildPackage,atf-imx93wevk))
+$(eval $(call BuildPackage,atf-imx93wfrdm))
 $(eval $(call BuildPackage,atf-imx95_15x15_evk))
 $(eval $(call BuildPackage,atf-imx95_19x19_evk))
 $(eval $(call BuildPackage,atf-imx95frdm))
