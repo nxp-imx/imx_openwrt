@@ -7,11 +7,14 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=mwifiex
+PKG_VERSION:=6.12.49
+PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/nxp-imx/mwifiex.git
 PKG_SOURCE_VERSION:=lf-6.12.49-2.2.0
-PKG_MIRROR_HASH:=f52e7a47ae33c6de5e43043d8d6b73ff8d2cbc21735b9ab977367e67babf491f
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+PKG_MIRROR_HASH:=c8a255618db6827e1c729321a279e8283da31501a14ca412664acfd0968bc09f
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -52,7 +55,7 @@ endef
 define KernelPackage/mwifiex-8801-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_8801_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_8801_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -70,7 +73,7 @@ endef
 define KernelPackage/mwifiex-8987-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_8987/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_8987_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -88,7 +91,7 @@ endef
 define KernelPackage/mwifiex-8997-pcie-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_8997/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_8997_PCIE/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -106,7 +109,7 @@ endef
 define KernelPackage/mwifiex-8997-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_8997_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_8997_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -125,7 +128,7 @@ endef
 define KernelPackage/mwifiex-9098-pcie-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_9098_PCIE/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_9098_PCIE/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -143,7 +146,7 @@ endef
 define KernelPackage/mwifiex-9098-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_9098_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_9098_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -162,7 +165,7 @@ endef
 define KernelPackage/mwifiex-iw416-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_IW416_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_IW416_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -186,7 +189,7 @@ endef
 define KernelPackage/mwifiex-iw610-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_IW610_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_IW610_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -204,7 +207,7 @@ endef
 define KernelPackage/mwifiex-iw612-sdio-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/FwImage_IW612_SD/* \
+		$(BUILD_DIR)/mwifiex-firmware/FwImage_IW612_SD/* \
 		$(1)/lib/firmware/nxp
 endef
 
@@ -225,7 +228,7 @@ define Download/imx-firmware
   URL:=https://github.com/nxp-imx/imx-firmware.git
   VERSION:=lf-6.12.49-2.2.0
   SUBDIR:=mwifiex-firmware
-  MIRROR_HASH:=ae203b6960b79c34f0bf466a8b6af0340c8aa7bbb09ea35d3de41f8e2dfae137
+  MIRROR_HASH:=478c9811fea3104eb2fecb6ae07526c42b4c6e9a192e19266d1ecf2ce73bd3d6
 endef
 
 define KernelPackage/imx-firmware
@@ -237,8 +240,8 @@ endef
 define KernelPackage/imx-firmware/install
 	$(INSTALL_DIR) $(1)/lib/firmware/nxp/
 	$(CP) \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/wifi_mod_para.conf \
-		$(BUILD_DIR)/mwifiex-firmware/nxp/SCR-nxp.txt \
+		$(BUILD_DIR)/mwifiex-firmware/wifi_mod_para.conf \
+		$(BUILD_DIR)/mwifiex-firmware/SCR-imx-firmware.txt \
 		$(1)/lib/firmware/nxp
 endef
 
