@@ -152,7 +152,10 @@ define Device/imx8mpfrdm
 	atf-imx8mp \
 	firmware-imx \
 	imx-mkimage \
-	u-boot-imx8mpfrdm
+	u-boot-imx8mpfrdm \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-frdm.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -280,7 +283,10 @@ define Device/imx91frdm
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx91frdm
+	u-boot-imx91frdm \
+	kmod-mwifiex-iw610-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -361,7 +367,10 @@ define Device/imx93evk
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx93evk
+	u-boot-imx93evk \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-*-evk*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -388,7 +397,10 @@ define Device/imx93frdm
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx93frdm
+	u-boot-imx93frdm \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-11x11-frdm*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -442,7 +454,10 @@ define Device/imx93wevk
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx93wevk
+	u-boot-imx93wevk \
+	kmod-mwifiex-iw610-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := imx93w-evk
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -469,7 +484,10 @@ define Device/imx93wfrdm
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx93wfrdm
+	u-boot-imx93wfrdm \
+	kmod-mwifiex-iw610-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := imx93w-frdm
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -499,7 +517,10 @@ define Device/imx95_15x15_evk
 	imx-mkimage \
 	imx-oei \
 	imx-sm \
-	u-boot-imx95_15x15_evk
+	u-boot-imx95_15x15_evk \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := imx95-15x15-evk
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -561,7 +582,10 @@ define Device/imx95frdm
 	imx-mkimage \
 	imx-oei \
 	imx-sm \
-	u-boot-imx95frdm
+	u-boot-imx95frdm \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := imx95-15x15-frdm
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -592,7 +616,10 @@ define Device/imx95frdmpro
 	imx-mkimage \
 	imx-oei \
 	imx-sm \
-	u-boot-imx95frdmpro
+	u-boot-imx95frdmpro \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl
   DEVICE_DTS := imx95-19x19-frdm-pro
   IMAGE/sdcard.img := \
 	imx-clean | \
