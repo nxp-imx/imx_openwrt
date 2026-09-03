@@ -7,28 +7,27 @@ users can bring up the board without difficulty.
 
 1. Target support
 ----------------------------
-* ARMv8 cortexa53 64-bit
-  IMX8MPlus_LPDDR4	(SD boot)
-  IMX8MPlus_FRDM	(SD boot)
-  IMX8MMini_LPDDR4	(SD boot)
-  IMX8MNano_LPDDR4	(SD boot)
-  IMX8MQuad_LPDDR4	(SD boot)
-  IMX93EVK		(SD boot)
-  IMX93QSB		(SD boot)
-  IMX93FRDM		(SD boot)
-  IMX93W_EVK		(SD boot)
-  IMX93W_FRDM		(SD boot)
-  IMX91EVK		(SD boot)
-  IMX91QSB		(SD boot)
-  IMX91FRDM		(SD boot)
-  IMX91FRDM_IMX91S	(SD boot)
-  IMX95_15X15_EVK	(SD boot)
-  IMX95_19X19_EVK	(SD boot)
-  IMX95_FRDM		(SD boot)
-  IMX95_FRDM_PRO	(SD boot)
+* ARMv8 Cortex-A53/Cortex-A55 64-bit
+  i.MX 8M Mini EVK
+  i.MX 8M Nano EVK
+  i.MX 8M Plus EVK
+  i.MX 8M Quad EVK
+  i.MX 91 EVK
+  i.MX 93 EVK
+  i.MX 93W EVK
+  i.MX 95 15x15 EVK
+  i.MX 95 19x19 EVK
+  FRDM-IMX8MPLUS
+  FRDM-IMX91
+  FRDM-IMX91S
+  FRDM-IMX93
+  FRDM-IMX93W
+  FRDM-IMX95
+  FRDM-IMX95-PRO
 
-* ARM cortexa7 and cortexa9
-  IMX6ULL			(SD boot)
+Note: The i.MX 9 series boards are currently listed under the Cortex-A53
+section because OpenWrt does not yet provide a dedicated Cortex-A55 target
+for i.MX platforms.
 
 2. Build
 ------------------------------
@@ -42,7 +41,7 @@ $ ./scripts/feeds update -a
 $ ./scripts/feeds install -a
 
 2.3 Choose Target and Profile
-$ ******** cp defconfig .config ********** // Please don't miss this step.
+$ cp defconfig .config
 $ make menuconfig
   Target System:   "NXP imx"
   Subtarget:       (Select subtarget, for example: NXP i.MX with Cortex-A53)
