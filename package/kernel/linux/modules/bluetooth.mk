@@ -57,6 +57,25 @@ endef
 $(eval $(call KernelPackage,hci-uart))
 
 
+define KernelPackage/btnxpuart
+  SUBMENU:=$(BLUETOOTH_MENU)
+  TITLE:=NXP Bluetooth HCI UART driver
+  DEPENDS:=+kmod-bluetooth
+  KCONFIG:= \
+	CONFIG_SERIAL_DEV_BUS=y \
+	CONFIG_BT_NXPUART
+  FILES:=$(LINUX_DIR)/drivers/bluetooth/btnxpuart.ko
+endef
+
+define KernelPackage/btnxpuart/description
+ Kernel support for NXP serial Bluetooth (btnxpuart) over UART, used by
+ NXP combo chips such as 88W8987/8997 and IW6xx.
+
+endef
+
+$(eval $(call KernelPackage,btnxpuart))
+
+
 define KernelPackage/btusb
   SUBMENU:=$(BLUETOOTH_MENU)
   TITLE:=Bluetooth HCI USB support

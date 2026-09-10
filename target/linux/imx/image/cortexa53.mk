@@ -125,7 +125,8 @@ define Device/imx8mplus
 	atf-imx8mp \
 	firmware-imx \
 	imx-mkimage \
-	u-boot-imx8mp
+	u-boot-imx8mp \
+	kmod-btnxpuart
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-evk*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -155,7 +156,8 @@ define Device/imx8mpfrdm
 	u-boot-imx8mpfrdm \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-frdm.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -256,7 +258,10 @@ define Device/imx91evk
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx91evk
+	u-boot-imx91evk \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-evk*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -286,7 +291,10 @@ define Device/imx91frdm
 	u-boot-imx91frdm \
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -313,7 +321,10 @@ define Device/imx91frdm-imx91s
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx91frdm-imx91s
+	u-boot-imx91frdm-imx91s \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm-imx91s*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -340,7 +351,10 @@ define Device/imx91qsb
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx91qsb
+	u-boot-imx91qsb \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-9x9-qsb*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -370,7 +384,10 @@ define Device/imx93evk
 	u-boot-imx93evk \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-*-evk*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -400,7 +417,10 @@ define Device/imx93frdm
 	u-boot-imx93frdm \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-11x11-frdm*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -427,7 +447,10 @@ define Device/imx93qsb
 	firmware-imx \
 	firmware-sentinel \
 	imx-mkimage \
-	u-boot-imx93qsb
+	u-boot-imx93qsb \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-9x9-qsb*.dts)))
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -457,7 +480,10 @@ define Device/imx93wevk
 	u-boot-imx93wevk \
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx93w-evk
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -487,7 +513,10 @@ define Device/imx93wfrdm
 	u-boot-imx93wfrdm \
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx93w-frdm
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -520,7 +549,10 @@ define Device/imx95_15x15_evk
 	u-boot-imx95_15x15_evk \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx95-15x15-evk
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -551,7 +583,10 @@ define Device/imx95_19x19_evk
 	imx-mkimage \
 	imx-oei \
 	imx-sm \
-	u-boot-imx95_19x19_evk
+	u-boot-imx95_19x19_evk \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx95-19x19-evk
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -585,7 +620,10 @@ define Device/imx95frdm
 	u-boot-imx95frdm \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx95-15x15-frdm
   IMAGE/sdcard.img := \
 	imx-clean | \
@@ -619,7 +657,10 @@ define Device/imx95frdmpro
 	u-boot-imx95frdmpro \
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
-	wpa-supplicant-openssl
+	wpa-supplicant-openssl \
+	kmod-btnxpuart \
+	bluez-utils \
+	bluez-daemon
   DEVICE_DTS := imx95-19x19-frdm-pro
   IMAGE/sdcard.img := \
 	imx-clean | \
