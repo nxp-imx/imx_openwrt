@@ -72,6 +72,8 @@ endef
 define U-Boot/imx8mp
   NAME:=imx8mplus lpddr4 board
   BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mplus
   UBOOT_CONFIG:=imx8mp_evk
   ENV_NAME:=imx8mp-sdboot
   DTB_NAME:=imx8mp-evk.dtb
@@ -83,6 +85,8 @@ endef
 define U-Boot/imx8mpfrdm
   NAME:=imx8mplus frdm board
   BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mpfrdm
   UBOOT_CONFIG:=imx8mp_frdm
   ENV_NAME:=imx8mpfrdm-sdboot
   DTB_NAME:=imx8mp-frdm.dtb
@@ -95,10 +99,10 @@ define U-Boot/imx8mm
   NAME:=imx8mmini lpddr4 board
   BUILD_TARGET:=imx
   BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mmini
   UBOOT_CONFIG:=imx8mm_evk
   ENV_NAME:=imx8mm-sdboot
   DTB_NAME:=imx8mm-evk.dtb
-  DEPENDS:=+imx-mkimage
   ENV_SIZE:=0x4000
   IMG_DIR:=iMX8M
   DEPENDS:=@TARGET_imx_cortexa53 +imx-mkimage
@@ -107,6 +111,8 @@ endef
 define U-Boot/imx8mn
   NAME:=imx8mnano lpddr4 board
   BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mnano
   UBOOT_CONFIG:=imx8mn_evk
   ENV_NAME:=imx8mn-sdboot
   DTB_NAME:=imx8mn-evk.dtb
@@ -118,6 +124,8 @@ endef
 define U-Boot/imx8mq
   NAME:=imx8mquad lpddr4 board
   BUILD_TARGET:=imx
+  BUILD_SUBTARGET:=cortexa53
+  BUILD_DEVICES:=imx8mquad
   UBOOT_CONFIG:=imx8mq_evk
   ENV_NAME:=imx8mq-sdboot
   DTB_NAME:=imx8mq-evk.dtb
