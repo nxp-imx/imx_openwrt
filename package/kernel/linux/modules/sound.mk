@@ -236,6 +236,81 @@ endef
 $(eval $(call KernelPackage,sound-soc-imx))
 
 
+define KernelPackage/sound-soc-fsl-sai
+  TITLE:=NXP SAI (Synchronous Audio Interface) support
+  KCONFIG:= \
+	CONFIG_SND_SOC_FSL_SAI \
+	CONFIG_SND_SOC_FSL_UTILS \
+	CONFIG_SND_SOC_IMX_PCM_DMA \
+	CONFIG_SND_SOC_IMX_AUDMUX
+  FILES:= \
+	$(LINUX_DIR)/sound/soc/fsl/snd-soc-fsl-sai.ko \
+	$(LINUX_DIR)/sound/soc/fsl/snd-soc-fsl-utils.ko \
+	$(LINUX_DIR)/sound/soc/fsl/imx-pcm-dma.ko \
+	$(LINUX_DIR)/sound/soc/fsl/snd-soc-imx-audmux.ko
+  AUTOLOAD:=$(call AutoLoad,56,snd-soc-fsl-utils imx-pcm-dma snd-soc-imx-audmux snd-soc-fsl-sai)
+  DEPENDS:=@TARGET_imx +kmod-sound-soc-core
+  $(call AddDepends/sound)
+endef
+
+define KernelPackage/sound-soc-fsl-sai/description
+ Support for the NXP i.MX Synchronous Audio Interface (SAI),
+ including the SAI DAI, DMA PCM glue and AUDMUX used by the i.MX9 boards.
+endef
+
+$(eval $(call KernelPackage,sound-soc-fsl-sai))
+
+
+define KernelPackage/sound-soc-fsl-asoc-card
+  TITLE:=NXP generic ASoC sound card
+  KCONFIG:=CONFIG_SND_SOC_FSL_ASOC_CARD
+  FILES:=$(LINUX_DIR)/sound/soc/fsl/snd-soc-fsl-asoc-card.ko
+  AUTOLOAD:=$(call AutoLoad,57,snd-soc-fsl-asoc-card)
+  DEPENDS:=@TARGET_imx +kmod-sound-soc-fsl-sai
+  $(call AddDepends/sound)
+endef
+
+define KernelPackage/sound-soc-fsl-asoc-card/description
+ NXP generic ASoC machine driver (fsl-asoc-card), used by i.MX
+ audio cards such as "fsl,imx-audio-wm8962".
+endef
+
+$(eval $(call KernelPackage,sound-soc-fsl-asoc-card))
+
+
+define KernelPackage/sound-soc-wm8962
+  TITLE:=Wolfson WM8962 codec support
+  KCONFIG:=CONFIG_SND_SOC_WM8962
+  FILES:=$(LINUX_DIR)/sound/soc/codecs/snd-soc-wm8962.ko
+  AUTOLOAD:=$(call AutoLoad,58,snd-soc-wm8962)
+  DEPENDS:=+kmod-sound-soc-core
+  $(call AddDepends/sound)
+endef
+
+define KernelPackage/sound-soc-wm8962/description
+ Support for the Wolfson WM8962 audio codec (used on i.MX9 EVK boards).
+endef
+
+$(eval $(call KernelPackage,sound-soc-wm8962))
+
+
+define KernelPackage/sound-soc-fsl-mqs
+  TITLE:=NXP MQS codec support
+  KCONFIG:=CONFIG_SND_SOC_FSL_MQS
+  FILES:=$(LINUX_DIR)/sound/soc/fsl/snd-soc-fsl-mqs.ko
+  AUTOLOAD:=$(call AutoLoad,58,snd-soc-fsl-mqs)
+  DEPENDS:=@TARGET_imx +kmod-sound-soc-fsl-sai
+  $(call AddDepends/sound)
+endef
+
+define KernelPackage/sound-soc-fsl-mqs/description
+ Support for the NXP MQS (Medium Quality Sound) PWM audio codec, used on
+ i.MX boards such as the FRDM-IMX91 (sound-mqs / fsl,imx-audio-mqs).
+endef
+
+$(eval $(call KernelPackage,sound-soc-fsl-mqs))
+
+
 define KernelPackage/sound-soc-mt7986
   TITLE:=MediaTek MT7986 Audio support
   KCONFIG:=CONFIG_SND_SOC_MT7986 CONFIG_SND_SOC_MT7986_WM8960

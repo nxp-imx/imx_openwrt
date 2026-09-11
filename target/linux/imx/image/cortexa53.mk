@@ -260,6 +260,9 @@ define Device/imx91evk
 	imx-mkimage \
 	u-boot-imx91evk \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-evk*.dts)))
@@ -293,6 +296,9 @@ define Device/imx91frdm
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-fsl-mqs \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm*.dts)))
@@ -323,6 +329,9 @@ define Device/imx91frdm-imx91s
 	imx-mkimage \
 	u-boot-imx91frdm-imx91s \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-fsl-mqs \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-11x11-frdm-imx91s*.dts)))
@@ -353,6 +362,8 @@ define Device/imx91qsb
 	imx-mkimage \
 	u-boot-imx91qsb \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx91-9x9-qsb*.dts)))
@@ -386,6 +397,9 @@ define Device/imx93evk
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-*-evk*.dts)))
@@ -419,6 +433,9 @@ define Device/imx93frdm
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-fsl-mqs \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-11x11-frdm*.dts)))
@@ -449,6 +466,9 @@ define Device/imx93qsb
 	imx-mkimage \
 	u-boot-imx93qsb \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx93-9x9-qsb*.dts)))
@@ -482,6 +502,9 @@ define Device/imx93wevk
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := imx93w-evk
@@ -551,6 +574,9 @@ define Device/imx95_15x15_evk
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := imx95-15x15-evk
@@ -585,6 +611,9 @@ define Device/imx95_19x19_evk
 	imx-sm \
 	u-boot-imx95_19x19_evk \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-wm8962 \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := imx95-19x19-evk
@@ -622,6 +651,9 @@ define Device/imx95frdm
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-fsl-mqs \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := imx95-15x15-frdm
@@ -659,6 +691,9 @@ define Device/imx95frdmpro
 	wireless-tools \
 	wpa-supplicant-openssl \
 	kmod-btnxpuart \
+	kmod-sound-soc-fsl-asoc-card \
+	kmod-sound-soc-fsl-mqs \
+	alsa-utils \
 	bluez-utils \
 	bluez-daemon
   DEVICE_DTS := imx95-19x19-frdm-pro
