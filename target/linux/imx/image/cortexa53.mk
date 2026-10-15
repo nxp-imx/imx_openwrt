@@ -50,8 +50,7 @@ define Build/imx-create-flash
 	# IMX_UBOOT_DTB to override it via the dtbs= variable. The override is
 	# only meaningful for flash_evk; other boot types (e.g. the i.MX 9
 	# flash_singleboot flow) embed the DTB in u-boot.bin and ignore dtbs=.
-	cd $(STAGING_DIR_IMAGE)/imx-mkimage && $(MAKE) SOC=$(1) $(2) \
-		$(if $(filter flash_evk,$(2)),$(if $(IMX_UBOOT_DTB),dtbs=$(IMX_UBOOT_DTB)))
+	cd $(STAGING_DIR_IMAGE)/imx-mkimage && $(MAKE) SOC=$(1) $(2) $(if $(IMX_UBOOT_DTB),dtbs=$(IMX_UBOOT_DTB))
 endef
 
 define Build/imx95-select-oei
@@ -110,9 +109,11 @@ define Device/Default
   KERNEL := kernel-bin
   IMAGES := sdcard.img sysupgrade.bin
   IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+  IMX_UBOOT_DTB :=
 endef
 
 define Device/imx8mplus
+  $(call Device/Default)
   DEVICE_VENDOR := NXP
   DEVICE_MODEL := IMX8MPLUS
   DEVICE_VARIANT := SD Card Boot
@@ -170,6 +171,7 @@ endef
 TARGET_DEVICES += imx8mpfrdm
 
 define Device/imx8mmini
+  $(call Device/Default)
   DEVICE_VENDOR := NXP
   DEVICE_MODEL := IMX8MMINI
   DEVICE_VARIANT := SD Card Boot
@@ -195,6 +197,7 @@ endef
 TARGET_DEVICES += imx8mmini
 
 define Device/imx8mnano
+  $(call Device/Default)
   DEVICE_VENDOR := NXP
   DEVICE_MODEL := IMX8MNANO
   DEVICE_VARIANT := SD Card Boot
@@ -220,6 +223,7 @@ endef
 TARGET_DEVICES += imx8mnano
 
 define Device/imx8mquad
+  $(call Device/Default)
   DEVICE_VENDOR := NXP
   DEVICE_MODEL := IMX8MQUAD
   DEVICE_VARIANT := SD Card Boot
@@ -245,6 +249,7 @@ endef
 TARGET_DEVICES += imx8mquad
 
 define Device/imx91evk
+  $(call Device/Default)
   DEVICE_VENDOR := NXP
   DEVICE_MODEL := imx91evk
   DEVICE_VARIANT := SD Boot
