@@ -28,7 +28,7 @@ endef
 
 define Package/wireless-regdb/install
 	$(INSTALL_DIR) $(1)/lib/firmware
-	$(CP) $(PKG_BUILD_DIR)/regulatory.db $(1)/lib/firmware/
+	$(CP) $(PKG_BUILD_DIR)/regulatory.db $(PKG_BUILD_DIR)/regulatory.db.p7s $(1)/lib/firmware/
 endef
 
 $(eval $(call BuildPackage,wireless-regdb))
