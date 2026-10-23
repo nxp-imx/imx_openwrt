@@ -127,6 +127,11 @@ define Device/imx8mplus
 	firmware-imx \
 	imx-mkimage \
 	u-boot-imx8mp \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
 	kmod-btnxpuart
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-evk*.dts)))
   IMAGE/sdcard.img := \
@@ -158,6 +163,8 @@ define Device/imx8mpfrdm
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
 	kmod-btnxpuart
   DEVICE_DTS := $(basename $(notdir $(wildcard $(DTS_DIR)/freescale/imx8mp-frdm.dts)))
   IMAGE/sdcard.img := \
@@ -264,6 +271,13 @@ define Device/imx91evk
 	firmware-sentinel \
 	imx-mkimage \
 	u-boot-imx91evk \
+	kmod-mwifiex-iw612-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-wm8962 \
@@ -300,6 +314,10 @@ define Device/imx91frdm
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-fsl-mqs \
@@ -333,6 +351,13 @@ define Device/imx91frdm-imx91s
 	firmware-sentinel \
 	imx-mkimage \
 	u-boot-imx91frdm-imx91s \
+	kmod-mwifiex-iw610-sdio \
+	wireless-tools \
+	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-fsl-mqs \
@@ -401,6 +426,10 @@ define Device/imx93evk
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-wm8962 \
@@ -437,6 +466,10 @@ define Device/imx93frdm
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-fsl-mqs \
@@ -506,6 +539,10 @@ define Device/imx93wevk
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-wm8962 \
@@ -542,6 +579,10 @@ define Device/imx93wfrdm
 	kmod-mwifiex-iw610-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	bluez-utils \
 	bluez-daemon
@@ -578,6 +619,10 @@ define Device/imx95_15x15_evk
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-wm8962 \
@@ -655,6 +700,10 @@ define Device/imx95frdm
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-fsl-mqs \
@@ -695,6 +744,10 @@ define Device/imx95frdmpro
 	kmod-mwifiex-iw612-sdio \
 	wireless-tools \
 	wpa-supplicant-openssl \
+	hostapd-openssl \
+	wifi-scripts \
+	iw \
+	wireless-regdb \
 	kmod-btnxpuart \
 	kmod-sound-soc-fsl-asoc-card \
 	kmod-sound-soc-fsl-mqs \
