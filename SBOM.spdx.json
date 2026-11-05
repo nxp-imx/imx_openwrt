@@ -1,0 +1,74 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "creationInfo": {
+    "created": "2026-11-05T15:25:00Z",
+    "creators": [
+      "Organization: NXP"
+    ],
+    "licenseListVersion": "3.28"
+  },
+  "name": "imx_openwrt-imx-openwrt-2512",
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://nxp.com/spdx/886b54b0-6ea2-4550-b397-3c201e9569a1",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-package-886b54b0-6ea2-4550-b397-3c201e9569a1",
+      "name": "imx_openwrt",
+      "versionInfo": "imx-openwrt-2512",
+      "licenseConcluded": "(GPL-2.0-only)",
+      "licenseDeclared": "(GPL-2.0-only)",
+      "downloadLocation": "NOASSERTION",
+      "originator": "Organization: imx_openwrt",
+      "supplier": "NOASSERTION",
+      "externalRefs": [],
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-package-886b54b0-6ea2-4550-b397-3c201e9569a1---a6fa0bfa-8760-4520-aa2b-f97099eef3de",
+      "name": "OpenWrt",
+      "versionInfo": "v25.12.5",
+      "licenseConcluded": "GPL-2.0-only",
+      "licenseDeclared": "NOASSERTION",
+      "homepage": "https://github.com/openwrt/luci",
+      "downloadLocation": "NOASSERTION",
+      "originator": "Organization: unknown",
+      "supplier": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:openwrt:lede:25.12.5:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:openwrt:openwrt:25.12.5:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:o:openwrt:lede:25.12.5:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:o:openwrt:openwrt:25.12.5:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        }
+      ],
+      "filesAnalyzed": false
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-package-886b54b0-6ea2-4550-b397-3c201e9569a1"
+    },
+    {
+      "spdxElementId": "SPDXRef-package-886b54b0-6ea2-4550-b397-3c201e9569a1",
+      "relationshipType": "DYNAMIC_LINK",
+      "relatedSpdxElement": "SPDXRef-package-886b54b0-6ea2-4550-b397-3c201e9569a1---a6fa0bfa-8760-4520-aa2b-f97099eef3de"
+    }
+  ]
+}
